@@ -1,0 +1,91 @@
+export interface WatchlistItem {
+  id: number;
+  ticker: string;
+  company_name: string | null;
+  sector: string | null;
+  added_date: string;
+  is_active: boolean;
+  entry_reason: string | null;
+  status: 'NEW_ENTRANT' | 'EXISTING' | 'REMOVED';
+}
+
+export interface SuggestedOption {
+  id: number;
+  contract_type: 'CALL' | 'PUT';
+  strike: number;
+  expiry: string;
+  premium_estimate: number | null;
+  delta_estimate: number | null;
+  strategy: string | null;
+  strategy_rationale: string | null;
+  days_to_expiry: number | null;
+  breakeven_price: number | null;
+}
+
+export interface Recommendation {
+  id: number;
+  recommendation_date: string;
+  ticker: string;
+  action: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
+  conviction_score: number | null;
+  signal_count: number | null;
+  signals: SignalDetail[] | null;
+  rationale: string;
+  catalyst_type: string | null;
+  entry_strategy: string | null;
+  exit_rules: string | null;
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+  current_price: number | null;
+  target_price: number | null;
+  stop_loss_price: number | null;
+  suggested_options: SuggestedOption[];
+}
+
+export interface SignalDetail {
+  signal: string;
+  points: number;
+  detail: string;
+}
+
+export interface NewsItem {
+  id: number;
+  ticker: string | null;
+  headline: string;
+  summary: string | null;
+  source: string | null;
+  category: string | null;
+  sentiment_score: number | null;
+  impact_level: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  published_at: string | null;
+  source_url: string | null;
+}
+
+export interface CatalystEvent {
+  ticker: string;
+  earnings_date: string;
+  earnings_time: string | null;
+  days_until: number;
+  window_status: 'APPROACHING' | 'ACTIVE' | 'POST';
+}
+
+export interface OptionsSnapshot {
+  id: number;
+  ticker: string;
+  snapshot_time: string;
+  stock_price: number | null;
+  iv_rank: number | null;
+  iv_percentile: number | null;
+  put_call_ratio: number | null;
+  total_call_volume: number | null;
+  total_put_volume: number | null;
+  unusual_activity: boolean;
+  unusual_activity_detail: string | null;
+}
+
+export interface SystemStatus {
+  db_connected: boolean;
+  scheduler_running: boolean;
+  active_watchlist_count: number;
+  last_refresh: Record<string, string | null>;
+  version: string;
+}
