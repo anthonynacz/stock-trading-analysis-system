@@ -3,7 +3,6 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://edgeflow:edgeflow@localhost:5432/edgeflow"
-    FMP_API_KEY: str = ""
     FINNHUB_API_KEY: str = ""
     NEWSAPI_KEY: str = ""
 

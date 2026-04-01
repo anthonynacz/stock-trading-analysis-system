@@ -6,9 +6,7 @@ services:
     environment:
       POSTGRES_DB: edgeflow
       POSTGRES_USER: edgeflow
-      POSTGRES_PASSWORD: edgeflow
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: avppVVR4NcnSagQzqa-LIDCZNjacTbz6
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -23,7 +21,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://edgeflow:edgeflow@db:5432/edgeflow
+      DATABASE_URL: postgresql+asyncpg://edgeflow:avppVVR4NcnSagQzqa-LIDCZNjacTbz6@db:5432/edgeflow
     env_file:
       - .env
     depends_on:

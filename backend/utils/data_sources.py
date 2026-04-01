@@ -32,7 +32,6 @@ TTL_EARNINGS = 60 * 60
 # Rate-limit definitions: source -> (max_calls, period_seconds)
 # ---------------------------------------------------------------------------
 _RATE_LIMITS: dict[str, tuple[int, float]] = {
-    "fmp": (250, 86_400),       # 250 calls / day
     "finnhub": (60, 60),        # 60 calls / min
     "newsapi": (100, 86_400),   # 100 calls / day
     "yfinance": (1, 0.5),       # 1 call per 0.5 s  (min delay)
@@ -176,50 +175,84 @@ class DataSourceClient:
     def get_analyst_ratings(
         self, ticker: str | None = None, since_hours: int = 24
     ) -> list[dict]:
-        """Fetch recent analyst rating changes from FMP.
+        """Fetch recent analyst rating changes.
 
-        If *ticker* is provided, returns ratings for that symbol only.
-        Otherwise returns the global RSS feed of upgrades/downgrades.
+        Primary: Finnhub ``/stock/upgrade-downgrade`` (per-ticker).
+        Fallback: yfinance ``Ticker.recommendations``.
         """
         cache_key = f"analyst_ratings:{ticker}:{since_hours}"
         cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
 
-        try:
-            if ticker:
-                raw = self._fmp_get(
-                    "/api/v3/upgrades-downgrades",
-                    params={"company": ticker},
-                )
-            else:
-                raw = self._fmp_get("/api/v3/upgrades-downgrades-rss-feed")
+        results = self._get_ratings_finnhub(ticker)
 
+        if not results and ticker:
+            results = self._get_ratings_yfinance(ticker)
+
+        self._set_cached(cache_key, results, TTL_ANALYST_RATINGS)
+        return results
+
+    def _get_ratings_finnhub(self, ticker: str | None) -> list[dict]:
+        """Fetch upgrade/downgrade data from Finnhub."""
+        if not ticker:
+            return []
+        try:
+            raw = self._finnhub_get(
+                "/api/v1/stock/upgrade-downgrade",
+                params={"symbol": ticker},
+            )
             if not isinstance(raw, list):
-                raw = []
+                return []
 
             results: list[dict] = []
             for item in raw:
-                published = item.get("publishedDate") or item.get("date", "")
                 results.append(
                     {
-                        "ticker": item.get("symbol", ticker or ""),
-                        "firm": item.get("gradingCompany") or item.get("company", ""),
-                        "analyst_name": item.get("analystName", ""),
-                        "action": item.get("action") or item.get("newGrade", ""),
-                        "previous_rating": item.get("previousGrade", ""),
-                        "new_rating": item.get("newGrade", ""),
-                        "previous_pt": item.get("previousPrice"),
-                        "new_pt": item.get("newPrice") or item.get("priceTarget"),
-                        "published_at": published,
+                        "ticker": item.get("symbol", ticker),
+                        "firm": item.get("company", ""),
+                        "analyst_name": "",
+                        "action": item.get("action", ""),
+                        "previous_rating": item.get("fromGrade", ""),
+                        "new_rating": item.get("toGrade", ""),
+                        "previous_pt": None,
+                        "new_pt": None,
+                        "published_at": item.get("gradeTime", ""),
                     }
                 )
-
-            self._set_cached(cache_key, results, TTL_ANALYST_RATINGS)
             return results
 
         except Exception:
-            logger.exception("get_analyst_ratings failed (ticker=%s)", ticker)
+            logger.exception("Finnhub ratings fetch failed for %s", ticker)
+            return []
+
+    def _get_ratings_yfinance(self, ticker: str) -> list[dict]:
+        """Fallback: fetch recommendations from yfinance."""
+        try:
+            self._wait_for_rate_limit("yfinance")
+            recs = yf.Ticker(ticker).recommendations
+            if recs is None or recs.empty:
+                return []
+
+            results: list[dict] = []
+            for _, row in recs.tail(20).iterrows():
+                results.append(
+                    {
+                        "ticker": ticker,
+                        "firm": row.get("Firm", ""),
+                        "analyst_name": "",
+                        "action": row.get("Action", row.get("To Grade", "")),
+                        "previous_rating": row.get("From Grade", ""),
+                        "new_rating": row.get("To Grade", ""),
+                        "previous_pt": None,
+                        "new_pt": None,
+                        "published_at": str(row.name) if hasattr(row, "name") else "",
+                    }
+                )
+            return results
+
+        except Exception:
+            logger.exception("yfinance ratings fetch failed for %s", ticker)
             return []
 
     # ------------------------------------------------------------------ #
@@ -386,9 +419,6 @@ class DataSourceClient:
 
         results = self._get_earnings_yfinance(tickers)
 
-        if not results:
-            results = self._get_earnings_fmp(tickers)
-
         self._set_cached(cache_key, results, TTL_EARNINGS)
         return results
 
@@ -437,34 +467,6 @@ class DataSourceClient:
             except Exception:
                 logger.exception("yfinance earnings fetch failed for %s", t)
         return results
-
-    def _get_earnings_fmp(
-        self, tickers: list[str] | None
-    ) -> list[dict]:
-        try:
-            raw = self._fmp_get("/api/v3/earning_calendar")
-            if not isinstance(raw, list):
-                return []
-
-            ticker_set = set(tickers) if tickers else None
-            results: list[dict] = []
-            for item in raw:
-                sym = item.get("symbol", "")
-                if ticker_set and sym not in ticker_set:
-                    continue
-                results.append(
-                    {
-                        "ticker": sym,
-                        "earnings_date": item.get("date"),
-                        "earnings_time": item.get("time"),  # BMO / AMC
-                        "fiscal_quarter": item.get("fiscalDateEnding"),
-                    }
-                )
-            return results
-
-        except Exception:
-            logger.exception("FMP earnings calendar fetch failed")
-            return []
 
     # ------------------------------------------------------------------ #
 
