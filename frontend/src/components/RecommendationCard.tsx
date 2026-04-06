@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import type { Recommendation } from '../types';
+import type { Recommendation, SignalDetail } from '../types';
 import { ACTION_COLORS, getActionLabel } from '../utils/theme';
-import SignalBadge from './SignalBadge';
 import OptionsTable from './OptionsTable';
 
 interface RecommendationCardProps {
@@ -24,6 +23,26 @@ function ConvictionBar({ score }: { score: number }) {
         {score}
       </span>
     </div>
+  );
+}
+
+function SignalBullet({ signal }: { signal: SignalDetail }) {
+  const isPositive = signal.points > 0;
+  const prefix = isPositive ? '+' : '';
+  const pointColor = isPositive ? 'text-green-400' : 'text-red-400';
+
+  return (
+    <li className="flex items-start gap-2 text-sm">
+      <span className={`font-mono text-xs font-bold mt-0.5 w-8 shrink-0 text-right ${pointColor}`}>
+        {prefix}{signal.points}
+      </span>
+      <span className="text-text-primary">
+        {signal.signal}
+        {signal.detail && (
+          <span className="text-text-secondary"> — {signal.detail}</span>
+        )}
+      </span>
+    </li>
   );
 }
 
@@ -92,58 +111,46 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
 
       {/* Expanded view */}
       {expanded && (
-        <div className="px-4 pb-4 pt-0 border-t border-border space-y-4" onClick={(e) => e.stopPropagation()}>
-          {/* Rationale */}
-          <p className="text-sm text-text-primary leading-relaxed mt-3">{rec.rationale}</p>
-
-          {/* Signals */}
+        <div className="px-4 pb-4 pt-0 border-t border-border space-y-3" onClick={(e) => e.stopPropagation()}>
+          {/* Signals as bullet list */}
           {rec.signals && rec.signals.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold text-text-secondary uppercase mb-2">Signals</h4>
-              <div className="flex flex-wrap gap-1.5">
-                {rec.signals.map((sig, i) => (
-                  <SignalBadge key={i} signal={sig.signal} points={sig.points} />
-                ))}
-              </div>
-            </div>
+            <ul className="space-y-1.5 mt-3">
+              {rec.signals.map((sig, i) => (
+                <SignalBullet key={i} signal={sig} />
+              ))}
+            </ul>
           )}
 
-          {/* Price targets */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          {/* Price / Risk compact row */}
+          <div className="flex items-center gap-4 text-sm flex-wrap">
             {rec.target_price != null && (
-              <div>
-                <span className="text-text-secondary text-xs">Target</span>
-                <p className="text-text-primary font-mono">${rec.target_price.toFixed(2)}</p>
-              </div>
+              <span className="text-text-secondary">
+                Target <span className="font-mono text-text-primary">${rec.target_price.toFixed(2)}</span>
+              </span>
             )}
             {rec.stop_loss_price != null && (
-              <div>
-                <span className="text-text-secondary text-xs">Stop Loss</span>
-                <p className="text-text-primary font-mono">${rec.stop_loss_price.toFixed(2)}</p>
-              </div>
+              <span className="text-text-secondary">
+                Stop <span className="font-mono text-text-primary">${rec.stop_loss_price.toFixed(2)}</span>
+              </span>
             )}
-            {rec.risk_level && (
-              <div>
-                <span className="text-text-secondary text-xs block mb-1">Risk</span>
-                <RiskBadge level={rec.risk_level} />
-              </div>
+            {rec.risk_level && <RiskBadge level={rec.risk_level} />}
+            {rec.catalyst_type && (
+              <span className="text-xs text-text-secondary bg-border/60 px-2 py-0.5 rounded">
+                {rec.catalyst_type.replace(/_/g, ' ')}
+              </span>
             )}
           </div>
 
-          {/* Entry strategy */}
-          {rec.entry_strategy && (
-            <div>
-              <h4 className="text-xs font-semibold text-text-secondary uppercase mb-1">Entry Strategy</h4>
-              <p className="text-sm text-text-primary">{rec.entry_strategy}</p>
-            </div>
+          {/* Entry / Exit — only if meaningful */}
+          {rec.entry_strategy && rec.entry_strategy !== 'HOLD' && (
+            <p className="text-sm text-text-secondary">
+              Entry: <span className="text-text-primary">{rec.entry_strategy}</span>
+            </p>
           )}
-
-          {/* Exit rules */}
           {rec.exit_rules && (
-            <div>
-              <h4 className="text-xs font-semibold text-text-secondary uppercase mb-1">Exit Rules</h4>
-              <p className="text-sm text-text-primary">{rec.exit_rules}</p>
-            </div>
+            <p className="text-sm text-text-secondary">
+              Exit: <span className="text-text-primary">{rec.exit_rules}</span>
+            </p>
           )}
 
           {/* Options */}

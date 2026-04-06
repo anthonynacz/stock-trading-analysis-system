@@ -5,6 +5,8 @@ import {
   getNews,
   getCatalysts,
   getStatus,
+  getPipelineDates,
+  getWatchlistChanges,
 } from '../utils/api';
 import type {
   WatchlistItem,
@@ -12,6 +14,8 @@ import type {
   NewsItem,
   CatalystEvent,
   SystemStatus,
+  WatchlistChanges,
+  PipelineDates,
 } from '../types';
 
 interface HookResult<T> {
@@ -21,15 +25,16 @@ interface HookResult<T> {
   refetch: () => void;
 }
 
-export function useWatchlist(sector?: string): HookResult<WatchlistItem[]> {
+export function useWatchlist(sector?: string, date?: string): HookResult<WatchlistItem[]> {
   const [data, setData] = useState<WatchlistItem[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const isToday = !date || date === new Date().toISOString().slice(0, 10);
 
   const refetch = useCallback(async () => {
     try {
       setLoading(true);
-      const result = await getWatchlist(sector);
+      const result = await getWatchlist(sector, date);
       setData(result);
       setError(null);
     } catch (e) {
@@ -37,13 +42,14 @@ export function useWatchlist(sector?: string): HookResult<WatchlistItem[]> {
     } finally {
       setLoading(false);
     }
-  }, [sector]);
+  }, [sector, date]);
 
   useEffect(() => {
     refetch();
+    if (!isToday) return;
     const interval = setInterval(refetch, 60_000);
     return () => clearInterval(interval);
-  }, [refetch]);
+  }, [refetch, isToday]);
 
   return { data, loading, error, refetch };
 }
@@ -51,15 +57,17 @@ export function useWatchlist(sector?: string): HookResult<WatchlistItem[]> {
 export function useRecommendations(
   action?: string,
   minConviction?: number,
+  date?: string,
 ): HookResult<Recommendation[]> {
   const [data, setData] = useState<Recommendation[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const isToday = !date || date === new Date().toISOString().slice(0, 10);
 
   const refetch = useCallback(async () => {
     try {
       setLoading(true);
-      const result = await getRecommendations(action, minConviction);
+      const result = await getRecommendations(action, minConviction, date);
       setData(result);
       setError(null);
     } catch (e) {
@@ -69,13 +77,14 @@ export function useRecommendations(
     } finally {
       setLoading(false);
     }
-  }, [action, minConviction]);
+  }, [action, minConviction, date]);
 
   useEffect(() => {
     refetch();
+    if (!isToday) return;
     const interval = setInterval(refetch, 60_000);
     return () => clearInterval(interval);
-  }, [refetch]);
+  }, [refetch, isToday]);
 
   return { data, loading, error, refetch };
 }
@@ -164,6 +173,66 @@ export function useStatus(): HookResult<SystemStatus> {
     const interval = setInterval(refetch, 30_000);
     return () => clearInterval(interval);
   }, [refetch]);
+
+  return { data, loading, error, refetch };
+}
+
+export function usePipelineDates(): HookResult<PipelineDates> {
+  const [data, setData] = useState<PipelineDates | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refetch = useCallback(async () => {
+    try {
+      setLoading(true);
+      const result = await getPipelineDates();
+      setData(result);
+      setError(null);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : 'Failed to fetch pipeline dates',
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refetch();
+    const interval = setInterval(refetch, 300_000);
+    return () => clearInterval(interval);
+  }, [refetch]);
+
+  return { data, loading, error, refetch };
+}
+
+export function useWatchlistChanges(date?: string): HookResult<WatchlistChanges> {
+  const [data, setData] = useState<WatchlistChanges | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const isToday = !date || date === new Date().toISOString().slice(0, 10);
+
+  const refetch = useCallback(async () => {
+    try {
+      setLoading(true);
+      const result = await getWatchlistChanges(date);
+      setData(result);
+      setError(null);
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : 'Failed to fetch watchlist changes',
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [date]);
+
+  useEffect(() => {
+    refetch();
+    if (!isToday) return;
+    const interval = setInterval(refetch, 60_000);
+    return () => clearInterval(interval);
+  }, [refetch, isToday]);
 
   return { data, loading, error, refetch };
 }

@@ -14,8 +14,29 @@ class WatchlistItemResponse(BaseModel):
     sector: Optional[str] = None
     added_date: date
     is_active: bool
+    is_manual: bool = False
+    is_locked: bool = False
     entry_reason: Optional[str] = None
     status: str  # NEW_ENTRANT / EXISTING / REMOVED
+
+
+class WatchlistAddRequest(BaseModel):
+    ticker: str
+
+
+class WatchlistChangeItem(BaseModel):
+    ticker: str
+    sector: Optional[str] = None
+
+
+class WatchlistChangesResponse(BaseModel):
+    date: date
+    entrants: list[WatchlistChangeItem] = []
+    exiters: list[WatchlistChangeItem] = []
+
+
+class PipelineDatesResponse(BaseModel):
+    dates: list[date] = []
 
 
 class AnalystRatingResponse(BaseModel):
@@ -125,6 +146,8 @@ class CatalystResponse(BaseModel):
     ticker: str
     earnings_date: Optional[date] = None
     earnings_time: Optional[str] = None
+    fiscal_quarter: Optional[str] = None
+    consensus_eps: Optional[Decimal] = None
     days_until: Optional[int] = None
     window_status: str  # APPROACHING / ACTIVE / POST
 
@@ -137,3 +160,28 @@ class SystemStatusResponse(BaseModel):
     active_watchlist_count: int
     last_refresh: dict[str, Optional[datetime]]
     version: str
+
+
+class StrikeRecommendation(BaseModel):
+    strike: Decimal
+    expiry: date
+    premium_estimate: Decimal
+    delta_estimate: Decimal
+    breakeven: Decimal
+    days_to_expiry: int
+    open_interest: int
+    explanation: str
+
+
+class StrikeRecommenderResponse(BaseModel):
+    ticker: str
+    current_price: Optional[Decimal] = None
+    risk_level: str
+    max_budget: Optional[Decimal] = None
+    recommended_call: Optional[StrikeRecommendation] = None
+    recommended_put: Optional[StrikeRecommendation] = None
+
+
+class StrikeSnapshotSaveRequest(BaseModel):
+    budget: Optional[float] = None
+    results: dict[str, Any]  # ticker -> StrikeAllResult

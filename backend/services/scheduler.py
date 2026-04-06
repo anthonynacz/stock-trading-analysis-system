@@ -103,11 +103,13 @@ async def run_pipeline_phase(phase: str) -> None:
             logger.error("Unknown pipeline phase: %s", phase)
             return
 
+        await session.commit()
         last_refresh[phase] = datetime.now(tz=EASTERN)
         logger.info("Pipeline phase '%s' completed successfully", phase)
 
     except Exception:
         logger.exception("Pipeline phase '%s' failed", phase)
+        await session.rollback()
     finally:
         data_client.close()
         await session.close()

@@ -5,13 +5,18 @@ import {
   useNews,
   useCatalysts,
   useStatus,
+  usePipelineDates,
+  useWatchlistChanges,
 } from '../hooks/useEdgeFlow';
-import { triggerRefresh } from '../utils/api';
+import { triggerRefresh, addToWatchlist, removeFromWatchlist, toggleLockTicker } from '../utils/api';
 import StatusBar from '../components/StatusBar';
+import WatchlistChanges from '../components/WatchlistChanges';
 import WatchlistGrid from '../components/WatchlistGrid';
+import TickerDetail from '../components/TickerDetail';
 import RecommendationCard from '../components/RecommendationCard';
 import NewsTimeline from '../components/NewsTimeline';
 import CatalystCalendar from '../components/CatalystCalendar';
+import WatchlistStrikes from '../components/WatchlistStrikes';
 
 function SectionLoading() {
   return (
@@ -32,23 +37,38 @@ function SectionError({ message }: { message: string }) {
 
 export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(
+    new Date().toISOString().slice(0, 10),
+  );
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  const [addTickerInput, setAddTickerInput] = useState('');
+  const [addingTicker, setAddingTicker] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
-  const watchlist = useWatchlist();
-  const recommendations = useRecommendations();
+  const pipelineDates = usePipelineDates();
+  const watchlist = useWatchlist(undefined, selectedDate);
+  const recommendations = useRecommendations(undefined, undefined, selectedDate);
+  const watchlistChanges = useWatchlistChanges(selectedDate);
   const news = useNews();
   const catalysts = useCatalysts();
   const status = useStatus();
+
+  // Find company name for selected ticker
+  const selectedCompany = selectedTicker
+    ? watchlist.data?.find((w) => w.ticker === selectedTicker)?.company_name ?? undefined
+    : undefined;
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
       await triggerRefresh();
-      // Refetch all data after refresh
       watchlist.refetch();
       recommendations.refetch();
+      watchlistChanges.refetch();
       news.refetch();
       catalysts.refetch();
       status.refetch();
+      pipelineDates.refetch();
     } catch {
       // Status bar will reflect errors via status hook
     } finally {
@@ -56,27 +76,123 @@ export default function Dashboard() {
     }
   };
 
+  const handleAddTicker = async () => {
+    const ticker = addTickerInput.trim().toUpperCase();
+    if (!ticker) return;
+    setAddingTicker(true);
+    setAddError(null);
+    try {
+      await addToWatchlist(ticker);
+      setAddTickerInput('');
+      watchlist.refetch();
+    } catch (err: unknown) {
+      const msg =
+        err && typeof err === 'object' && 'response' in err
+          ? (err as { response: { data: { detail: string } } }).response?.data?.detail
+          : 'Failed to add ticker';
+      setAddError(msg || 'Failed to add ticker');
+    } finally {
+      setAddingTicker(false);
+    }
+  };
+
+  const handleRemoveTicker = async (ticker: string) => {
+    try {
+      await removeFromWatchlist(ticker);
+      watchlist.refetch();
+      if (selectedTicker === ticker) setSelectedTicker(null);
+    } catch {
+      // Silently fail — ticker may already be removed
+    }
+  };
+
+  const handleToggleLock = async (ticker: string) => {
+    try {
+      await toggleLockTicker(ticker);
+      watchlist.refetch();
+    } catch {
+      // Silently fail
+    }
+  };
+
   return (
     <div className="min-h-screen bg-page text-text-primary">
-      {/* Status Bar */}
+      {/* Status Bar with Date Stepper */}
       <StatusBar
         status={status.data}
         onRefresh={handleRefresh}
         refreshing={refreshing}
+        selectedDate={selectedDate}
+        availableDates={pipelineDates.data?.dates ?? []}
+        onDateChange={setSelectedDate}
       />
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-8">
-        {/* Watchlist */}
-        <section>
-          <h2 className="text-xl font-bold text-text-primary mb-4">Watchlist</h2>
-          {watchlist.loading ? (
-            <SectionLoading />
-          ) : watchlist.error ? (
-            <SectionError message={watchlist.error} />
-          ) : (
-            <WatchlistGrid items={watchlist.data ?? []} />
-          )}
-        </section>
+        {/* Watchlist Changes (Entrants / Exiters) */}
+        {watchlistChanges.data && (
+          <WatchlistChanges
+            entrants={watchlistChanges.data.entrants}
+            exiters={watchlistChanges.data.exiters}
+          />
+        )}
+
+        {/* Watchlist + Ticker Detail — two-column layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          <section className="lg:col-span-3">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-text-primary">Watchlist</h2>
+              <form
+                onSubmit={(e) => { e.preventDefault(); handleAddTicker(); }}
+                className="flex items-center gap-2"
+              >
+                <input
+                  type="text"
+                  value={addTickerInput}
+                  onChange={(e) => { setAddTickerInput(e.target.value); setAddError(null); }}
+                  placeholder="Add ticker..."
+                  className="w-28 px-2 py-1 text-xs bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-new-entrant"
+                />
+                <button
+                  type="submit"
+                  disabled={addingTicker || !addTickerInput.trim()}
+                  className="px-2 py-1 text-xs font-semibold rounded bg-purple-900/60 text-purple-400 hover:bg-purple-800/60 disabled:opacity-40 transition-colors"
+                >
+                  {addingTicker ? '...' : 'Add'}
+                </button>
+              </form>
+            </div>
+            {addError && (
+              <p className="text-xs text-red-400 mb-2">{addError}</p>
+            )}
+            {watchlist.loading ? (
+              <SectionLoading />
+            ) : watchlist.error ? (
+              <SectionError message={watchlist.error} />
+            ) : (
+              <WatchlistGrid
+                items={watchlist.data ?? []}
+                onTickerClick={setSelectedTicker}
+                onRemove={handleRemoveTicker}
+                onToggleLock={handleToggleLock}
+                selectedTicker={selectedTicker}
+              />
+            )}
+          </section>
+
+          <section className="lg:col-span-2">
+            {selectedTicker ? (
+              <TickerDetail
+                ticker={selectedTicker}
+                companyName={selectedCompany}
+                onClose={() => setSelectedTicker(null)}
+              />
+            ) : (
+              <div className="bg-card border border-border rounded-lg p-8 text-center text-text-secondary text-sm mt-9">
+                Click a ticker to view details
+              </div>
+            )}
+          </section>
+        </div>
 
         {/* Recommendations */}
         <section>
@@ -97,6 +213,12 @@ export default function Dashboard() {
               )}
             </div>
           )}
+        </section>
+
+        {/* Strike Scanner */}
+        <section>
+          <h2 className="text-xl font-bold text-text-primary mb-4">Strike Scanner</h2>
+          <WatchlistStrikes selectedDate={selectedDate} />
         </section>
 
         {/* News + Catalysts two-column */}

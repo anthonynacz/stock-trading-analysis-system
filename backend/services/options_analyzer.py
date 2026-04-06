@@ -5,9 +5,22 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
+
+
+def _safe_int(val: Any) -> int:
+    """Convert a value to int, treating None/NaN as 0."""
+    if val is None:
+        return 0
+    try:
+        if isinstance(val, float) and math.isnan(val):
+            return 0
+        return int(val)
+    except (TypeError, ValueError):
+        return 0
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +30,30 @@ from utils.data_sources import DataSourceClient
 from utils.scoring import calculate_iv_rank
 
 logger = logging.getLogger(__name__)
+
+RISK_PROFILES = {
+    "conservative": {
+        "call_delta": (0.50, 0.80),
+        "put_delta": (-0.80, -0.50),
+        "dte": (7, 30),
+        "label": "Conservative",
+        "desc": "ITM/ATM strikes, shorter DTE. High probability of profit, lower leverage.",
+    },
+    "moderate": {
+        "call_delta": (0.30, 0.55),
+        "put_delta": (-0.55, -0.30),
+        "dte": (14, 50),
+        "label": "Moderate",
+        "desc": "ATM to slightly OTM strikes, medium DTE. Balanced cost vs probability.",
+    },
+    "aggressive": {
+        "call_delta": (0.10, 0.35),
+        "put_delta": (-0.35, -0.10),
+        "dte": (21, 75),
+        "label": "Aggressive",
+        "desc": "OTM strikes, longer DTE. Maximum leverage, lower probability.",
+    },
+}
 
 
 class OptionsAnalyzer:
@@ -56,10 +93,10 @@ class OptionsAnalyzer:
             for exp, sides in chains.items():
                 for contract in sides.get("calls", []):
                     iv = contract.get("impliedVolatility")
-                    if iv is not None and iv > 0:
+                    if iv is not None and not (isinstance(iv, float) and math.isnan(iv)) and iv > 0:
                         all_ivs.append(iv)
-                    vol = contract.get("volume") or 0
-                    oi = contract.get("openInterest") or 0
+                    vol = _safe_int(contract.get("volume"))
+                    oi = _safe_int(contract.get("openInterest"))
                     total_call_volume += vol
                     if vol > 0 and oi > 0 and vol > 1.5 * oi:
                         unusual_contracts.append({
@@ -73,10 +110,10 @@ class OptionsAnalyzer:
 
                 for contract in sides.get("puts", []):
                     iv = contract.get("impliedVolatility")
-                    if iv is not None and iv > 0:
+                    if iv is not None and not (isinstance(iv, float) and math.isnan(iv)) and iv > 0:
                         all_ivs.append(iv)
-                    vol = contract.get("volume") or 0
-                    oi = contract.get("openInterest") or 0
+                    vol = _safe_int(contract.get("volume"))
+                    oi = _safe_int(contract.get("openInterest"))
                     total_put_volume += vol
                     if vol > 0 and oi > 0 and vol > 1.5 * oi:
                         unusual_contracts.append({
@@ -122,13 +159,20 @@ class OptionsAnalyzer:
             if unusual_contracts:
                 unusual_detail = json.dumps(unusual_contracts)
 
+            def _safe_decimal(val: Any) -> Decimal | None:
+                if val is None:
+                    return None
+                if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                    return None
+                return Decimal(str(val))
+
             snapshot = OptionsSnapshot(
                 ticker=ticker,
-                stock_price=Decimal(str(stock_price)) if stock_price else None,
-                iv_rank=Decimal(str(round(iv_rank_value, 2))) if iv_rank_value is not None else None,
+                stock_price=_safe_decimal(stock_price),
+                iv_rank=_safe_decimal(round(iv_rank_value, 2)) if iv_rank_value is not None else None,
                 iv_percentile=None,
                 put_call_ratio=(
-                    Decimal(str(round(put_call_ratio, 3)))
+                    _safe_decimal(round(put_call_ratio, 3))
                     if put_call_ratio is not None
                     else None
                 ),
@@ -340,6 +384,282 @@ class OptionsAnalyzer:
         except Exception:
             logger.exception("get_latest_snapshot failed for %s", ticker)
             return None
+
+    # ------------------------------------------------------------------
+    # Strike recommender
+    # ------------------------------------------------------------------
+
+    async def recommend_strikes(
+        self,
+        ticker: str,
+        risk_level: str = "moderate",
+        max_budget: float | None = None,
+    ) -> dict:
+        """Recommend best call and put strikes for a given risk/budget profile."""
+        profile = RISK_PROFILES.get(risk_level)
+        if not profile:
+            raise ValueError(f"Invalid risk level: {risk_level}")
+
+        loop = asyncio.get_event_loop()
+        chain_data = await loop.run_in_executor(
+            None, self._data_client.get_options_chain, ticker
+        )
+        chains = chain_data.get("chains", {})
+        current_price = chain_data.get("current_price")
+        if not chains or not current_price:
+            return {
+                "ticker": ticker,
+                "current_price": current_price,
+                "risk_level": risk_level,
+                "max_budget": max_budget,
+                "recommended_call": None,
+                "recommended_put": None,
+            }
+
+        dte_min, dte_max = profile["dte"]
+        today = date.today()
+
+        def _scan(side_key: str, delta_range: tuple, is_call: bool) -> dict | None:
+            lo, hi = delta_range
+            best = None
+            best_score = -1.0
+
+            for exp_str, sides in chains.items():
+                try:
+                    exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                dte = (exp_date - today).days
+                if dte < dte_min or dte > dte_max:
+                    continue
+
+                for c in sides.get(side_key, []):
+                    strike = c.get("strike")
+                    if strike is None:
+                        continue
+
+                    bid = c.get("bid") or 0
+                    ask = c.get("ask") or 0
+                    premium = c.get("lastPrice") or ((bid + ask) / 2 if bid and ask else 0)
+                    oi = c.get("openInterest") or 0
+
+                    if oi < 10 or premium <= 0:
+                        continue
+                    if bid > 0 and ask > 0 and (ask / bid) > 1.50:
+                        continue
+                    if max_budget is not None and premium * 100 > max_budget:
+                        continue
+
+                    # Estimate delta from moneyness
+                    pct = (strike - current_price) / current_price
+                    abs_pct = abs(pct)
+                    if is_call:
+                        if abs_pct <= 0.005:
+                            delta = 0.50
+                        elif pct < 0:  # ITM call
+                            delta = min(0.50 + abs_pct * 3, 0.95)
+                        else:  # OTM call
+                            delta = max(0.50 - abs_pct * 3, 0.05)
+                    else:
+                        if abs_pct <= 0.005:
+                            delta = -0.50
+                        elif pct > 0:  # ITM put
+                            delta = max(-0.50 - abs_pct * 3, -0.95)
+                        else:  # OTM put
+                            delta = min(-0.50 + abs_pct * 3, -0.05)
+
+                    if is_call:
+                        if delta < lo or delta > hi:
+                            continue
+                    else:
+                        if delta < lo or delta > hi:
+                            continue
+
+                    # Score: prefer delta near midpoint of target range, then higher OI
+                    mid = (lo + hi) / 2
+                    score = 1.0 - abs(delta - mid) / max(abs(hi - lo), 0.01)
+                    score += min(oi / 10000, 0.3)  # OI bonus
+
+                    if score > best_score:
+                        breakeven = (strike + premium) if is_call else (strike - premium)
+                        risk_label = profile["label"]
+                        if is_call:
+                            expl = (
+                                f"{risk_label} call: ${strike:.0f} strike, {dte} DTE, "
+                                f"est. delta {delta:.2f}. "
+                                f"Premium ${premium:.2f} (${premium * 100:.0f}/contract). "
+                                f"Breakeven at ${breakeven:.2f}. "
+                                f"{profile['desc']}"
+                            )
+                        else:
+                            expl = (
+                                f"{risk_label} put: ${strike:.0f} strike, {dte} DTE, "
+                                f"est. delta {delta:.2f}. "
+                                f"Premium ${premium:.2f} (${premium * 100:.0f}/contract). "
+                                f"Breakeven at ${breakeven:.2f}. "
+                                f"{profile['desc']}"
+                            )
+                        best = {
+                            "strike": round(strike, 2),
+                            "expiry": exp_date.isoformat(),
+                            "premium_estimate": round(premium, 2),
+                            "delta_estimate": round(delta, 2),
+                            "breakeven": round(breakeven, 2),
+                            "days_to_expiry": dte,
+                            "open_interest": oi,
+                            "explanation": expl,
+                        }
+                        best_score = score
+
+            return best
+
+        call_result = _scan("calls", profile["call_delta"], is_call=True)
+        put_result = _scan("puts", profile["put_delta"], is_call=False)
+
+        return {
+            "ticker": ticker,
+            "current_price": round(current_price, 2),
+            "risk_level": risk_level,
+            "max_budget": max_budget,
+            "recommended_call": call_result,
+            "recommended_put": put_result,
+        }
+
+    async def recommend_strikes_all(
+        self,
+        ticker: str,
+        max_budget: float | None = None,
+    ) -> dict:
+        """Recommend strikes for all three risk levels in a single chain fetch."""
+        loop = asyncio.get_event_loop()
+        chain_data = await loop.run_in_executor(
+            None, self._data_client.get_options_chain, ticker
+        )
+        chains = chain_data.get("chains", {})
+        current_price = chain_data.get("current_price")
+        if not chains or not current_price:
+            return {
+                "ticker": ticker,
+                "current_price": current_price,
+                "max_budget": max_budget,
+                "conservative": {"recommended_call": None, "recommended_put": None},
+                "moderate": {"recommended_call": None, "recommended_put": None},
+                "aggressive": {"recommended_call": None, "recommended_put": None},
+            }
+
+        results: dict = {
+            "ticker": ticker,
+            "current_price": round(current_price, 2),
+            "max_budget": max_budget,
+        }
+        for level, profile in RISK_PROFILES.items():
+            call_result = self._scan_strikes(
+                chains, current_price, profile, "calls", True, max_budget
+            )
+            put_result = self._scan_strikes(
+                chains, current_price, profile, "puts", False, max_budget
+            )
+            results[level] = {
+                "recommended_call": call_result,
+                "recommended_put": put_result,
+            }
+        return results
+
+    def _scan_strikes(
+        self,
+        chains: dict,
+        current_price: float,
+        profile: dict,
+        side_key: str,
+        is_call: bool,
+        max_budget: float | None,
+    ) -> dict | None:
+        """Scan a single side (calls/puts) for a given risk profile."""
+        delta_range = profile["call_delta"] if is_call else profile["put_delta"]
+        lo, hi = delta_range
+        dte_min, dte_max = profile["dte"]
+        today = date.today()
+        best = None
+        best_score = -1.0
+
+        for exp_str, sides in chains.items():
+            try:
+                exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            dte = (exp_date - today).days
+            if dte < dte_min or dte > dte_max:
+                continue
+
+            for c in sides.get(side_key, []):
+                strike = c.get("strike")
+                if strike is None:
+                    continue
+
+                bid = c.get("bid") or 0
+                ask = c.get("ask") or 0
+                premium = c.get("lastPrice") or ((bid + ask) / 2 if bid and ask else 0)
+                oi = c.get("openInterest") or 0
+
+                if oi < 10 or premium <= 0:
+                    continue
+                if bid > 0 and ask > 0 and (ask / bid) > 1.50:
+                    continue
+                if max_budget is not None and premium * 100 > max_budget:
+                    continue
+
+                pct = (strike - current_price) / current_price
+                abs_pct = abs(pct)
+                if is_call:
+                    if abs_pct <= 0.005:
+                        delta = 0.50
+                    elif pct < 0:
+                        delta = min(0.50 + abs_pct * 3, 0.95)
+                    else:
+                        delta = max(0.50 - abs_pct * 3, 0.05)
+                else:
+                    if abs_pct <= 0.005:
+                        delta = -0.50
+                    elif pct > 0:
+                        delta = max(-0.50 - abs_pct * 3, -0.95)
+                    else:
+                        delta = min(-0.50 + abs_pct * 3, -0.05)
+
+                if is_call:
+                    if delta < lo or delta > hi:
+                        continue
+                else:
+                    if delta < lo or delta > hi:
+                        continue
+
+                mid = (lo + hi) / 2
+                score = 1.0 - abs(delta - mid) / max(abs(hi - lo), 0.01)
+                score += min(oi / 10000, 0.3)
+
+                if score > best_score:
+                    breakeven = (strike + premium) if is_call else (strike - premium)
+                    risk_label = profile["label"]
+                    contract_label = "call" if is_call else "put"
+                    expl = (
+                        f"{risk_label} {contract_label}: ${strike:.0f} strike, {dte} DTE, "
+                        f"est. delta {delta:.2f}. "
+                        f"Premium ${premium:.2f} (${premium * 100:.0f}/contract). "
+                        f"Breakeven at ${breakeven:.2f}. "
+                        f"{profile['desc']}"
+                    )
+                    best = {
+                        "strike": round(strike, 2),
+                        "expiry": exp_date.isoformat(),
+                        "premium_estimate": round(premium, 2),
+                        "delta_estimate": round(delta, 2),
+                        "breakeven": round(breakeven, 2),
+                        "days_to_expiry": dte,
+                        "open_interest": oi,
+                        "explanation": expl,
+                    }
+                    best_score = score
+
+        return best
 
     # ------------------------------------------------------------------
     # Internal helpers

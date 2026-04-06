@@ -11,7 +11,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -274,13 +274,30 @@ class WatchlistManager:
         active_tickers = {w.ticker for w in current_active}
         active_map: dict[str, Watchlist] = {w.ticker: w for w in current_active}
 
-        # Determine additions: in candidates but not in active watchlist
-        raw_additions = [
+        # Determine additions: in candidates but not in active watchlist.
+        # Prefer stocks with catalysts/rating changes, but also allow
+        # high-scoring stocks to fill the watchlist up to target size.
+        raw_additions_priority = [
             c for c in candidates
             if c["ticker"] not in active_tickers
             and (c["has_catalyst_14d"] or c["has_recent_rating_change"])
         ]
-        raw_additions.sort(key=lambda x: x["composite_score"], reverse=True)
+        raw_additions_backfill = [
+            c for c in candidates
+            if c["ticker"] not in active_tickers
+            and not c["has_catalyst_14d"]
+            and not c["has_recent_rating_change"]
+        ]
+        raw_additions_priority.sort(key=lambda x: x["composite_score"], reverse=True)
+        raw_additions_backfill.sort(key=lambda x: x["composite_score"], reverse=True)
+
+        # Priority adds first, then backfill if watchlist is below target (30)
+        target_size = MAX_PER_SECTOR * len(SECTORS)
+        current_size = len(active_tickers)
+        raw_additions = list(raw_additions_priority)
+        if current_size + len(raw_additions) < target_size:
+            slots = target_size - current_size - len(raw_additions)
+            raw_additions.extend(raw_additions_backfill[:slots])
 
         # Determine removals: in active watchlist but not in candidates,
         # or stale (>30 days, no catalyst, no open recommendation)
@@ -289,6 +306,8 @@ class WatchlistManager:
 
         raw_removals: list[dict] = []
         for ticker, wl in active_map.items():
+            if wl.is_manual or wl.is_locked:
+                continue  # never auto-remove manual or locked entries
             if ticker not in candidate_tickers:
                 raw_removals.append({"ticker": ticker, "reason": "dropped from top candidates"})
                 continue
@@ -361,7 +380,7 @@ class WatchlistManager:
         # Resolve sector IDs
         sector_map = await self._get_or_create_sector_map()
 
-        # Persist additions
+        # Persist additions (guard against duplicate on re-runs)
         for entry in additions:
             sector_id = sector_map.get(entry["sector_name"])
             reasons: list[str] = []
@@ -371,15 +390,27 @@ class WatchlistManager:
                 reasons.append("recent rating change")
             reasons.append(f"composite_score={entry['composite_score']:.1f}")
 
-            wl = Watchlist(
-                ticker=entry["ticker"],
-                company_name=entry.get("company_name"),
-                sector_id=sector_id,
-                added_date=today,
-                is_active=True,
-                entry_reason="; ".join(reasons),
+            dup_result = await self._session.execute(
+                select(Watchlist).where(
+                    Watchlist.ticker == entry["ticker"],
+                    Watchlist.added_date == today,
+                )
             )
-            self._session.add(wl)
+            dup_row = dup_result.scalar_one_or_none()
+            if dup_row:
+                dup_row.is_active = True
+                dup_row.removed_date = None
+                dup_row.entry_reason = "; ".join(reasons)
+            else:
+                wl = Watchlist(
+                    ticker=entry["ticker"],
+                    company_name=entry.get("company_name"),
+                    sector_id=sector_id,
+                    added_date=today,
+                    is_active=True,
+                    entry_reason="; ".join(reasons),
+                )
+                self._session.add(wl)
 
         # Persist removals
         for entry in removals:
@@ -395,14 +426,24 @@ class WatchlistManager:
                 wl_row.removed_date = today
                 wl_row.exit_reason = entry.get("reason", "rotation")
 
-        # Snapshot
+        # Build sector lookup for existing/removed items
+        active_sector_map: dict[str, str | None] = {}
+        for wl in await self.get_active_watchlist():
+            active_sector_map[wl.ticker] = wl.sector.name if wl.sector else None
+
+        # Snapshot — delete previous rows for today (overwrite on re-runs)
+        await self._session.execute(
+            delete(WatchlistDailySnapshot).where(
+                WatchlistDailySnapshot.snapshot_date == today,
+            )
+        )
         for entry in existing:
             self._session.add(
                 WatchlistDailySnapshot(
                     snapshot_date=today,
                     ticker=entry["ticker"],
                     status="EXISTING",
-                    sector=entry.get("sector_name"),
+                    sector=active_sector_map.get(entry["ticker"]) or entry.get("sector_name"),
                 )
             )
         for entry in additions:
@@ -420,7 +461,7 @@ class WatchlistManager:
                     snapshot_date=today,
                     ticker=entry["ticker"],
                     status="REMOVED",
-                    sector=None,
+                    sector=active_sector_map.get(entry["ticker"]),
                 )
             )
 

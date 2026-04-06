@@ -11,15 +11,36 @@ _NEGATIVE_RATINGS = {"sell", "underperform", "underweight"}
 # ── Sentiment keyword sets ──────────────────────────────────────────────────
 
 _POSITIVE_WORDS = {
-    "upgrade", "beat", "raised", "growth", "bullish", "strong",
-    "outperform", "buy", "positive", "exceeded", "record",
-    "innovation", "breakthrough", "partnership", "approval",
+    "upgrade", "upgraded", "beat", "beats", "raised", "raises",
+    "growth", "bullish", "strong", "stronger", "outperform",
+    "buy", "positive", "exceeded", "record", "innovation",
+    "breakthrough", "partnership", "approval", "surge", "surges",
+    "surged", "rally", "rallied", "rallies", "gains", "gained",
+    "climbs", "climbed", "soars", "soared", "jumps", "jumped",
+    "rises", "rose", "rising", "momentum", "demand", "robust",
+    "likes", "liked", "favors", "favored", "optimistic",
+    "opportunity", "opportunities", "expansion", "expands",
+    "expanded", "launch", "launches", "launched",
+    "profit", "profits", "profitable", "revenue",
+    "upside", "winner", "winning", "boom", "booming",
+    "accelerate", "accelerating", "recommends", "recommended",
 }
 
 _NEGATIVE_WORDS = {
-    "downgrade", "miss", "cut", "decline", "bearish", "weak",
-    "underperform", "sell", "negative", "warning", "layoff",
-    "lawsuit", "investigation", "recall", "default",
+    "downgrade", "downgraded", "miss", "misses", "missed",
+    "cut", "cuts", "decline", "declines", "declined", "declining",
+    "bearish", "weak", "weakens", "weakness",
+    "underperform", "sell", "negative", "warning", "warns",
+    "layoff", "layoffs", "lawsuit", "investigation",
+    "recall", "default", "defaults", "crash", "crashes",
+    "crashed", "plunge", "plunges", "plunged", "drops",
+    "dropped", "falls", "fell", "falling", "slump", "slumps",
+    "slumped", "tumbles", "tumbled", "sinks", "sank",
+    "risk", "risks", "risky", "concern", "concerns",
+    "loss", "losses", "losing", "fear", "fears",
+    "downturn", "recession", "slowdown", "slowing",
+    "overvalued", "bubble", "selloff", "headwinds",
+    "disappointing", "disappointed", "struggles", "struggling",
 }
 
 # ── News category keyword mapping ──────────────────────────────────────────
@@ -176,11 +197,44 @@ def classify_rating_type(
     return "REITERATION"
 
 
+_POSITIVE_PHRASES = [
+    "price target raised", "strong demand", "strong growth",
+    "strong buy", "top pick", "best idea", "ai chip demand",
+    "beat expectations", "above consensus", "market outperform",
+    "new high", "all-time high", "robust demand", "strong earnings",
+    "upward revision", "positive outlook", "buy rating",
+]
+
+_NEGATIVE_PHRASES = [
+    "price target cut", "price target lowered", "supply chain",
+    "trade war", "under pressure", "below expectations",
+    "missed estimates", "weak guidance", "profit warning",
+    "going concern", "debt downgrade", "market crash",
+    "sell rating", "negative outlook", "downward revision",
+]
+
+
 def calculate_sentiment_score(text: str) -> float:
-    """Keyword-based finance sentiment score in [-1.0, 1.0]."""
-    words = text.lower().split()
+    """Keyword-based finance sentiment score in [-1.0, 1.0].
+
+    Combines single-word matching with phrase matching for better
+    coverage of financial headlines.
+    """
+    lower = text.lower()
+    words = lower.split()
+
+    # Single-word matches
     pos = sum(1 for w in words if w in _POSITIVE_WORDS)
     neg = sum(1 for w in words if w in _NEGATIVE_WORDS)
+
+    # Phrase matches (weighted heavier — a phrase is more deliberate signal)
+    for phrase in _POSITIVE_PHRASES:
+        if phrase in lower:
+            pos += 2
+    for phrase in _NEGATIVE_PHRASES:
+        if phrase in lower:
+            neg += 2
+
     total = pos + neg
     if total == 0:
         return 0.0

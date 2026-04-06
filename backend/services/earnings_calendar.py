@@ -21,6 +21,54 @@ from utils.data_sources import DataSourceClient
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_string_field(val: Any) -> str | None:
+    """Convert a yfinance field to str, returning None for NaN/garbage.
+
+    yfinance sometimes returns revenue estimates (large ints) in the
+    fiscal_quarter field.  Drop pure-numeric values > 6 chars.
+    """
+    if val is None:
+        return None
+    # NaN check (NaN != NaN)
+    if isinstance(val, float) and val != val:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
+    # Drop large numeric strings (revenue estimates leaking into string fields)
+    try:
+        float(s)
+        if len(s) > 6:
+            return None
+    except ValueError:
+        pass
+    return s
+
+
+def _sanitize_earnings_time(val: Any) -> str | None:
+    """Sanitize yfinance earnings_time — often a garbage float.
+
+    Known good values: 'BMO', 'AMC', 'TAS' (time not supplied).
+    If it's a float or unrecognizable string, return None.
+    """
+    if val is None:
+        return None
+    if isinstance(val, float):
+        if val != val:  # NaN
+            return None
+        return None  # garbage float like 2.68593
+    s = str(val).strip().upper()
+    if s in ("BMO", "AMC", "TAS", "TNS"):
+        return s
+    # Check if it looks like a numeric string (garbage)
+    try:
+        float(s)
+        return None
+    except ValueError:
+        pass
+    return s if s else None
+
+
 class EarningsCalendarService:
     """Fetches, stores, and queries earnings calendar data."""
 
@@ -79,17 +127,23 @@ class EarningsCalendarService:
                 result = await self._session.execute(stmt)
                 existing = result.scalar_one_or_none()
 
+                # yfinance may return float/NaN for string fields
+                raw_time = entry.get("earnings_time")
+                earnings_time = _sanitize_earnings_time(raw_time)
+                raw_quarter = entry.get("fiscal_quarter")
+                fiscal_quarter = _sanitize_string_field(raw_quarter)
+
                 if existing:
-                    existing.earnings_time = entry.get("earnings_time")
-                    existing.fiscal_quarter = entry.get("fiscal_quarter")
+                    existing.earnings_time = earnings_time
+                    existing.fiscal_quarter = fiscal_quarter
                     existing.catalyst_window_start = catalyst_window_start
                     existing.catalyst_window_end = catalyst_window_end
                 else:
                     record = EarningsCalendar(
                         ticker=ticker,
                         earnings_date=earnings_date,
-                        earnings_time=entry.get("earnings_time"),
-                        fiscal_quarter=entry.get("fiscal_quarter"),
+                        earnings_time=earnings_time,
+                        fiscal_quarter=fiscal_quarter,
                         catalyst_window_start=catalyst_window_start,
                         catalyst_window_end=catalyst_window_end,
                     )

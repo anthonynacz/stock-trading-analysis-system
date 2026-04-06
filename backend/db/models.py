@@ -53,6 +53,8 @@ class Watchlist(Base):
     entry_reason: Mapped[Optional[str]] = mapped_column(Text)
     exit_reason: Mapped[Optional[str]] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_locked: Mapped[bool] = mapped_column(Boolean, default=False)
 
     sector: Mapped[Optional["Sector"]] = relationship(back_populates="watchlist_items")
 
@@ -62,6 +64,7 @@ class Watchlist(Base):
 class WatchlistDailySnapshot(Base):
     __tablename__ = "watchlist_daily_snapshot"
     __table_args__ = (
+        UniqueConstraint("snapshot_date", "ticker", name="uq_snapshot_date_ticker"),
         Index("ix_snapshot_date", "snapshot_date"),
     )
 
@@ -70,7 +73,7 @@ class WatchlistDailySnapshot(Base):
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)  # EXISTING, NEW_ENTRANT, REMOVED
     sector: Mapped[Optional[str]] = mapped_column(String(100))
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # ── Analyst ratings ──────────────────────────────────────────────────────────
@@ -91,8 +94,8 @@ class AnalystRating(Base):
     previous_pt: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     new_pt: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     firm_tier: Mapped[Optional[int]] = mapped_column(Integer)  # 1, 2, 3
-    published_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    detected_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     impact_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     source_url: Mapped[Optional[str]] = mapped_column(Text)
 
@@ -109,8 +112,8 @@ class EarningsCalendar(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
     earnings_date: Mapped[date] = mapped_column(Date, nullable=False)
-    earnings_time: Mapped[Optional[str]] = mapped_column(String(20))  # BMO, AMC
-    fiscal_quarter: Mapped[Optional[str]] = mapped_column(String(10))
+    earnings_time: Mapped[Optional[str]] = mapped_column(String(50))  # BMO, AMC, or EPS estimate
+    fiscal_quarter: Mapped[Optional[str]] = mapped_column(String(50))  # Quarter or revenue estimate
     consensus_eps: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
     actual_eps: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
     consensus_revenue: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 2))
@@ -137,8 +140,8 @@ class MarketNews(Base):
     category: Mapped[Optional[str]] = mapped_column(String(50))  # EARNINGS, ANALYST, MACRO, SECTOR, INSIDER, PRODUCT
     sentiment_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 3))
     impact_level: Mapped[Optional[str]] = mapped_column(String(20))  # HIGH, MEDIUM, LOW
-    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    detected_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     source_url: Mapped[Optional[str]] = mapped_column(Text)
 
 
@@ -152,7 +155,7 @@ class OptionsSnapshot(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
-    snapshot_time: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    snapshot_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     stock_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     iv_rank: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     iv_percentile: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
@@ -188,7 +191,7 @@ class Recommendation(Base):
     current_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     target_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     stop_loss_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     suggested_options: Mapped[list["SuggestedOption"]] = relationship(back_populates="recommendation")
 
@@ -211,3 +214,22 @@ class SuggestedOption(Base):
     breakeven_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
 
     recommendation: Mapped["Recommendation"] = relationship(back_populates="suggested_options")
+
+
+# ── Strike snapshots ─────────────────────────────────────────────────────────
+
+class StrikeSnapshot(Base):
+    __tablename__ = "strike_snapshots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    current_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    budget: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    results: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("snapshot_date", "ticker", name="uq_strike_snap_date_ticker"),
+        Index("ix_strike_snap_date", "snapshot_date"),
+    )

@@ -15,7 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import MarketNews
 from utils.data_sources import DataSourceClient
-from utils.scoring import assign_impact_level, calculate_sentiment_score, classify_news_category
+from utils.finbert import score_batch
+from utils.scoring import assign_impact_level, classify_news_category
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +78,9 @@ class NewsScanner:
             )
             existing_urls = {row[0] for row in result.all() if row[0]}
 
-        # Build ORM objects ----------------------------------------------------
+        # Build deduplicated candidate list ------------------------------------
         seen_urls: set[str] = set(existing_urls)
-        new_items: list[MarketNews] = []
+        candidates: list[tuple[str | None, dict]] = []
 
         for ticker, item in raw_items:
             source_url = item.get("url", "") or ""
@@ -87,15 +88,28 @@ class NewsScanner:
                 continue
             if source_url:
                 seen_urls.add(source_url)
+            candidates.append((ticker, item))
 
+        if not candidates:
+            return []
+
+        # Batch score sentiment with FinBERT -----------------------------------
+        texts = [
+            f"{item.get('headline', '')} {item.get('summary', '')}"
+            for _, item in candidates
+        ]
+        sentiment_scores = await loop.run_in_executor(None, score_batch, texts)
+
+        # Build ORM objects ----------------------------------------------------
+        new_items: list[MarketNews] = []
+
+        for (ticker, item), sentiment_score in zip(candidates, sentiment_scores):
             headline = item.get("headline", "")
             summary = item.get("summary", "")
 
             category = classify_news_category(headline)
-            sentiment_score = calculate_sentiment_score(f"{headline} {summary}")
             impact_level = assign_impact_level(category, sentiment_score)
 
-            # Parse published_at -----------------------------------------------
             published_at = self._parse_datetime(item.get("published_at"))
 
             news_row = MarketNews(
@@ -107,7 +121,7 @@ class NewsScanner:
                 sentiment_score=Decimal(str(round(sentiment_score, 3))),
                 impact_level=impact_level,
                 published_at=published_at,
-                source_url=source_url or None,
+                source_url=item.get("url") or None,
             )
             new_items.append(news_row)
 

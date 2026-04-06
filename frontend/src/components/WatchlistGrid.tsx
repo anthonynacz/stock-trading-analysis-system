@@ -3,6 +3,9 @@ import type { WatchlistItem } from '../types';
 interface WatchlistGridProps {
   items: WatchlistItem[];
   onTickerClick?: (ticker: string) => void;
+  onRemove?: (ticker: string) => void;
+  onToggleLock?: (ticker: string) => void;
+  selectedTicker?: string | null;
 }
 
 function statusClasses(status: WatchlistItem['status']): string {
@@ -34,7 +37,7 @@ function StatusBadge({ status }: { status: WatchlistItem['status'] }) {
   return null;
 }
 
-export default function WatchlistGrid({ items, onTickerClick }: WatchlistGridProps) {
+export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggleLock, selectedTicker }: WatchlistGridProps) {
   if (items.length === 0) {
     return (
       <p className="text-text-secondary text-sm text-center py-8">
@@ -57,28 +60,71 @@ export default function WatchlistGrid({ items, onTickerClick }: WatchlistGridPro
           <h3 className="text-text-secondary text-xs font-semibold uppercase tracking-wider mb-2">
             {sector}
           </h3>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
-            {sectorItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => onTickerClick?.(item.ticker)}
-                className={`bg-card border ${statusClasses(item.status)} rounded-lg p-3 text-left hover:bg-border/40 transition-colors`}
-              >
-                <div className="flex items-center justify-between gap-1">
-                  <span
-                    className={`text-sm font-bold text-text-primary ${item.status === 'REMOVED' ? 'line-through opacity-60' : ''}`}
-                  >
-                    {item.ticker}
-                  </span>
-                  <StatusBadge status={item.status} />
-                </div>
-                {item.company_name && (
-                  <p className="text-text-secondary text-xs mt-1 truncate">
-                    {item.company_name}
-                  </p>
-                )}
-              </button>
-            ))}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {sectorItems.map((item) => {
+              const isSelected = selectedTicker === item.ticker;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => onTickerClick?.(item.ticker)}
+                  className={`bg-card border ${isSelected ? 'border-new-entrant ring-1 ring-new-entrant/40' : statusClasses(item.status)} rounded-lg p-3 text-left hover:bg-border/40 transition-colors relative group`}
+                >
+                  {/* Top-right action buttons on hover */}
+                  {item.status !== 'REMOVED' && (
+                    <div className="absolute top-1 right-1 hidden group-hover:flex items-center gap-0.5">
+                      {onToggleLock && (
+                        <span
+                          role="button"
+                          title={item.is_locked ? 'Unlock from rotation' : 'Lock from rotation'}
+                          onClick={(e) => { e.stopPropagation(); onToggleLock(item.ticker); }}
+                          className={`flex items-center justify-center w-5 h-5 rounded-full text-[11px] leading-none transition-colors ${
+                            item.is_locked
+                              ? 'bg-amber-900/60 text-amber-400 hover:bg-amber-800'
+                              : 'bg-gray-800/80 text-text-secondary hover:bg-gray-700 hover:text-text-primary'
+                          }`}
+                        >
+                          {item.is_locked ? '🔒' : '🔓'}
+                        </span>
+                      )}
+                      {item.is_manual && onRemove && (
+                        <span
+                          role="button"
+                          onClick={(e) => { e.stopPropagation(); onRemove(item.ticker); }}
+                          className="flex items-center justify-center w-5 h-5 rounded-full bg-red-900/60 text-red-400 hover:bg-red-800 text-[10px] leading-none"
+                        >
+                          ×
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between gap-1">
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`text-sm font-bold text-text-primary ${item.status === 'REMOVED' ? 'line-through opacity-60' : ''}`}
+                      >
+                        {item.ticker}
+                      </span>
+                      {item.is_locked && (
+                        <span className="text-[10px] text-amber-400" title="Locked from rotation">🔒</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {item.is_manual && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-900/60 text-purple-400">
+                          MANUAL
+                        </span>
+                      )}
+                      <StatusBadge status={item.status} />
+                    </div>
+                  </div>
+                  {item.company_name && (
+                    <p className="text-text-secondary text-xs mt-1 truncate">
+                      {item.company_name}
+                    </p>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
       ))}

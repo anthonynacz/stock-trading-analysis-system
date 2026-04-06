@@ -5,8 +5,50 @@ export interface WatchlistItem {
   sector: string | null;
   added_date: string;
   is_active: boolean;
+  is_manual: boolean;
+  is_locked: boolean;
   entry_reason: string | null;
   status: 'NEW_ENTRANT' | 'EXISTING' | 'REMOVED';
+}
+
+export interface StrikeRecommendation {
+  strike: number;
+  expiry: string;
+  premium_estimate: number;
+  delta_estimate: number;
+  breakeven: number;
+  days_to_expiry: number;
+  open_interest: number;
+  explanation: string;
+}
+
+export interface StrikeRecommenderResult {
+  ticker: string;
+  current_price: number | null;
+  risk_level: string;
+  max_budget: number | null;
+  recommended_call: StrikeRecommendation | null;
+  recommended_put: StrikeRecommendation | null;
+}
+
+export interface StrikeRiskPair {
+  recommended_call: StrikeRecommendation | null;
+  recommended_put: StrikeRecommendation | null;
+}
+
+export interface StrikeAllResult {
+  ticker: string;
+  current_price: number | null;
+  max_budget: number | null;
+  conservative: StrikeRiskPair;
+  moderate: StrikeRiskPair;
+  aggressive: StrikeRiskPair;
+}
+
+export interface WatchlistStrikesResult {
+  results: Record<string, StrikeAllResult>;
+  scanned: number;
+  with_results: number;
 }
 
 export interface SuggestedOption {
@@ -64,6 +106,8 @@ export interface CatalystEvent {
   ticker: string;
   earnings_date: string;
   earnings_time: string | null;
+  fiscal_quarter: string | null;
+  consensus_eps: number | null;
   days_until: number;
   window_status: 'APPROACHING' | 'ACTIVE' | 'POST';
 }
@@ -88,4 +132,19 @@ export interface SystemStatus {
   active_watchlist_count: number;
   last_refresh: Record<string, string | null>;
   version: string;
+}
+
+export interface WatchlistChange {
+  ticker: string;
+  sector: string | null;
+}
+
+export interface WatchlistChanges {
+  date: string;
+  entrants: WatchlistChange[];
+  exiters: WatchlistChange[];
+}
+
+export interface PipelineDates {
+  dates: string[];
 }

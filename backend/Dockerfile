@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -r
 RUN pip install --no-cache-dir uv
 
 COPY requirements.txt .
+RUN uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
 RUN uv pip install --system -r requirements.txt
 
 COPY . .
