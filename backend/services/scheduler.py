@@ -75,8 +75,9 @@ async def run_pipeline_phase(phase: str) -> None:
         elif phase == "news":
             active = await watchlist_mgr.get_active_watchlist()
             active_tickers = [w.ticker for w in active]
+            ticker_company_map = {w.ticker: w.company_name for w in active}
             scanner = NewsScanner(session, data_client)
-            new_items = await scanner.scan_news(active_tickers)
+            new_items = await scanner.scan_news(active_tickers, ticker_company_map)
             logger.info("News scan complete: %d new items", len(new_items))
 
         elif phase == "options":
@@ -161,10 +162,6 @@ def start_scheduler() -> None:
         run_pipeline_phase, "cron", args=["earnings"],
         hour=7, minute=0, day_of_week=weekdays, id="premarket_earnings",
     )
-    scheduler.add_job(
-        run_pipeline_phase, "cron", args=["options"],
-        hour=8, minute=0, day_of_week=weekdays, id="premarket_options",
-    )
 
     # -- Market open ---------------------------------------------------------
     scheduler.add_job(
@@ -198,6 +195,14 @@ def start_scheduler() -> None:
     scheduler.add_job(
         run_pipeline_phase, "cron", args=["recommendations"],
         hour=16, minute=30, day_of_week=weekdays, id="postmarket_recommendations",
+    )
+    scheduler.add_job(
+        run_pipeline_phase, "cron", args=["news"],
+        hour=16, minute=45, day_of_week=weekdays, id="postmarket_news",
+    )
+    scheduler.add_job(
+        run_pipeline_phase, "cron", args=["earnings"],
+        hour=17, minute=0, day_of_week=weekdays, id="postmarket_earnings",
     )
 
     scheduler.start()

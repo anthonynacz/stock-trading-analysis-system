@@ -12,11 +12,12 @@ from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from db.models import MarketNews
+from db.models import MarketNews, NewsTickerRelevance
 from utils.data_sources import DataSourceClient
 from utils.finbert import score_batch
-from utils.scoring import assign_impact_level, classify_news_category
+from utils.scoring import assign_impact_level, classify_news_category, compute_ticker_relevance
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +33,22 @@ class NewsScanner:
     # scan_news
     # ------------------------------------------------------------------
 
-    async def scan_news(self, tickers: list[str]) -> list[MarketNews]:
+    async def scan_news(
+        self,
+        tickers: list[str],
+        ticker_company_map: dict[str, str | None] | None = None,
+    ) -> list[MarketNews]:
         """Fetch and persist news for *tickers* plus general market news.
 
-        Each news item is classified, scored, and deduplicated by
-        ``source_url`` before being inserted into the database.
+        *ticker_company_map* maps ticker symbols to company names for
+        relevance scoring.  When provided, each article is scored against
+        all tickers and ``NewsTickerRelevance`` rows are created.
 
         Returns the list of newly inserted :class:`MarketNews` rows.
         """
+        if ticker_company_map is None:
+            ticker_company_map = {}
+
         loop = asyncio.get_event_loop()
         raw_items: list[tuple[str | None, dict]] = []
 
@@ -70,27 +79,82 @@ class NewsScanner:
         # Collect existing source_urls to deduplicate --------------------------
         urls = [item.get("url", "") for _, item in raw_items if item.get("url")]
         existing_urls: set[str] = set()
+        # Map existing URLs to their MarketNews IDs for relevance backfill
+        url_to_news_id: dict[str, int] = {}
         if urls:
             result = await self._session.execute(
-                select(MarketNews.source_url).where(
+                select(MarketNews.id, MarketNews.source_url).where(
                     MarketNews.source_url.in_(urls)
                 )
             )
-            existing_urls = {row[0] for row in result.all() if row[0]}
+            for row in result.all():
+                if row[1]:
+                    existing_urls.add(row[1])
+                    url_to_news_id[row[1]] = row[0]
+
+        # Also load existing relevance rows for those news IDs so we skip dupes
+        existing_relevance_pairs: set[tuple[int, str]] = set()
+        if url_to_news_id:
+            rel_result = await self._session.execute(
+                select(NewsTickerRelevance.news_id, NewsTickerRelevance.ticker).where(
+                    NewsTickerRelevance.news_id.in_(url_to_news_id.values())
+                )
+            )
+            existing_relevance_pairs = {(r[0], r[1]) for r in rel_result.all()}
 
         # Build deduplicated candidate list ------------------------------------
         seen_urls: set[str] = set(existing_urls)
         candidates: list[tuple[str | None, dict]] = []
+        # Track duplicate items that need relevance backfill
+        duplicate_items: list[tuple[str | None, dict]] = []
 
         for ticker, item in raw_items:
             source_url = item.get("url", "") or ""
             if source_url and source_url in seen_urls:
+                # Article already exists — queue for relevance backfill
+                if source_url in url_to_news_id and ticker_company_map:
+                    duplicate_items.append((ticker, item))
                 continue
             if source_url:
                 seen_urls.add(source_url)
             candidates.append((ticker, item))
 
+        # Backfill relevance rows for duplicate articles -----------------------
+        backfill_relevances: list[NewsTickerRelevance] = []
+        if duplicate_items and ticker_company_map:
+            for searched_ticker, item in duplicate_items:
+                source_url = item.get("url", "") or ""
+                news_id = url_to_news_id.get(source_url)
+                if not news_id:
+                    continue
+                api_related = item.get("related_tickers", [])
+                headline = item.get("headline", "")
+                summary = item.get("summary", "")
+
+                for tk, company in ticker_company_map.items():
+                    if (news_id, tk) in existing_relevance_pairs:
+                        continue
+                    score, source = compute_ticker_relevance(
+                        tk, company, headline, summary,
+                        api_related, was_searched_ticker=(tk == searched_ticker),
+                    )
+                    if score > 0:
+                        backfill_relevances.append(
+                            NewsTickerRelevance(
+                                news_id=news_id, ticker=tk,
+                                relevance_score=Decimal(str(score)),
+                                relevance_source=source,
+                            )
+                        )
+                        existing_relevance_pairs.add((news_id, tk))
+
+        if backfill_relevances:
+            self._session.add_all(backfill_relevances)
+            logger.info("Backfilled %d relevance rows for existing articles", len(backfill_relevances))
+
         if not candidates:
+            if backfill_relevances:
+                await self._session.commit()
             return []
 
         # Batch score sentiment with FinBERT -----------------------------------
@@ -103,9 +167,10 @@ class NewsScanner:
         # Build ORM objects ----------------------------------------------------
         new_items: list[MarketNews] = []
 
-        for (ticker, item), sentiment_score in zip(candidates, sentiment_scores):
+        for (searched_ticker, item), sentiment_score in zip(candidates, sentiment_scores):
             headline = item.get("headline", "")
             summary = item.get("summary", "")
+            api_related = item.get("related_tickers", [])
 
             category = classify_news_category(headline)
             impact_level = assign_impact_level(category, sentiment_score)
@@ -113,7 +178,7 @@ class NewsScanner:
             published_at = self._parse_datetime(item.get("published_at"))
 
             news_row = MarketNews(
-                ticker=ticker,
+                ticker=searched_ticker,
                 headline=headline,
                 summary=summary or None,
                 source=item.get("source") or None,
@@ -123,6 +188,23 @@ class NewsScanner:
                 published_at=published_at,
                 source_url=item.get("url") or None,
             )
+
+            # Compute relevance for all watchlist tickers
+            if ticker_company_map:
+                for tk, company in ticker_company_map.items():
+                    score, source = compute_ticker_relevance(
+                        tk, company, headline, summary,
+                        api_related, was_searched_ticker=(tk == searched_ticker),
+                    )
+                    if score > 0:
+                        news_row.ticker_relevances.append(
+                            NewsTickerRelevance(
+                                ticker=tk,
+                                relevance_score=Decimal(str(score)),
+                                relevance_source=source,
+                            )
+                        )
+
             new_items.append(news_row)
 
         # Persist --------------------------------------------------------------
@@ -146,13 +228,26 @@ class NewsScanner:
     ) -> list[MarketNews]:
         """Query recent news from the database with optional filters.
 
+        When *ticker* is provided, queries through the ``NewsTickerRelevance``
+        junction table to find all articles relevant to that ticker.
         Results are ordered by ``published_at DESC`` and limited to 100 rows.
         """
         cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
-        stmt = select(MarketNews).where(MarketNews.published_at >= cutoff)
 
         if ticker is not None:
-            stmt = stmt.where(MarketNews.ticker == ticker)
+            # Query through junction table for multi-ticker relevance
+            stmt = (
+                select(MarketNews)
+                .join(NewsTickerRelevance)
+                .where(
+                    NewsTickerRelevance.ticker == ticker,
+                    MarketNews.published_at >= cutoff,
+                )
+                .options(selectinload(MarketNews.ticker_relevances))
+            )
+        else:
+            stmt = select(MarketNews).where(MarketNews.published_at >= cutoff)
+
         if category is not None:
             stmt = stmt.where(MarketNews.category == category)
         if impact_level is not None:
@@ -161,7 +256,7 @@ class NewsScanner:
         stmt = stmt.order_by(MarketNews.published_at.desc()).limit(100)
 
         result = await self._session.execute(stmt)
-        return list(result.scalars().all())
+        return list(result.scalars().unique().all())
 
     # ------------------------------------------------------------------
     # get_sentiment_summary

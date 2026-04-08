@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/Program Files/Docker/Docker/Docker Desktop.exe:*)",
+      "Bash(docker info:*)",
+      "Bash(docker compose:*)",
+      "Bash(curl:*)",
+      "Bash(python -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(f'{len\\(d\\)} items'\\)\")",
+      "Bash(python -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(f'{len\\(d\\)} recs'\\);[print\\(f'  {r[\\\\\"ticker\\\\\"]}: {r[\\\\\"action\\\\\"]} \\({r[\\\\\"conviction_score\\\\\"]}\\)'\\) for r in d]\")",
+      "Bash(python -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(f'{len\\(d\\)} items shown'\\)\")",
+      "Bash(python -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(f'{len\\(d\\)} catalysts'\\)\")",
+      "Bash(python -m json.tool)",
+      "Bash(netstat -ano)"
+    ]
+  }
+}

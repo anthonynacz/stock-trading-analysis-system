@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func as sa_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -99,18 +99,24 @@ class RecommendationEngine:
         return list(result.scalars().all())
 
     # ------------------------------------------------------------------
-    # Single-ticker pipeline
+    # On-demand research (no persistence to recommendations table)
     # ------------------------------------------------------------------
 
-    async def _generate_single(
-        self, ticker: str, today: date
-    ) -> Recommendation | None:
-        """Run the full pipeline for one ticker."""
+    async def analyze_single(self, ticker: str) -> dict[str, Any]:
+        """Run full analysis pipeline for one ticker.
+
+        Returns a data dict with all scored fields. Does NOT persist to the
+        ``recommendations`` table — the caller is responsible for storage.
+        """
+        today = date.today()
 
         # ── 1. Gather signals data ──────────────────────────────────────
         loop = asyncio.get_event_loop()
         stock_data: dict = await loop.run_in_executor(
             None, self._data_client.get_stock_data, ticker
+        )
+        technicals: dict = await loop.run_in_executor(
+            None, self._data_client.get_technical_indicators, ticker
         )
 
         ratings = await self._analyst_tracker.get_recent_ratings(
@@ -128,6 +134,125 @@ class RecommendationEngine:
             "news_sentiment": news_sentiment,
             "options_snapshot": options_snapshot,
             "stock_data": stock_data,
+            "technicals": technicals,
+        }
+
+        # ── 2. Stack signals ────────────────────────────────────────────
+        conviction_score, signal_details = await self._stack_signals(
+            ticker, signals_data
+        )
+
+        # ── 3. Classify action ──────────────────────────────────────────
+        action = self._classify_action(conviction_score)
+
+        # ── 4. Entry strategy ───────────────────────────────────────────
+        current_price = stock_data.get("price")
+        stock_moved_pct = self._calc_stock_move_pct(stock_data)
+        entry_strategy = self._determine_entry_strategy(
+            conviction_score, catalyst_window, stock_moved_pct
+        )
+
+        # ── 5. Rationale ───────────────────────────────────────────────
+        rationale = await self._generate_rationale(
+            ticker, action, conviction_score, signal_details, stock_data
+        )
+
+        # ── 6. Risk level ──────────────────────────────────────────────
+        iv_rank = float(options_snapshot.iv_rank or 0) if options_snapshot else 0.0
+        risk_level = self._determine_risk_level(conviction_score, iv_rank)
+
+        # ── 7. Target / stop-loss ──────────────────────────────────────
+        target_price = stock_data.get("avg_analyst_target")
+        stop_loss_price = self._calc_stop_loss(current_price, action)
+        catalyst_type = self._infer_catalyst_type(signal_details)
+
+        # ── 8. Select options contracts if actionable ──────────────────
+        suggested_contracts: list[dict] = []
+        if action in ("BUY", "STRONG_BUY", "SELL", "STRONG_SELL"):
+            direction = "BULLISH" if action in ("BUY", "STRONG_BUY") else "BEARISH"
+            earnings_date = (
+                catalyst_window.get("earnings_date") if catalyst_window else None
+            )
+            suggested_contracts = await self._options_analyzer.select_optimal_contracts(
+                ticker=ticker,
+                direction=direction,
+                iv_rank=iv_rank,
+                current_price=float(current_price) if current_price else 0.0,
+                catalyst_type=catalyst_type,
+                earnings_date=earnings_date,
+            )
+
+        # ── 9. Build options snapshot dict ─────────────────────────────
+        options_dict = None
+        if options_snapshot:
+            options_dict = {
+                "stock_price": float(options_snapshot.stock_price) if options_snapshot.stock_price else None,
+                "iv_rank": float(options_snapshot.iv_rank) if options_snapshot.iv_rank else None,
+                "iv_percentile": float(options_snapshot.iv_percentile) if options_snapshot.iv_percentile else None,
+                "put_call_ratio": float(options_snapshot.put_call_ratio) if options_snapshot.put_call_ratio else None,
+                "total_call_volume": options_snapshot.total_call_volume,
+                "total_put_volume": options_snapshot.total_put_volume,
+                "unusual_activity": options_snapshot.unusual_activity,
+                "unusual_activity_detail": options_snapshot.unusual_activity_detail,
+            }
+
+        logger.info(
+            "Research analysis complete: %s %s (conviction %.1f, %d signals)",
+            ticker, action, conviction_score, len(signal_details),
+        )
+
+        return {
+            "ticker": ticker,
+            "action": action,
+            "conviction_score": round(conviction_score, 2),
+            "signal_count": len(signal_details),
+            "signals": signal_details,
+            "rationale": rationale,
+            "catalyst_type": catalyst_type,
+            "entry_strategy": entry_strategy,
+            "exit_rules": None,
+            "risk_level": risk_level,
+            "current_price": current_price,
+            "target_price": target_price,
+            "stop_loss_price": stop_loss_price,
+            "options_data": options_dict,
+            "suggested_contracts": suggested_contracts,
+        }
+
+    # ------------------------------------------------------------------
+    # Single-ticker pipeline
+    # ------------------------------------------------------------------
+
+    async def _generate_single(
+        self, ticker: str, today: date
+    ) -> Recommendation | None:
+        """Run the full pipeline for one ticker."""
+
+        # ── 1. Gather signals data ──────────────────────────────────────
+        loop = asyncio.get_event_loop()
+        stock_data: dict = await loop.run_in_executor(
+            None, self._data_client.get_stock_data, ticker
+        )
+        technicals: dict = await loop.run_in_executor(
+            None, self._data_client.get_technical_indicators, ticker
+        )
+
+        ratings = await self._analyst_tracker.get_recent_ratings(
+            ticker=ticker, hours=48
+        )
+        catalyst_window = await self._earnings_service.get_catalyst_window(ticker)
+        news_sentiment = await self._news_scanner.get_sentiment_summary(
+            ticker=ticker, hours=48
+        )
+        options_snapshot = await self._options_analyzer.get_latest_snapshot(ticker)
+
+        signals_data: dict[str, Any] = {
+            "ratings": ratings,
+            "catalyst_window": catalyst_window,
+            "news_sentiment": news_sentiment,
+            "options_snapshot": options_snapshot,
+            "stock_data": stock_data,
+            "technicals": technicals,
         }
 
         # ── 2. Stack signals ────────────────────────────────────────────
@@ -251,6 +376,43 @@ class RecommendationEngine:
         return rec
 
     # ------------------------------------------------------------------
+    # Historical volume helpers
+    # ------------------------------------------------------------------
+
+    async def _get_historical_avg_volume(
+        self, ticker: str, days: int = 20
+    ) -> tuple[float, float]:
+        """Return (avg_call_volume, avg_put_volume) from past options snapshots.
+
+        Excludes today's snapshot so the comparison is against a true
+        historical baseline.  Returns (0, 0) if no history exists.
+        """
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            today_start = datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            stmt = (
+                select(
+                    sa_func.avg(OptionsSnapshot.total_call_volume),
+                    sa_func.avg(OptionsSnapshot.total_put_volume),
+                )
+                .where(
+                    OptionsSnapshot.ticker == ticker,
+                    OptionsSnapshot.snapshot_time >= cutoff,
+                    OptionsSnapshot.snapshot_time < today_start,
+                )
+            )
+            result = await self._session.execute(stmt)
+            row = result.one()
+            avg_call = float(row[0] or 0)
+            avg_put = float(row[1] or 0)
+            return avg_call, avg_put
+        except Exception:
+            logger.exception("_get_historical_avg_volume failed for %s", ticker)
+            return 0.0, 0.0
+
+    # ------------------------------------------------------------------
     # Signal stacking
     # ------------------------------------------------------------------
 
@@ -270,6 +432,7 @@ class RecommendationEngine:
         news_sentiment: dict = data.get("news_sentiment", {})
         options_snapshot: OptionsSnapshot | None = data.get("options_snapshot")
         stock_data: dict = data.get("stock_data", {})
+        technicals: dict = data.get("technicals", {})
 
         current_price = stock_data.get("price")
         avg_analyst_target = stock_data.get("avg_analyst_target")
@@ -282,7 +445,6 @@ class RecommendationEngine:
             prev = (rating.previous_rating or "").upper()
             new = (rating.new_rating or "").upper()
 
-            # Determine if this is an upgrade or downgrade
             is_upgrade = self._is_upgrade(prev, new)
             is_downgrade = self._is_downgrade(prev, new)
 
@@ -344,7 +506,6 @@ class RecommendationEngine:
             earnings_date = catalyst_window.get("earnings_date")
             window_status = catalyst_window.get("window_status", "NONE")
 
-            # Check for earnings beat/miss via DB
             if earnings_date and window_status == "POST":
                 earnings_result = await self._check_earnings_result(
                     ticker, earnings_date, news_sentiment
@@ -378,7 +539,6 @@ class RecommendationEngine:
                         "detail": "Actual EPS missed consensus",
                     })
 
-            # Active catalyst window bonus
             if window_status == "ACTIVE":
                 score += 5
                 signals.append({
@@ -387,30 +547,206 @@ class RecommendationEngine:
                     "detail": f"Within catalyst window (earnings {earnings_date})",
                 })
 
+        # ── Technical signals ───────────────────────────────────────────
+
+        # RSI-14
+        rsi = technicals.get("rsi_14")
+        if rsi is not None:
+            if rsi < 30:
+                pts = 15 if rsi < 20 else 10
+                score += pts
+                signals.append({
+                    "signal": "RSI Oversold",
+                    "points": pts,
+                    "detail": f"RSI(14) at {rsi:.1f} — oversold, potential bounce",
+                })
+            elif rsi > 70:
+                pts = -15 if rsi > 80 else -10
+                score += pts
+                signals.append({
+                    "signal": "RSI Overbought",
+                    "points": pts,
+                    "detail": f"RSI(14) at {rsi:.1f} — overbought, potential pullback",
+                })
+
+        # Price vs 50-day SMA
+        sma_50 = stock_data.get("sma_50")
+        if current_price and sma_50 and sma_50 > 0:
+            pct_vs_50 = ((current_price - sma_50) / sma_50) * 100
+            if pct_vs_50 > 5:
+                score += 10
+                signals.append({
+                    "signal": "Above 50d SMA",
+                    "points": 10,
+                    "detail": f"Price ${current_price:.2f} is {pct_vs_50:.1f}% above 50d SMA ${sma_50:.2f}",
+                })
+            elif pct_vs_50 < -5:
+                score -= 10
+                signals.append({
+                    "signal": "Below 50d SMA",
+                    "points": -10,
+                    "detail": f"Price ${current_price:.2f} is {pct_vs_50:.1f}% below 50d SMA ${sma_50:.2f}",
+                })
+
+        # Price vs 200-day SMA
+        sma_200 = stock_data.get("sma_200")
+        if current_price and sma_200 and sma_200 > 0:
+            pct_vs_200 = ((current_price - sma_200) / sma_200) * 100
+            if pct_vs_200 > 5:
+                score += 5
+                signals.append({
+                    "signal": "Above 200d SMA",
+                    "points": 5,
+                    "detail": f"Price {pct_vs_200:.1f}% above 200d SMA ${sma_200:.2f} — long-term uptrend",
+                })
+            elif pct_vs_200 < -5:
+                score -= 5
+                signals.append({
+                    "signal": "Below 200d SMA",
+                    "points": -5,
+                    "detail": f"Price {pct_vs_200:.1f}% below 200d SMA ${sma_200:.2f} — long-term downtrend",
+                })
+
+        # 52-week position
+        wk_high = stock_data.get("fifty_two_week_high")
+        wk_low = stock_data.get("fifty_two_week_low")
+        if current_price and wk_high and wk_low and wk_high > wk_low:
+            pct_from_high = ((wk_high - current_price) / wk_high) * 100
+            pct_from_low = ((current_price - wk_low) / wk_low) * 100
+            if pct_from_high < 5:
+                score += 5
+                signals.append({
+                    "signal": "Near 52w High",
+                    "points": 5,
+                    "detail": f"Within {pct_from_high:.1f}% of 52-week high ${wk_high:.2f} — breakout potential",
+                })
+            elif pct_from_high > 30:
+                score += 10
+                signals.append({
+                    "signal": "Deep Pullback from 52w High",
+                    "points": 10,
+                    "detail": f"{pct_from_high:.0f}% below 52-week high ${wk_high:.2f} — potential value",
+                })
+
+        # Multi-day momentum
+        momentum_5d = technicals.get("momentum_5d")
+        momentum_20d = technicals.get("momentum_20d")
+        if momentum_5d is not None:
+            if momentum_5d > 5:
+                score += 10
+                signals.append({
+                    "signal": "Strong 5d Momentum",
+                    "points": 10,
+                    "detail": f"Stock up {momentum_5d:+.1f}% over 5 trading days",
+                })
+            elif momentum_5d < -5:
+                score -= 10
+                signals.append({
+                    "signal": "Weak 5d Momentum",
+                    "points": -10,
+                    "detail": f"Stock down {momentum_5d:+.1f}% over 5 trading days",
+                })
+        if momentum_20d is not None:
+            if momentum_20d > 15:
+                score += 10
+                signals.append({
+                    "signal": "Strong 20d Momentum",
+                    "points": 10,
+                    "detail": f"Stock up {momentum_20d:+.1f}% over 20 trading days",
+                })
+            elif momentum_20d < -15:
+                score -= 10
+                signals.append({
+                    "signal": "Weak 20d Momentum",
+                    "points": -10,
+                    "detail": f"Stock down {momentum_20d:+.1f}% over 20 trading days",
+                })
+
+        # Volume confirmation (high volume on directional move)
+        volume_ratio = technicals.get("volume_ratio")
+        if volume_ratio is not None and momentum_5d is not None:
+            if volume_ratio > 1.5 and momentum_5d > 3:
+                score += 10
+                signals.append({
+                    "signal": "Volume-Confirmed Rally",
+                    "points": 10,
+                    "detail": f"Volume {volume_ratio:.1f}x avg with {momentum_5d:+.1f}% 5d move — strong conviction",
+                })
+            elif volume_ratio > 1.5 and momentum_5d < -3:
+                score -= 10
+                signals.append({
+                    "signal": "Volume-Confirmed Selloff",
+                    "points": -10,
+                    "detail": f"Volume {volume_ratio:.1f}x avg with {momentum_5d:+.1f}% 5d move — distribution",
+                })
+
+        # Short interest
+        short_pct = stock_data.get("short_pct_float")
+        short_ratio = stock_data.get("short_ratio")
+        if short_pct is not None and short_pct > 0.10:
+            # High short interest — bearish pressure but squeeze potential if
+            # combined with bullish momentum
+            if momentum_5d is not None and momentum_5d > 3:
+                score += 15
+                signals.append({
+                    "signal": "Short Squeeze Setup",
+                    "points": 15,
+                    "detail": f"{short_pct:.0%} short float with {momentum_5d:+.1f}% 5d rally — squeeze potential",
+                })
+            else:
+                score -= 5
+                signals.append({
+                    "signal": "High Short Interest",
+                    "points": -5,
+                    "detail": f"{short_pct:.0%} of float sold short (days to cover: {short_ratio:.1f})",
+                })
+
         # ── Options signals ─────────────────────────────────────────────
         if options_snapshot:
             iv_rank = float(options_snapshot.iv_rank or 0)
 
-            # Unusual call volume
+            # Compare today's volume against historical average (last 20 days)
             total_call = options_snapshot.total_call_volume or 0
-            avg_call = options_snapshot.avg_call_volume or 0
-            if avg_call > 0 and total_call > 1.5 * avg_call:
+            total_put = options_snapshot.total_put_volume or 0
+            hist_avg_call, hist_avg_put = await self._get_historical_avg_volume(ticker)
+
+            # Unusual call volume (today vs historical average)
+            if hist_avg_call > 0 and total_call > 1.5 * hist_avg_call:
                 score += 15
                 signals.append({
                     "signal": "Unusual Call Volume",
                     "points": 15,
-                    "detail": f"Call volume {total_call:,} vs avg {avg_call:,} ({total_call / avg_call:.1f}x)",
+                    "detail": f"Call volume {total_call:,} vs 20d avg {hist_avg_call:,.0f} ({total_call / hist_avg_call:.1f}x)",
                 })
 
-            # Unusual put volume
-            total_put = options_snapshot.total_put_volume or 0
-            if avg_call > 0 and total_put > 1.5 * avg_call:
+            # Unusual put volume (today vs historical average)
+            if hist_avg_put > 0 and total_put > 1.5 * hist_avg_put:
                 score -= 15
                 signals.append({
                     "signal": "Unusual Put Volume",
                     "points": -15,
-                    "detail": f"Put volume {total_put:,} significantly elevated",
+                    "detail": f"Put volume {total_put:,} vs 20d avg {hist_avg_put:,.0f} ({total_put / hist_avg_put:.1f}x)",
                 })
+
+            # Put/Call OI skew
+            call_oi = options_snapshot.total_call_oi or 0
+            put_oi = options_snapshot.total_put_oi or 0
+            if call_oi > 0 and put_oi > 0:
+                pc_oi_ratio = put_oi / call_oi
+                if pc_oi_ratio < 0.5:
+                    score += 10
+                    signals.append({
+                        "signal": "Bullish OI Skew",
+                        "points": 10,
+                        "detail": f"P/C OI ratio {pc_oi_ratio:.2f} — call-heavy positioning",
+                    })
+                elif pc_oi_ratio > 1.5:
+                    score -= 10
+                    signals.append({
+                        "signal": "Bearish OI Skew",
+                        "points": -10,
+                        "detail": f"P/C OI ratio {pc_oi_ratio:.2f} — put-heavy positioning",
+                    })
 
             # IV rank neutralizer
             if iv_rank > 70:
@@ -421,22 +757,30 @@ class RecommendationEngine:
                     "detail": f"IV rank {iv_rank:.0f} (>70) — elevated premium risk",
                 })
 
-        # ── News sentiment ──────────────────────────────────────────────
+        # ── News sentiment (scaled by magnitude and count) ──────────────
         avg_sentiment = news_sentiment.get("avg_sentiment", 0.0)
+        article_count = news_sentiment.get("total_count", 0)
 
         if avg_sentiment > 0.3:
-            score += 5
+            # Scale: base 5, add up to 10 more for strong + high-count
+            magnitude_bonus = min(5, int((avg_sentiment - 0.3) * 15))
+            count_bonus = min(5, article_count // 3)
+            pts = 5 + magnitude_bonus + count_bonus
+            score += pts
             signals.append({
                 "signal": "Positive News Sentiment",
-                "points": 5,
-                "detail": f"Avg sentiment {avg_sentiment:+.3f} across {news_sentiment.get('total_count', 0)} articles",
+                "points": pts,
+                "detail": f"Avg sentiment {avg_sentiment:+.3f} across {article_count} articles",
             })
         elif avg_sentiment < -0.3:
-            score -= 5
+            magnitude_bonus = min(5, int((abs(avg_sentiment) - 0.3) * 15))
+            count_bonus = min(5, article_count // 3)
+            pts = -(5 + magnitude_bonus + count_bonus)
+            score += pts
             signals.append({
                 "signal": "Negative News Sentiment",
-                "points": -5,
-                "detail": f"Avg sentiment {avg_sentiment:+.3f} across {news_sentiment.get('total_count', 0)} articles",
+                "points": pts,
+                "detail": f"Avg sentiment {avg_sentiment:+.3f} across {article_count} articles",
             })
 
         # Check for sector tailwind/headwind via news
@@ -766,17 +1110,15 @@ class RecommendationEngine:
 
     @staticmethod
     def _calc_stock_move_pct(stock_data: dict) -> float:
-        """Estimate how much the stock has moved recently.
+        """Calculate how much the stock moved from previous close.
 
-        Uses the distance from 52-week midpoint as a rough proxy when
-        intraday move data is unavailable.
+        Returns the percentage change from yesterday's close to the
+        current price — a true daily move measurement.
         """
         price = stock_data.get("price")
-        high = stock_data.get("fifty_two_week_high")
-        low = stock_data.get("fifty_two_week_low")
-        if price and high and low and (high + low) > 0:
-            midpoint = (high + low) / 2
-            return ((price - midpoint) / midpoint) * 100.0
+        prev_close = stock_data.get("previous_close")
+        if price and prev_close and prev_close > 0:
+            return ((price - prev_close) / prev_close) * 100.0
         return 0.0
 
     @staticmethod

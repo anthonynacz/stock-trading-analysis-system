@@ -89,6 +89,12 @@ export interface SignalDetail {
   detail: string;
 }
 
+export interface NewsTickerRelevance {
+  ticker: string;
+  relevance_score: number;
+  relevance_source: string;
+}
+
 export interface NewsItem {
   id: number;
   ticker: string | null;
@@ -100,6 +106,7 @@ export interface NewsItem {
   impact_level: 'HIGH' | 'MEDIUM' | 'LOW' | null;
   published_at: string | null;
   source_url: string | null;
+  related_tickers: NewsTickerRelevance[];
 }
 
 export interface CatalystEvent {
@@ -147,4 +154,55 @@ export interface WatchlistChanges {
 
 export interface PipelineDates {
   dates: string[];
+}
+
+export interface TrendDataPoint {
+  date: string;
+  price: number | null;
+  target_price: number | null;
+  conviction: number | null;
+  signal_count: number | null;
+  sentiment: number | null;
+  article_count: number | null;
+  price_sma: number | null;
+  conviction_sma: number | null;
+  signal_count_sma: number | null;
+  sentiment_sma: number | null;
+}
+
+export interface TrendData {
+  ticker: string;
+  days: number;
+  sma_window: number;
+  data: TrendDataPoint[];
+}
+
+export interface ResearchResult {
+  id: number;
+  ticker: string;
+  company_name: string | null;
+  analyzed_at: string;
+  action: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
+  conviction_score: number | null;
+  signal_count: number | null;
+  signals: SignalDetail[] | null;
+  rationale: string;
+  catalyst_type: string | null;
+  entry_strategy: string | null;
+  exit_rules: string | null;
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+  current_price: number | null;
+  target_price: number | null;
+  stop_loss_price: number | null;
+  options_data: {
+    stock_price: number | null;
+    iv_rank: number | null;
+    iv_percentile: number | null;
+    put_call_ratio: number | null;
+    total_call_volume: number | null;
+    total_put_volume: number | null;
+    unusual_activity: boolean;
+    unusual_activity_detail: string | null;
+  } | null;
+  suggested_options: SuggestedOption[];
 }

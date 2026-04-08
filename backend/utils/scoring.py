@@ -275,3 +275,49 @@ def assign_impact_level(
     if abs(sentiment_score) < 0.2:
         return "LOW"
     return "MEDIUM"
+
+
+def compute_ticker_relevance(
+    ticker: str,
+    company_name: str | None,
+    headline: str,
+    summary: str | None,
+    api_related_tickers: list[str],
+    was_searched_ticker: bool,
+) -> tuple[float, str]:
+    """Compute how relevant a news article is to a specific ticker.
+
+    Returns ``(relevance_score, relevance_source)`` or ``(0.0, "")`` if
+    the article is not relevant.
+    """
+    headline_lower = headline.lower()
+    summary_lower = (summary or "").lower()
+    ticker_lower = ticker.lower()
+
+    # Build searchable name tokens from company name (first word if > 3 chars)
+    name_tokens: list[str] = []
+    if company_name:
+        for word in company_name.split():
+            w = word.strip(",.()").lower()
+            if len(w) > 3:
+                name_tokens.append(w)
+                break  # use only the first significant word
+
+    def _in_text(text: str) -> bool:
+        if ticker_lower in text.split():
+            return True
+        return any(t in text for t in name_tokens)
+
+    if _in_text(headline_lower):
+        return 1.0, "HEADLINE"
+
+    if summary_lower and _in_text(summary_lower):
+        return 0.7, "SUMMARY"
+
+    if ticker.upper() in [t.upper().strip() for t in api_related_tickers]:
+        return 0.5, "API_RELATED"
+
+    if was_searched_ticker:
+        return 0.3, "SEARCHED"
+
+    return 0.0, ""

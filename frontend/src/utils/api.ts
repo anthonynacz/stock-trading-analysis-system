@@ -11,6 +11,8 @@ import type {
   StrikeRecommenderResult,
   StrikeAllResult,
   WatchlistStrikesResult,
+  TrendData,
+  ResearchResult,
 } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
@@ -58,8 +60,8 @@ export const getRecommendations = (
       })),
     );
 
-export const getTickerRecommendations = (ticker: string) =>
-  api.get<Recommendation[]>(`/recommendations/${ticker}`).then((r) =>
+export const getTickerRecommendations = (ticker: string, date?: string) =>
+  api.get<Recommendation[]>(`/recommendations/${ticker}`, { params: { date } }).then((r) =>
     r.data.map((rec) => ({
       ...parseNumericFields(rec, REC_NUMERIC),
       suggested_options: rec.suggested_options.map((o) =>
@@ -70,8 +72,10 @@ export const getTickerRecommendations = (ticker: string) =>
 
 export const getNews = (params?: {
   ticker?: string;
+  mode?: string;
   category?: string;
   impact_level?: string;
+  min_relevance?: number;
   limit?: number;
 }) =>
   api
@@ -151,4 +155,44 @@ export const getStrikeSnapshot = (date: string) =>
       params: { date },
     })
     .then((r) => r.data);
+
+export const getTickerTrends = (ticker: string, days = 20, sma = 5) =>
+  api
+    .get<TrendData>(`/trends/${ticker}`, { params: { days, sma } })
+    .then((r) => r.data);
+
+// ── Research ────────────────────────────────────────────────────────────────
+
+const RESEARCH_NUMERIC = [
+  'conviction_score', 'current_price', 'target_price', 'stop_loss_price',
+];
+
+function parseResearchResult(r: ResearchResult): ResearchResult {
+  const parsed = parseNumericFields(r, RESEARCH_NUMERIC);
+  if (parsed.options_data) {
+    parsed.options_data = parseNumericFields(parsed.options_data, [
+      'stock_price', 'iv_rank', 'iv_percentile', 'put_call_ratio',
+    ]);
+  }
+  if (parsed.suggested_options) {
+    parsed.suggested_options = parsed.suggested_options.map((o) =>
+      parseNumericFields(o, OPT_NUMERIC),
+    );
+  }
+  return parsed;
+}
+
+export const analyzeResearch = (ticker: string) =>
+  api.post<ResearchResult>(`/research/${ticker}`).then((r) => parseResearchResult(r.data));
+
+export const getResearchResults = (ticker?: string, limit = 50, offset = 0) =>
+  api
+    .get<ResearchResult[]>('/research', { params: { ticker, limit, offset } })
+    .then((r) => r.data.map(parseResearchResult));
+
+export const getResearchResult = (id: number) =>
+  api.get<ResearchResult>(`/research/${id}`).then((r) => parseResearchResult(r.data));
+
+export const deleteResearchResult = (id: number) =>
+  api.delete(`/research/${id}`);
 

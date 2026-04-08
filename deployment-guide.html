@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EdgeFlow Deployment Guide</title>
+    <style>
+        :root {
+            --bg-page: #0f1117;
+            --bg-card: #161b22;
+            --bg-code: #1c2129;
+            --border: #30363d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --accent-blue: #58a6ff;
+            --accent-green: #2ea043;
+            --accent-yellow: #d29922;
+            --accent-red: #f85149;
+            --accent-purple: #bc8cff;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg-page);
+            color: var(--text-primary);
+            line-height: 1.7;
+            padding: 2rem;
+            max-width: 960px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        h1 + p { color: var(--text-secondary); margin-bottom: 2.5rem; }
+
+        h2 {
+            font-size: 1.5rem;
+            margin-top: 3rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--accent-blue);
+        }
+
+        h3 {
+            font-size: 1.1rem;
+            margin-top: 1.8rem;
+            margin-bottom: 0.6rem;
+            color: var(--text-primary);
+        }
+
+        p { margin-bottom: 1rem; color: var(--text-secondary); }
+
+        pre {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.2rem 1.5rem;
+            overflow-x: auto;
+            margin-bottom: 1.2rem;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        code {
+            font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+            font-size: 0.88rem;
+        }
+
+        pre code { color: var(--text-primary); }
+
+        p code, td code, li code {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 0.15rem 0.4rem;
+            font-size: 0.85rem;
+            color: var(--accent-blue);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1.2rem;
+            font-size: 0.92rem;
+        }
+
+        th {
+            text-align: left;
+            padding: 0.7rem 1rem;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            color: var(--accent-blue);
+            font-weight: 600;
+        }
+
+        td {
+            padding: 0.6rem 1rem;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+
+        tr:hover td { background: rgba(88, 166, 255, 0.04); }
+
+        .diagram {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+
+        .diagram pre {
+            background: none;
+            border: none;
+            display: inline-block;
+            text-align: left;
+            padding: 0;
+            margin: 0;
+            font-size: 0.85rem;
+        }
+
+        .section-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.8rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .section-card h3:first-child { margin-top: 0; }
+
+        .badge {
+            display: inline-block;
+            padding: 0.2rem 0.7rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .badge-ssh { background: rgba(188, 140, 255, 0.15); color: var(--accent-purple); }
+        .badge-git { background: rgba(210, 153, 34, 0.15); color: var(--accent-yellow); }
+        .badge-docker { background: rgba(88, 166, 255, 0.15); color: var(--accent-blue); }
+        .badge-security { background: rgba(46, 160, 67, 0.15); color: var(--accent-green); }
+
+        .comment { color: var(--text-secondary); }
+        .flag { color: var(--accent-yellow); }
+        .value { color: var(--accent-green); }
+        .cmd { color: var(--accent-blue); }
+
+        .flow-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .step-number {
+            flex-shrink: 0;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--accent-blue);
+            color: var(--bg-page);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.85rem;
+        }
+
+        .step-content { flex: 1; }
+        .step-content p { margin-bottom: 0.3rem; }
+
+        .step-location {
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+
+        .loc-local { color: var(--accent-yellow); }
+        .loc-server { color: var(--accent-purple); }
+
+        .connector {
+            width: 2px;
+            height: 20px;
+            background: var(--border);
+            margin-left: 15px;
+            margin-bottom: 0.5rem;
+        }
+
+        .success-box {
+            background: rgba(46, 160, 67, 0.1);
+            border: 1px solid rgba(46, 160, 67, 0.3);
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+            margin-top: 1rem;
+            color: var(--accent-green);
+            font-weight: 500;
+        }
+
+        .warning-box {
+            background: rgba(248, 81, 73, 0.1);
+            border: 1px solid rgba(248, 81, 73, 0.3);
+            border-radius: 8px;
+            padding: 1rem 1.2rem;
+            margin-top: 1rem;
+            color: var(--accent-red);
+        }
+
+        .toc {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem 2rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .toc h3 { margin-top: 0; margin-bottom: 0.8rem; color: var(--text-primary); }
+
+        .toc a {
+            color: var(--accent-blue);
+            text-decoration: none;
+            display: block;
+            padding: 0.25rem 0;
+        }
+
+        .toc a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+
+    <h1>EdgeFlow Deployment Guide</h1>
+    <p>SSH, Git, and Docker commands for deploying to Hetzner</p>
+
+    <div class="toc">
+        <h3>Contents</h3>
+        <a href="#overview">Architecture Overview</a>
+        <a href="#ssh">1. SSH Commands</a>
+        <a href="#git">2. Git Commands</a>
+        <a href="#docker">3. Docker Commands</a>
+        <a href="#flow">4. Full Deployment Flow</a>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="overview">Architecture Overview</h2>
+
+    <div class="diagram">
+        <pre><code>┌──────────────┐         SSH / Git Push         ┌──────────────────┐
+│  <span class="flag">Local PC</span>    │ ──────────────────────────────► │  <span class="value">Hetzner Server</span>  │
+│  (WSL/Bash)  │                                 │  (Ubuntu/Linux)  │
+│              │    ┌─────────┐                  │                  │
+│  Code Editor │    │ <span class="cmd">SSH Key</span> │                  │  ┌────────────┐  │
+│  Git Repo    │    └────┬────┘                  │  │   Docker   │  │
+│              │         │                       │  │   Compose  │  │
+└──────────────┘         │                       │  │            │  │
+                         │                       │  │ ┌────────┐ │  │
+                         └───────────────────────┼──┤ │Postgres│ │  │
+                                                 │  │ │Backend │ │  │
+                                                 │  │ │Frontend│ │  │
+                                                 │  │ └────────┘ │  │
+                                                 │  └────────────┘  │
+                                                 └──────────────────┘</code></pre>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="ssh">1. SSH Commands <span class="badge badge-ssh">SSH</span></h2>
+
+    <p>SSH (Secure Shell) lets you run commands on a remote server from your local machine, authenticated with a key pair instead of a password.</p>
+
+    <div class="section-card">
+        <h3>Connect to the server</h3>
+        <pre><code>ssh -i ~/.ssh/hetzner_edgeflow root@204.168.198.65</code></pre>
+        <table>
+            <tr><th>Part</th><th>Meaning</th></tr>
+            <tr><td><code>ssh</code></td><td>The SSH client program</td></tr>
+            <tr><td><code>-i ~/.ssh/hetzner_edgeflow</code></td><td>Use this private key file for authentication (instead of a password)</td></tr>
+            <tr><td><code>root</code></td><td>The user to log in as on the server</td></tr>
+            <tr><td><code>204.168.198.65</code></td><td>The server's IP address</td></tr>
+        </table>
+    </div>
+
+    <div class="section-card">
+        <h3>Run a command remotely (without staying connected)</h3>
+        <pre><code>ssh -i ~/.ssh/hetzner_edgeflow root@204.168.198.65 <span class="value">"cd ~/edgeflow && git stash"</span></code></pre>
+        <p>Adding a quoted command at the end runs it on the server and returns the output — no interactive session needed. Use <code>&&</code> to chain commands (the next one only runs if the previous succeeded).</p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="git">2. Git Commands <span class="badge badge-git">Git</span></h2>
+
+    <p>Git tracks code changes locally and syncs them to remote repositories.</p>
+
+    <div class="section-card">
+        <h3>Staging and committing</h3>
+        <pre><code><span class="comment"># Stage specific files (mark them for the next commit)</span>
+git add file1.txt file2.txt docker-compose.yml
+
+<span class="comment"># Commit staged changes with a message</span>
+git commit -m <span class="value">"Describe what changed and why"</span></code></pre>
+
+        <div class="diagram" style="padding: 1.2rem;">
+            <pre><code>Working Directory ──► Staging Area ──► Local Repository
+    <span class="text-secondary">(edit files)</span>       <span class="cmd">(git add)</span>        <span class="value">(git commit)</span></code></pre>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h3>Remotes — linking to the server</h3>
+        <pre><code>git remote add hetzner root@204.168.198.65:edgeflow</code></pre>
+        <table>
+            <tr><th>Part</th><th>Meaning</th></tr>
+            <tr><td><code>hetzner</code></td><td>A name you choose for this remote (like a bookmark)</td></tr>
+            <tr><td><code>root@204.168.198.65</code></td><td>SSH user and server address</td></tr>
+            <tr><td><code>:edgeflow</code></td><td>Path to the repo on the server (<code>~/edgeflow</code>)</td></tr>
+        </table>
+    </div>
+
+    <div class="section-card">
+        <h3>Pushing code to the server</h3>
+        <pre><code>GIT_SSH_COMMAND=<span class="value">"ssh -i ~/.ssh/hetzner_edgeflow"</span> git push hetzner master</code></pre>
+        <table>
+            <tr><th>Part</th><th>Meaning</th></tr>
+            <tr><td><code>GIT_SSH_COMMAND="..."</code></td><td>Tells Git which SSH key to use for this push</td></tr>
+            <tr><td><code>git push</code></td><td>Upload local commits to a remote</td></tr>
+            <tr><td><code>hetzner</code></td><td>The remote to push to</td></tr>
+            <tr><td><code>master</code></td><td>The branch to push</td></tr>
+        </table>
+
+        <div class="diagram" style="padding: 1.2rem;">
+            <pre><code>Local (master) ────<span class="cmd">git push</span>────► Server (master)
+   commit A                         commit A
+   commit B                         commit B  <span class="value">← now synced</span></code></pre>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h3>Server-side Git config</h3>
+        <pre><code>git config receive.denyCurrentBranch updateInstead</code></pre>
+        <p>By default, Git refuses pushes to a branch that's currently checked out (because the working files wouldn't update). <code>updateInstead</code> tells Git: <strong style="color: var(--text-primary);">accept the push AND update the working directory to match</strong> — exactly what you want for deployment.</p>
+    </div>
+
+    <div class="section-card">
+        <h3>Git stash</h3>
+        <pre><code>git stash</code></pre>
+        <p>Temporarily shelves uncommitted changes so the working directory is clean. Useful when the server has local edits that would block an incoming push.</p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="docker">3. Docker Commands <span class="badge badge-docker">Docker</span></h2>
+
+    <p>Docker runs your app in isolated containers. Docker Compose orchestrates multiple containers together from a single <code>docker-compose.yml</code> file.</p>
+
+    <div class="diagram">
+        <pre><code>docker-compose.yml defines:
+┌─────────────────────────────────────────────────────┐
+│  Docker Compose Network <span class="text-secondary">(internal)</span>                  │
+│                                                     │
+│  ┌──────────┐    ┌──────────┐    ┌──────────────┐   │
+│  │ <span class="cmd">postgres</span> │    │ <span class="cmd">backend</span>  │    │   <span class="cmd">frontend</span>  │   │
+│  │ :5432    │◄───┤ :8000    │    │   :3000      │   │
+│  │          │    │ (FastAPI)│    │   (React)    │   │
+│  │ <span class="value">internal</span> │    └──────────┘    └──────────────┘   │
+│  │ <span class="value">only</span>     │                                      │
+│  └──────────┘                                       │
+└─────────────────────────────────────────────────────┘
+        <span class="value">▲ NOT exposed to internet ✓</span></code></pre>
+    </div>
+
+    <div class="section-card">
+        <h3>Build and start everything</h3>
+        <pre><code>docker compose up -d --build</code></pre>
+        <table>
+            <tr><th>Flag</th><th>Meaning</th></tr>
+            <tr><td><code>up</code></td><td>Create and start all containers defined in <code>docker-compose.yml</code></td></tr>
+            <tr><td><code>-d</code></td><td>Detached mode — run in the background (don't block the terminal)</td></tr>
+            <tr><td><code>--build</code></td><td>Rebuild images from Dockerfiles before starting (picks up code changes)</td></tr>
+        </table>
+    </div>
+
+    <div class="section-card">
+        <h3>Stop everything</h3>
+        <pre><code><span class="comment"># Stop and remove containers (keep data)</span>
+docker compose down
+
+<span class="comment"># Stop, remove containers, AND delete volumes (wipes DB data)</span>
+docker compose down -v</code></pre>
+        <table>
+            <tr><th>Flag</th><th>Meaning</th></tr>
+            <tr><td><code>down</code></td><td>Stop and remove all containers. Database volume (your data) is preserved.</td></tr>
+            <tr><td><code>-v</code></td><td>Also remove <strong>volumes</strong> — deletes Postgres data. Needed when changing the DB password, because Postgres only sets the password on first initialization.</td></tr>
+        </table>
+
+        <div class="warning-box">
+            <strong>Warning:</strong> The <code>-v</code> flag destroys all database data. Only use it when you need a fresh database (e.g., password change) or don't have important data.
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h3>Verify the security fix <span class="badge badge-security">Security</span></h3>
+        <pre><code>ss -tlnp | grep 5432</code></pre>
+        <table>
+            <tr><th>Part</th><th>Meaning</th></tr>
+            <tr><td><code>ss</code></td><td>Socket statistics — shows open network ports</td></tr>
+            <tr><td><code>-t</code></td><td>TCP sockets only</td></tr>
+            <tr><td><code>-l</code></td><td>Listening (waiting for connections)</td></tr>
+            <tr><td><code>-n</code></td><td>Show port numbers, not service names</td></tr>
+            <tr><td><code>-p</code></td><td>Show which process owns the socket</td></tr>
+            <tr><td><code>grep 5432</code></td><td>Filter for the Postgres port</td></tr>
+        </table>
+        <div class="success-box">
+            <strong>No output = success</strong> — port 5432 is not publicly exposed.
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="flow">4. Full Deployment Flow</h2>
+
+    <div class="section-card">
+        <div class="flow-step">
+            <div class="step-number">1</div>
+            <div class="step-content">
+                <span class="step-location loc-local">Local</span>
+                <p style="color: var(--text-primary); font-weight: 500;">Edit your code</p>
+            </div>
+        </div>
+        <div class="connector"></div>
+
+        <div class="flow-step">
+            <div class="step-number">2</div>
+            <div class="step-content">
+                <span class="step-location loc-local">Local</span>
+                <p style="color: var(--text-primary); font-weight: 500;">Stage and commit</p>
+                <pre><code>git add docker-compose.yml backend/config.py
+git commit -m "Describe the change"</code></pre>
+            </div>
+        </div>
+        <div class="connector"></div>
+
+        <div class="flow-step">
+            <div class="step-number">3</div>
+            <div class="step-content">
+                <span class="step-location loc-local">Local (WSL)</span>
+                <p style="color: var(--text-primary); font-weight: 500;">Push to server</p>
+                <pre><code>GIT_SSH_COMMAND="ssh -i ~/.ssh/hetzner_edgeflow" git push hetzner master</code></pre>
+            </div>
+        </div>
+        <div class="connector"></div>
+
+        <div class="flow-step">
+            <div class="step-number">4</div>
+            <div class="step-content">
+                <span class="step-location loc-server">Server</span>
+                <p style="color: var(--text-primary); font-weight: 500;">Rebuild and restart containers</p>
+                <pre><code>ssh -i ~/.ssh/hetzner_edgeflow root@204.168.198.65 \
+  "cd ~/edgeflow && docker compose down && docker compose up -d --build"</code></pre>
+            </div>
+        </div>
+        <div class="connector"></div>
+
+        <div class="flow-step">
+            <div class="step-number">5</div>
+            <div class="step-content">
+                <span class="step-location loc-server">Server</span>
+                <p style="color: var(--text-primary); font-weight: 500;">Verify</p>
+                <pre><code>ssh -i ~/.ssh/hetzner_edgeflow root@204.168.198.65 "ss -tlnp | grep 5432"</code></pre>
+                <div class="success-box">No output = secure. You're done.</div>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>

@@ -1,12 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Recommendation, OptionsSnapshot, SignalDetail } from '../types';
 import { getTickerRecommendations, getOptions } from '../utils/api';
+import { useTickerTrends } from '../hooks/useEdgeFlow';
 import { ACTION_COLORS, getActionLabel } from '../utils/theme';
 import StrikeRecommender from './StrikeRecommender';
+import TrendChart from './TrendChart';
+import DayComparison from './DayComparison';
 
 interface TickerDetailProps {
   ticker: string;
   companyName?: string;
+  selectedDate?: string;
   onClose: () => void;
 }
 
@@ -89,16 +93,18 @@ function StatRow({ label, value, mono, sentiment }: {
   );
 }
 
-export default function TickerDetail({ ticker, companyName, onClose }: TickerDetailProps) {
+export default function TickerDetail({ ticker, companyName, selectedDate, onClose }: TickerDetailProps) {
   const [rec, setRec] = useState<Recommendation | null>(null);
   const [options, setOptions] = useState<OptionsSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [smaWindow, setSmaWindow] = useState(5);
+  const trends = useTickerTrends(ticker, 20, smaWindow);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const [recs, opts] = await Promise.allSettled([
-        getTickerRecommendations(ticker),
+        getTickerRecommendations(ticker, selectedDate),
         getOptions(ticker),
       ]);
       setRec(recs.status === 'fulfilled' && recs.value.length > 0 ? recs.value[0] : null);
@@ -106,7 +112,7 @@ export default function TickerDetail({ ticker, companyName, onClose }: TickerDet
     } finally {
       setLoading(false);
     }
-  }, [ticker]);
+  }, [ticker, selectedDate]);
 
   useEffect(() => {
     fetchData();
@@ -293,9 +299,25 @@ export default function TickerDetail({ ticker, companyName, onClose }: TickerDet
             </div>
           )}
 
+          {/* Day-by-Day comparison */}
+          <div className="border-t border-border/40 pt-3">
+            <DayComparison ticker={ticker} />
+          </div>
+
           {/* Strike Recommender — always visible */}
           <div className="border-t border-border/40 pt-3">
             <StrikeRecommender ticker={ticker} />
+          </div>
+
+          {/* Trend Charts */}
+          <div className="border-t border-border/40 pt-3">
+            <TrendChart
+              data={trends.data}
+              loading={trends.loading}
+              error={trends.error}
+              sma={smaWindow}
+              onSmaChange={setSmaWindow}
+            />
           </div>
 
           {/* No data state */}

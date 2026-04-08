@@ -15,6 +15,7 @@ import WatchlistGrid from '../components/WatchlistGrid';
 import TickerDetail from '../components/TickerDetail';
 import RecommendationCard from '../components/RecommendationCard';
 import NewsTimeline from '../components/NewsTimeline';
+import NewsModeSelector from '../components/NewsModeSelector';
 import CatalystCalendar from '../components/CatalystCalendar';
 import WatchlistStrikes from '../components/WatchlistStrikes';
 
@@ -44,12 +45,17 @@ export default function Dashboard() {
   const [addTickerInput, setAddTickerInput] = useState('');
   const [addingTicker, setAddingTicker] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const [newsMode, setNewsMode] = useState<'general' | 'watchlist' | 'ticker'>('general');
+  const [newsTicker, setNewsTicker] = useState('');
 
   const pipelineDates = usePipelineDates();
   const watchlist = useWatchlist(undefined, selectedDate);
   const recommendations = useRecommendations(undefined, undefined, selectedDate);
   const watchlistChanges = useWatchlistChanges(selectedDate);
-  const news = useNews();
+  const news = useNews({
+    mode: newsMode,
+    ticker: newsMode === 'ticker' && newsTicker ? newsTicker : undefined,
+  });
   const catalysts = useCatalysts();
   const status = useStatus();
 
@@ -184,6 +190,7 @@ export default function Dashboard() {
               <TickerDetail
                 ticker={selectedTicker}
                 companyName={selectedCompany}
+                selectedDate={selectedDate}
                 onClose={() => setSelectedTicker(null)}
               />
             ) : (
@@ -202,12 +209,12 @@ export default function Dashboard() {
           ) : recommendations.error ? (
             <SectionError message={recommendations.error} />
           ) : (
-            <div className="space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
               {(recommendations.data ?? []).map((rec) => (
                 <RecommendationCard key={rec.id} recommendation={rec} />
               ))}
               {recommendations.data?.length === 0 && (
-                <p className="text-text-secondary text-sm text-center py-6">
+                <p className="text-text-secondary text-sm text-center py-6 col-span-2">
                   No recommendations available
                 </p>
               )}
@@ -224,14 +231,26 @@ export default function Dashboard() {
         {/* News + Catalysts two-column */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           <section className="lg:col-span-3">
-            <h2 className="text-xl font-bold text-text-primary mb-4">News</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-text-primary">News</h2>
+              <NewsModeSelector
+                mode={newsMode}
+                onModeChange={setNewsMode}
+                ticker={newsTicker}
+                onTickerChange={setNewsTicker}
+                watchlistTickers={(watchlist.data ?? []).map((w) => w.ticker)}
+              />
+            </div>
             <div className="bg-card border border-border rounded-lg p-4">
               {news.loading ? (
                 <SectionLoading />
               ) : news.error ? (
                 <SectionError message={news.error} />
               ) : (
-                <NewsTimeline items={news.data ?? []} />
+                <NewsTimeline
+                  items={news.data ?? []}
+                  showTickers={newsMode !== 'general'}
+                />
               )}
             </div>
           </section>

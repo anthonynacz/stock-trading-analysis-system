@@ -12,14 +12,14 @@ function ConvictionBar({ score }: { score: number }) {
   const isPositive = score >= 0;
 
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-2 rounded-full bg-border overflow-hidden">
+    <div className="flex items-center gap-1.5">
+      <div className="flex-1 h-1.5 rounded-full bg-border overflow-hidden">
         <div
           className={`h-full rounded-full transition-all ${isPositive ? 'bg-green-500' : 'bg-red-500'}`}
           style={{ width: `${abs}%` }}
         />
       </div>
-      <span className="text-xs font-mono text-text-secondary w-8 text-right">
+      <span className="text-[10px] font-mono text-text-secondary w-6 text-right">
         {score}
       </span>
     </div>
@@ -32,8 +32,8 @@ function SignalBullet({ signal }: { signal: SignalDetail }) {
   const pointColor = isPositive ? 'text-green-400' : 'text-red-400';
 
   return (
-    <li className="flex items-start gap-2 text-sm">
-      <span className={`font-mono text-xs font-bold mt-0.5 w-8 shrink-0 text-right ${pointColor}`}>
+    <li className="flex items-start gap-1.5 text-xs">
+      <span className={`font-mono font-bold mt-px w-7 shrink-0 text-right ${pointColor}`}>
         {prefix}{signal.points}
       </span>
       <span className="text-text-primary">
@@ -53,7 +53,7 @@ function RiskBadge({ level }: { level: string }) {
     HIGH: 'bg-red-900/60 text-red-400',
   };
   return (
-    <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[level] ?? 'bg-gray-800 text-text-secondary'}`}>
+    <span className={`px-1.5 py-px rounded text-[10px] font-medium ${colors[level] ?? 'bg-gray-800 text-text-secondary'}`}>
       {level}
     </span>
   );
@@ -66,55 +66,48 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
   return (
     <div
       className="bg-card rounded-lg border border-border overflow-hidden cursor-pointer transition-colors hover:border-text-secondary/30"
-      style={{ borderLeftWidth: '4px', borderLeftColor: borderColor }}
+      style={{ borderLeftWidth: '3px', borderLeftColor: borderColor }}
       onClick={() => setExpanded((v) => !v)}
     >
       {/* Collapsed view */}
-      <div className="p-4 flex items-center gap-4">
-        <span
-          className="px-2 py-1 rounded text-xs font-bold uppercase"
-          style={{ backgroundColor: borderColor + '22', color: borderColor }}
-        >
-          {getActionLabel(rec.action)}
-        </span>
-
-        <span className="text-lg font-bold text-text-primary">{rec.ticker}</span>
-
-        {rec.current_price != null && (
-          <span className="text-sm font-mono text-text-secondary">
-            ${rec.current_price.toFixed(2)}
+      <div className="px-3 py-2 space-y-1.5">
+        <div className="flex items-center gap-2">
+          <span
+            className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase"
+            style={{ backgroundColor: borderColor + '22', color: borderColor }}
+          >
+            {getActionLabel(rec.action)}
           </span>
-        )}
-
-        <div className="flex-1 max-w-[200px] ml-auto">
-          {rec.conviction_score != null && (
-            <ConvictionBar score={rec.conviction_score} />
+          <span className="text-sm font-bold text-text-primary">{rec.ticker}</span>
+          {rec.current_price != null && (
+            <span className="text-xs font-mono text-text-secondary">
+              ${rec.current_price.toFixed(2)}
+            </span>
           )}
+          {rec.signal_count != null && (
+            <span className="text-[10px] text-text-secondary ml-auto">
+              {rec.signal_count} sig{rec.signal_count !== 1 ? 's' : ''}
+            </span>
+          )}
+          <svg
+            className={`w-3.5 h-3.5 text-text-secondary transition-transform shrink-0 ${expanded ? 'rotate-180' : ''}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
         </div>
-
-        {rec.signal_count != null && (
-          <span className="text-xs text-text-secondary whitespace-nowrap">
-            {rec.signal_count} signal{rec.signal_count !== 1 ? 's' : ''}
-          </span>
-        )}
-
-        <svg
-          className={`w-4 h-4 text-text-secondary transition-transform ${expanded ? 'rotate-180' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
+        {rec.conviction_score != null && <ConvictionBar score={rec.conviction_score} />}
       </div>
 
       {/* Expanded view */}
       {expanded && (
-        <div className="px-4 pb-4 pt-0 border-t border-border space-y-3" onClick={(e) => e.stopPropagation()}>
-          {/* Signals as bullet list */}
+        <div className="px-3 pb-2.5 pt-0 border-t border-border space-y-2" onClick={(e) => e.stopPropagation()}>
+          {/* Signals */}
           {rec.signals && rec.signals.length > 0 && (
-            <ul className="space-y-1.5 mt-3">
+            <ul className="space-y-0.5 mt-2">
               {rec.signals.map((sig, i) => (
                 <SignalBullet key={i} signal={sig} />
               ))}
@@ -122,7 +115,7 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
           )}
 
           {/* Price / Risk compact row */}
-          <div className="flex items-center gap-4 text-sm flex-wrap">
+          <div className="flex items-center gap-3 text-xs flex-wrap">
             {rec.target_price != null && (
               <span className="text-text-secondary">
                 Target <span className="font-mono text-text-primary">${rec.target_price.toFixed(2)}</span>
@@ -135,20 +128,20 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
             )}
             {rec.risk_level && <RiskBadge level={rec.risk_level} />}
             {rec.catalyst_type && (
-              <span className="text-xs text-text-secondary bg-border/60 px-2 py-0.5 rounded">
+              <span className="text-[10px] text-text-secondary bg-border/60 px-1.5 py-0.5 rounded">
                 {rec.catalyst_type.replace(/_/g, ' ')}
               </span>
             )}
           </div>
 
-          {/* Entry / Exit — only if meaningful */}
+          {/* Entry / Exit */}
           {rec.entry_strategy && rec.entry_strategy !== 'HOLD' && (
-            <p className="text-sm text-text-secondary">
+            <p className="text-xs text-text-secondary">
               Entry: <span className="text-text-primary">{rec.entry_strategy}</span>
             </p>
           )}
           {rec.exit_rules && (
-            <p className="text-sm text-text-secondary">
+            <p className="text-xs text-text-secondary">
               Exit: <span className="text-text-primary">{rec.exit_rules}</span>
             </p>
           )}
@@ -156,7 +149,7 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
           {/* Options */}
           {rec.suggested_options.length > 0 && (
             <div>
-              <h4 className="text-xs font-semibold text-text-secondary uppercase mb-2">Suggested Options</h4>
+              <h4 className="text-[10px] font-semibold text-text-secondary uppercase mb-1">Suggested Options</h4>
               <OptionsTable options={rec.suggested_options} />
             </div>
           )}

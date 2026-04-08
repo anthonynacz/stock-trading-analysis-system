@@ -32,6 +32,7 @@ TTL_EARNINGS = 60 * 60
 # Rate-limit definitions: source -> (max_calls, period_seconds)
 # ---------------------------------------------------------------------------
 _RATE_LIMITS: dict[str, tuple[int, float]] = {
+    "fmp": (300, 60),            # 300 calls / min (Starter plan)
     "finnhub": (60, 60),        # 60 calls / min
     "newsapi": (100, 86_400),   # 100 calls / day
     "yfinance": (1, 0.5),       # 1 call per 0.5 s  (min delay)
@@ -135,9 +136,8 @@ class DataSourceClient:
     def get_stock_data(self, ticker: str) -> dict:
         """Fetch core stock data via yfinance.
 
-        Returns a flat dict with price, market_cap, beta, pe_ratio, sector,
-        company_name, 52-week high/low, analyst count, avg analyst target, and
-        average volume.
+        Returns a flat dict with price, fundamentals, moving averages,
+        short interest, volume, 52-week range, and analyst targets.
         """
         cache_key = f"stock_data:{ticker}"
         cached = self._get_cached(cache_key)
@@ -150,7 +150,8 @@ class DataSourceClient:
 
             result: dict[str, Any] = {
                 "ticker": ticker,
-                "price": info.get("currentPrice") or info.get("regularMarketPrice"),
+                "price": info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose"),
+                "previous_close": info.get("previousClose") or info.get("regularMarketPreviousClose"),
                 "market_cap": info.get("marketCap"),
                 "avg_volume": info.get("averageDailyVolume10Day") or info.get("averageVolume"),
                 "beta": info.get("beta"),
@@ -161,6 +162,14 @@ class DataSourceClient:
                 "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
                 "analyst_count": info.get("numberOfAnalystOpinions"),
                 "avg_analyst_target": info.get("targetMeanPrice"),
+                # Technical / moving averages
+                "sma_50": info.get("fiftyDayAverage"),
+                "sma_200": info.get("twoHundredDayAverage"),
+                # Short interest
+                "short_pct_float": info.get("shortPercentOfFloat"),
+                "short_ratio": info.get("shortRatio"),
+                # Today's volume (for volume confirmation signal)
+                "volume": info.get("volume") or info.get("regularMarketVolume"),
             }
 
             self._set_cached(cache_key, result, TTL_STOCK_DATA)
@@ -172,26 +181,123 @@ class DataSourceClient:
 
     # ------------------------------------------------------------------ #
 
+    def get_technical_indicators(self, ticker: str) -> dict:
+        """Compute RSI-14 and multi-day momentum from yfinance price history.
+
+        Returns dict with rsi_14, momentum_5d, momentum_20d (percent changes),
+        and volume_ratio (today's volume / 20-day avg volume).
+        """
+        cache_key = f"technicals:{ticker}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        result: dict[str, Any] = {}
+        try:
+            self._wait_for_rate_limit("yfinance")
+            hist = yf.Ticker(ticker).history(period="2mo")
+            if hist.empty or len(hist) < 15:
+                return result
+
+            closes = hist["Close"].dropna()
+            volumes = hist["Volume"].dropna()
+
+            # ── RSI-14 (Wilder's smoothed) ──────────────────────────
+            if len(closes) >= 15:
+                deltas = closes.diff()
+                gains = deltas.clip(lower=0)
+                losses = (-deltas.clip(upper=0))
+                avg_gain = gains.iloc[1:15].mean()
+                avg_loss = losses.iloc[1:15].mean()
+                for i in range(14, len(deltas)):
+                    avg_gain = (avg_gain * 13 + gains.iloc[i]) / 14
+                    avg_loss = (avg_loss * 13 + losses.iloc[i]) / 14
+                if avg_loss > 0:
+                    rs = avg_gain / avg_loss
+                    result["rsi_14"] = 100 - (100 / (1 + rs))
+                elif avg_gain > 0:
+                    result["rsi_14"] = 100.0
+                else:
+                    result["rsi_14"] = 50.0
+
+            # ── Momentum (percent change over N days) ───────────────
+            if len(closes) >= 6:
+                result["momentum_5d"] = (
+                    (closes.iloc[-1] - closes.iloc[-6]) / closes.iloc[-6]
+                ) * 100
+            if len(closes) >= 21:
+                result["momentum_20d"] = (
+                    (closes.iloc[-1] - closes.iloc[-21]) / closes.iloc[-21]
+                ) * 100
+
+            # ── Volume ratio (today vs 20-day avg) ──────────────────
+            if len(volumes) >= 20 and volumes.iloc[-20:].mean() > 0:
+                result["volume_ratio"] = (
+                    float(volumes.iloc[-1]) / float(volumes.iloc[-20:].mean())
+                )
+
+            self._set_cached(cache_key, result, TTL_STOCK_DATA)
+        except Exception:
+            logger.exception("get_technical_indicators failed for %s", ticker)
+
+        return result
+
+    # ------------------------------------------------------------------ #
+
     def get_analyst_ratings(
         self, ticker: str | None = None, since_hours: int = 24
     ) -> list[dict]:
         """Fetch recent analyst rating changes.
 
-        Primary: Finnhub ``/stock/upgrade-downgrade`` (per-ticker).
-        Fallback: yfinance ``Ticker.recommendations``.
+        Primary: FMP ``/api/v3/upgrades-downgrades``.
+        Fallback 1: Finnhub ``/stock/upgrade-downgrade``.
+        Fallback 2: yfinance ``Ticker.recommendations``.
         """
         cache_key = f"analyst_ratings:{ticker}:{since_hours}"
         cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
 
-        results = self._get_ratings_finnhub(ticker)
+        results = self._get_ratings_fmp(ticker)
+
+        if not results:
+            results = self._get_ratings_finnhub(ticker)
 
         if not results and ticker:
             results = self._get_ratings_yfinance(ticker)
 
         self._set_cached(cache_key, results, TTL_ANALYST_RATINGS)
         return results
+
+    def _get_ratings_fmp(self, ticker: str | None) -> list[dict]:
+        """Fetch analyst grade history from Financial Modeling Prep."""
+        if not ticker or not settings.FMP_API_KEY:
+            return []
+        try:
+            raw = self._fmp_get(f"/api/v3/grade/{ticker}")
+            if not isinstance(raw, list):
+                return []
+
+            results: list[dict] = []
+            for item in raw:
+                results.append(
+                    {
+                        "ticker": item.get("symbol", ticker),
+                        "firm": item.get("gradingCompany", ""),
+                        "analyst_name": "",
+                        "action": item.get("action", ""),
+                        "previous_rating": item.get("previousGrade", ""),
+                        "new_rating": item.get("newGrade", ""),
+                        "previous_pt": None,
+                        "new_pt": None,
+                        "published_at": item.get("date", ""),
+                    }
+                )
+            return results
+
+        except Exception:
+            logger.exception("FMP ratings fetch failed for %s", ticker)
+            return []
 
     def _get_ratings_finnhub(self, ticker: str | None) -> list[dict]:
         """Fetch upgrade/downgrade data from Finnhub."""
@@ -320,13 +426,16 @@ class DataSourceClient:
     def get_news(
         self, ticker: str | None = None, limit: int = 20
     ) -> list[dict]:
-        """Fetch news from Finnhub (primary) with NewsAPI fallback."""
+        """Fetch news from Finnhub (primary), FMP, then NewsAPI fallback."""
         cache_key = f"news:{ticker}:{limit}"
         cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
 
         results = self._get_news_finnhub(ticker, limit)
+
+        if not results and ticker:
+            results = self._get_news_fmp(ticker, limit)
 
         if not results and ticker:
             results = self._get_news_newsapi(ticker, limit)
@@ -376,6 +485,37 @@ class DataSourceClient:
             logger.exception("Finnhub news fetch failed (ticker=%s)", ticker)
             return []
 
+    def _get_news_fmp(self, ticker: str, limit: int) -> list[dict]:
+        """Fetch ticker-specific news from Financial Modeling Prep."""
+        if not settings.FMP_API_KEY:
+            return []
+        try:
+            raw = self._fmp_get(
+                "/api/v3/stock_news",
+                params={"tickers": ticker, "limit": limit},
+            )
+            if not isinstance(raw, list):
+                return []
+
+            results: list[dict] = []
+            for item in raw[:limit]:
+                results.append(
+                    {
+                        "headline": item.get("title", ""),
+                        "summary": item.get("text", ""),
+                        "source": item.get("site", ""),
+                        "url": item.get("url", ""),
+                        "published_at": item.get("publishedDate", ""),
+                        "category": "company",
+                        "related_tickers": [item.get("symbol", ticker)],
+                    }
+                )
+            return results
+
+        except Exception:
+            logger.exception("FMP news fetch failed (ticker=%s)", ticker)
+            return []
+
     def _get_news_newsapi(self, ticker: str, limit: int) -> list[dict]:
         try:
             raw = self._newsapi_get(
@@ -409,17 +549,71 @@ class DataSourceClient:
     ) -> list[dict]:
         """Fetch upcoming earnings dates.
 
-        Primary: yfinance ``Ticker.calendar``.
-        Fallback: FMP ``/api/v3/earning_calendar``.
+        Primary: FMP ``/api/v3/earning_calendar`` (provides EPS estimates).
+        Fallback: yfinance ``Ticker.calendar``.
         """
         cache_key = f"earnings:{','.join(tickers) if tickers else 'all'}"
         cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
 
-        results = self._get_earnings_yfinance(tickers)
+        results = self._get_earnings_fmp(tickers)
+
+        if not results:
+            results = self._get_earnings_yfinance(tickers)
 
         self._set_cached(cache_key, results, TTL_EARNINGS)
+        return results
+
+    def _get_earnings_fmp(
+        self, tickers: list[str] | None
+    ) -> list[dict]:
+        """Fetch earnings calendar from FMP (includes EPS estimates)."""
+        if not tickers or not settings.FMP_API_KEY:
+            return []
+        results: list[dict] = []
+        for t in tickers:
+            try:
+                raw = self._fmp_get(f"/api/v3/historical/earning_calendar/{t}")
+                if not isinstance(raw, list):
+                    continue
+
+                for item in raw:
+                    raw_date = item.get("date")
+                    if not raw_date:
+                        continue
+
+                    # Derive fiscal quarter from fiscalDateEnding (e.g. "2026-03-31" → "Q1 2026")
+                    fiscal_quarter = None
+                    fde = item.get("fiscalDateEnding")
+                    if fde and isinstance(fde, str) and len(fde) >= 7:
+                        try:
+                            month = int(fde[5:7])
+                            year = fde[:4]
+                            q = (month - 1) // 3 + 1
+                            fiscal_quarter = f"Q{q} {year}"
+                        except (ValueError, IndexError):
+                            pass
+
+                    # FMP returns "bmo"/"amc" for time — normalize to uppercase
+                    raw_time = item.get("time", "")
+                    earnings_time = raw_time.upper() if raw_time in ("bmo", "amc") else None
+
+                    results.append(
+                        {
+                            "ticker": t,
+                            "earnings_date": raw_date,
+                            "earnings_time": earnings_time,
+                            "fiscal_quarter": fiscal_quarter,
+                            "consensus_eps": item.get("epsEstimated"),
+                            "actual_eps": item.get("eps"),
+                            "consensus_revenue": item.get("revenueEstimated"),
+                            "actual_revenue": item.get("revenue"),
+                        }
+                    )
+
+            except Exception:
+                logger.exception("FMP earnings fetch failed for %s", t)
         return results
 
     def _get_earnings_yfinance(
@@ -471,12 +665,66 @@ class DataSourceClient:
     # ------------------------------------------------------------------ #
 
     def get_insider_trades(self, ticker: str) -> list[dict]:
-        """Fetch insider transactions from Finnhub."""
+        """Fetch insider transactions.
+
+        Primary: FMP ``/api/v4/insider-trading``.
+        Fallback: Finnhub ``/stock/insider-transactions``.
+        """
         cache_key = f"insider_trades:{ticker}"
         cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
 
+        results = self._get_insider_trades_fmp(ticker)
+
+        if not results:
+            results = self._get_insider_trades_finnhub(ticker)
+
+        self._set_cached(cache_key, results, TTL_STOCK_DATA)
+        return results
+
+    def _get_insider_trades_fmp(self, ticker: str) -> list[dict]:
+        """Fetch insider trades from Financial Modeling Prep."""
+        if not settings.FMP_API_KEY:
+            return []
+        try:
+            raw = self._fmp_get(
+                "/api/v4/insider-trading",
+                params={"symbol": ticker, "limit": 50},
+            )
+            if not isinstance(raw, list):
+                return []
+
+            results: list[dict] = []
+            for item in raw:
+                shares = item.get("securitiesTransacted")
+                price = item.get("price")
+                # Compute total value = shares * unit price
+                value = None
+                if shares is not None and price is not None:
+                    try:
+                        value = float(shares) * float(price)
+                    except (TypeError, ValueError):
+                        pass
+
+                results.append(
+                    {
+                        "name": item.get("reportingName", ""),
+                        "title": item.get("typeOfOwner", ""),
+                        "transaction_type": item.get("transactionType", ""),
+                        "shares": shares,
+                        "value": value,
+                        "date": item.get("transactionDate", ""),
+                    }
+                )
+            return results
+
+        except Exception:
+            logger.exception("FMP insider trades fetch failed for %s", ticker)
+            return []
+
+    def _get_insider_trades_finnhub(self, ticker: str) -> list[dict]:
+        """Fallback: fetch insider transactions from Finnhub."""
         try:
             raw = self._finnhub_get(
                 "/api/v1/stock/insider-transactions",
@@ -486,22 +734,30 @@ class DataSourceClient:
 
             results: list[dict] = []
             for item in data:
+                shares = item.get("share")
+                price = item.get("transactionPrice")
+                # Compute total value = shares * unit price
+                value = None
+                if shares is not None and price is not None:
+                    try:
+                        value = float(shares) * float(price)
+                    except (TypeError, ValueError):
+                        pass
+
                 results.append(
                     {
                         "name": item.get("name", ""),
                         "title": item.get("filingDate", ""),
                         "transaction_type": item.get("transactionCode", ""),
-                        "shares": item.get("share"),
-                        "value": item.get("transactionPrice"),
+                        "shares": shares,
+                        "value": value,
                         "date": item.get("transactionDate", ""),
                     }
                 )
-
-            self._set_cached(cache_key, results, TTL_STOCK_DATA)
             return results
 
         except Exception:
-            logger.exception("get_insider_trades failed for %s", ticker)
+            logger.exception("Finnhub insider trades fetch failed for %s", ticker)
             return []
 
     # ------------------------------------------------------------------

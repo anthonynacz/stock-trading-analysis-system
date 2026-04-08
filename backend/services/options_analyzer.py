@@ -84,10 +84,12 @@ class OptionsAnalyzer:
             expirations = list(chains.keys())
             num_expirations = len(expirations)
 
-            # Collect IV values and volumes across all contracts
+            # Collect IV values, volumes, and open interest across all contracts
             all_ivs: list[float] = []
             total_call_volume = 0
             total_put_volume = 0
+            total_call_oi = 0
+            total_put_oi = 0
             unusual_contracts: list[dict] = []
 
             for exp, sides in chains.items():
@@ -98,6 +100,7 @@ class OptionsAnalyzer:
                     vol = _safe_int(contract.get("volume"))
                     oi = _safe_int(contract.get("openInterest"))
                     total_call_volume += vol
+                    total_call_oi += oi
                     if vol > 0 and oi > 0 and vol > 1.5 * oi:
                         unusual_contracts.append({
                             "type": "CALL",
@@ -115,6 +118,7 @@ class OptionsAnalyzer:
                     vol = _safe_int(contract.get("volume"))
                     oi = _safe_int(contract.get("openInterest"))
                     total_put_volume += vol
+                    total_put_oi += oi
                     if vol > 0 and oi > 0 and vol > 1.5 * oi:
                         unusual_contracts.append({
                             "type": "PUT",
@@ -179,6 +183,8 @@ class OptionsAnalyzer:
                 total_call_volume=total_call_volume,
                 total_put_volume=total_put_volume,
                 avg_call_volume=avg_call_volume,
+                total_call_oi=total_call_oi,
+                total_put_oi=total_put_oi,
                 unusual_activity=has_unusual,
                 unusual_activity_detail=unusual_detail,
             )

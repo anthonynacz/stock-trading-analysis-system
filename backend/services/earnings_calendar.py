@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import select
@@ -19,6 +20,18 @@ from db.models import EarningsCalendar
 from utils.data_sources import DataSourceClient
 
 logger = logging.getLogger(__name__)
+
+
+def _to_decimal(val: Any) -> Decimal | None:
+    """Convert a value to Decimal, returning None for None/NaN/garbage."""
+    if val is None:
+        return None
+    if isinstance(val, float) and (val != val or abs(val) == float("inf")):
+        return None
+    try:
+        return Decimal(str(val))
+    except (InvalidOperation, ValueError):
+        return None
 
 
 def _sanitize_string_field(val: Any) -> str | None:
@@ -133,11 +146,29 @@ class EarningsCalendarService:
                 raw_quarter = entry.get("fiscal_quarter")
                 fiscal_quarter = _sanitize_string_field(raw_quarter)
 
+                # EPS / revenue fields (populated by FMP, None from yfinance)
+                consensus_eps = _to_decimal(entry.get("consensus_eps"))
+                actual_eps = _to_decimal(entry.get("actual_eps"))
+                consensus_revenue = _to_decimal(entry.get("consensus_revenue"))
+                actual_revenue = _to_decimal(entry.get("actual_revenue"))
+
+                # Calculate surprise percentage when both actual and consensus are available
+                surprise_pct = None
+                if actual_eps is not None and consensus_eps is not None and consensus_eps != 0:
+                    raw = (actual_eps - consensus_eps) / abs(consensus_eps) * 100
+                    # Clamp to column precision Numeric(10,4) — max ±999999
+                    surprise_pct = max(Decimal("-999999"), min(Decimal("999999"), raw))
+
                 if existing:
                     existing.earnings_time = earnings_time
                     existing.fiscal_quarter = fiscal_quarter
                     existing.catalyst_window_start = catalyst_window_start
                     existing.catalyst_window_end = catalyst_window_end
+                    existing.consensus_eps = consensus_eps
+                    existing.actual_eps = actual_eps
+                    existing.consensus_revenue = consensus_revenue
+                    existing.actual_revenue = actual_revenue
+                    existing.surprise_pct = surprise_pct
                 else:
                     record = EarningsCalendar(
                         ticker=ticker,
@@ -146,6 +177,11 @@ class EarningsCalendarService:
                         fiscal_quarter=fiscal_quarter,
                         catalyst_window_start=catalyst_window_start,
                         catalyst_window_end=catalyst_window_end,
+                        consensus_eps=consensus_eps,
+                        actual_eps=actual_eps,
+                        consensus_revenue=consensus_revenue,
+                        actual_revenue=actual_revenue,
+                        surprise_pct=surprise_pct,
                     )
                     self._session.add(record)
 
@@ -230,6 +266,8 @@ class EarningsCalendarService:
                     "ticker": rec.ticker,
                     "earnings_date": rec.earnings_date,
                     "earnings_time": rec.earnings_time,
+                    "fiscal_quarter": rec.fiscal_quarter,
+                    "consensus_eps": rec.consensus_eps,
                     "days_until": days_until,
                     "window_status": window_status,
                 }

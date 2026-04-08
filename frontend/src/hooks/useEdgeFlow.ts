@@ -7,6 +7,7 @@ import {
   getStatus,
   getPipelineDates,
   getWatchlistChanges,
+  getTickerTrends,
 } from '../utils/api';
 import type {
   WatchlistItem,
@@ -16,6 +17,7 @@ import type {
   SystemStatus,
   WatchlistChanges,
   PipelineDates,
+  TrendData,
 } from '../types';
 
 interface HookResult<T> {
@@ -91,8 +93,10 @@ export function useRecommendations(
 
 export function useNews(filters?: {
   ticker?: string;
+  mode?: string;
   category?: string;
   impact_level?: string;
+  min_relevance?: number;
   limit?: number;
 }): HookResult<NewsItem[]> {
   const [data, setData] = useState<NewsItem[] | null>(null);
@@ -110,7 +114,7 @@ export function useNews(filters?: {
     } finally {
       setLoading(false);
     }
-  }, [filters?.ticker, filters?.category, filters?.impact_level, filters?.limit]);
+  }, [filters?.ticker, filters?.mode, filters?.category, filters?.impact_level, filters?.min_relevance, filters?.limit]);
 
   useEffect(() => {
     refetch();
@@ -233,6 +237,40 @@ export function useWatchlistChanges(date?: string): HookResult<WatchlistChanges>
     const interval = setInterval(refetch, 60_000);
     return () => clearInterval(interval);
   }, [refetch, isToday]);
+
+  return { data, loading, error, refetch };
+}
+
+export function useTickerTrends(
+  ticker: string | null,
+  days = 20,
+  sma = 5,
+): HookResult<TrendData> {
+  const [data, setData] = useState<TrendData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refetch = useCallback(async () => {
+    if (!ticker) return;
+    try {
+      setLoading(true);
+      const result = await getTickerTrends(ticker, days, sma);
+      setData(result);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to fetch trends');
+    } finally {
+      setLoading(false);
+    }
+  }, [ticker, days, sma]);
+
+  useEffect(() => {
+    if (ticker) {
+      refetch();
+    } else {
+      setData(null);
+    }
+  }, [ticker, refetch]);
 
   return { data, loading, error, refetch };
 }

@@ -73,6 +73,14 @@ class EarningsCalendarResponse(BaseModel):
     window_status: str  # APPROACHING / ACTIVE / POST / NONE
 
 
+class NewsTickerRelevanceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    ticker: str
+    relevance_score: float
+    relevance_source: str
+
+
 class MarketNewsResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -86,6 +94,27 @@ class MarketNewsResponse(BaseModel):
     impact_level: Optional[str] = None
     published_at: Optional[datetime] = None
     source_url: Optional[str] = None
+    related_tickers: list[NewsTickerRelevanceResponse] = []
+
+    @classmethod
+    def from_news(cls, news) -> "MarketNewsResponse":
+        """Build response from a MarketNews ORM instance."""
+        return cls(
+            id=news.id,
+            ticker=news.ticker,
+            headline=news.headline,
+            summary=news.summary,
+            source=news.source,
+            category=news.category,
+            sentiment_score=news.sentiment_score,
+            impact_level=news.impact_level,
+            published_at=news.published_at,
+            source_url=news.source_url,
+            related_tickers=[
+                NewsTickerRelevanceResponse.model_validate(r)
+                for r in news.ticker_relevances
+            ] if hasattr(news, "ticker_relevances") and news.ticker_relevances else [],
+        )
 
 
 class OptionsSnapshotResponse(BaseModel):
@@ -185,3 +214,53 @@ class StrikeRecommenderResponse(BaseModel):
 class StrikeSnapshotSaveRequest(BaseModel):
     budget: Optional[float] = None
     results: dict[str, Any]  # ticker -> StrikeAllResult
+
+
+# ── Trend data ──────────────────────────────────────────────────────────────
+
+
+class TrendDataPoint(BaseModel):
+    date: date
+    price: Optional[float] = None
+    target_price: Optional[float] = None
+    conviction: Optional[float] = None
+    signal_count: Optional[int] = None
+    sentiment: Optional[float] = None
+    article_count: Optional[int] = None
+    price_sma: Optional[float] = None
+    conviction_sma: Optional[float] = None
+    signal_count_sma: Optional[float] = None
+    sentiment_sma: Optional[float] = None
+
+
+class TrendResponse(BaseModel):
+    ticker: str
+    days: int
+    sma_window: int
+    data: list[TrendDataPoint]
+
+
+# ── Research results ───────────────────────────────────────────────────────
+
+
+class ResearchResultResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ticker: str
+    company_name: Optional[str] = None
+    analyzed_at: datetime
+    action: str
+    conviction_score: Optional[Decimal] = None
+    signal_count: Optional[int] = None
+    signals: Optional[list[dict[str, Any]]] = None
+    rationale: Optional[str] = None
+    catalyst_type: Optional[str] = None
+    entry_strategy: Optional[str] = None
+    exit_rules: Optional[str] = None
+    risk_level: Optional[str] = None
+    current_price: Optional[Decimal] = None
+    target_price: Optional[Decimal] = None
+    stop_loss_price: Optional[Decimal] = None
+    options_data: Optional[dict[str, Any]] = None
+    suggested_options: Optional[list[dict[str, Any]]] = None

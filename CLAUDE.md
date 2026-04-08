@@ -17,26 +17,33 @@ edgeflow/
 │   ├── services/    # Core business logic (see Service Layer below)
 │   ├── api/         # REST routes (routes.py)
 │   └── utils/
-│       ├── data_sources.py   # API clients (yfinance, Finnhub, NewsAPI)
+│       ├── data_sources.py   # API clients (FMP, yfinance, Finnhub, NewsAPI)
 │       ├── scoring.py        # Keyword-based scoring, impact levels, composite scores
 │       └── finbert.py        # FinBERT sentiment model (ProsusAI/finbert)
 ├── frontend/        # React 18 + TypeScript, Vite, Tailwind CSS
 │   └── src/
-│       ├── pages/Dashboard.tsx        # Single-page dashboard with date stepper
+│       ├── App.tsx                     # BrowserRouter with / and /research routes
+│       ├── pages/
+│       │   ├── Dashboard.tsx           # Main dashboard with date stepper
+│       │   └── ResearchPage.tsx        # On-demand single-ticker analysis page
 │       ├── components/
+│       │   ├── AppNav.tsx              # Top navigation (Dashboard / Research)
 │       │   ├── WatchlistGrid.tsx       # Sector-grouped stock cards with lock/manual badges
 │       │   ├── WatchlistChanges.tsx    # Entrants/exiters bar
 │       │   ├── TickerDetail.tsx        # Right panel: price, signals, options flow, strike recommender
+│       │   ├── ResearchDetail.tsx      # Research result detail panel
 │       │   ├── StrikeRecommender.tsx   # Risk-profiled options strike recommendations
 │       │   ├── RecommendationCard.tsx  # Expandable rec cards with signal bullets
 │       │   ├── StatusBar.tsx           # Date stepper, refresh, system status
 │       │   ├── CatalystCalendar.tsx    # Upcoming earnings with countdown
-│       │   └── NewsTimeline.tsx        # Scrollable news feed
-│       ├── hooks/useEdgeFlow.ts       # Data fetching hooks with polling
-│       ├── types/index.ts             # TypeScript interfaces
-│       └── utils/api.ts               # Axios API client
+│       │   ├── NewsTimeline.tsx        # Scrollable news feed with ticker badges
+│       │   ├── NewsModeSelector.tsx    # News mode toggle (All/Watchlist/Ticker)
+│       │   └── TrendChart.tsx          # Recharts dual line charts with SMA overlays
+│       ├── hooks/useEdgeFlow.ts        # Data fetching hooks with polling
+│       ├── types/index.ts              # TypeScript interfaces
+│       └── utils/api.ts                # Axios API client
 ├── docker-compose.yml   # postgres:16 + backend + frontend
-└── .env                 # API keys (Finnhub, NewsAPI, DATABASE_URL)
+└── .env                 # API keys (FMP, Finnhub, NewsAPI, DATABASE_URL)
 ```
 
 ### Service Layer (backend/services/)
@@ -46,13 +53,22 @@ The daily workflow runs as a phased pipeline orchestrated by APScheduler in `sch
 1. **watchlist_manager.py** — Scores ~70 stocks across 5 sectors, applies liquidity filters (≥$5B cap, ≥2M vol, ≥1K options vol, ≥5 analysts), rotates watchlist (max 30 active, max 5 changes/day). Manual (`is_manual`) and locked (`is_locked`) entries are protected from rotation. Uses delete-before-insert for idempotent daily snapshots.
 2. **analyst_tracker.py** — Detects rating changes since prior close, classifies as TIER_CHANGE/PT_CHANGE/INITIATION/REITERATION, scores by firm tier (T1=bulge bracket, T2=mid-tier, T3=boutique)
 3. **earnings_calendar.py** — Tracks earnings dates, manages catalyst windows (T-7 to T+10). Sanitizes yfinance garbage in `earnings_time` (float values → null) and `fiscal_quarter` (revenue estimates → null).
-4. **news_scanner.py** — Fetches/categorizes news, scores sentiment via **FinBERT** (ProsusAI/finbert) using batch inference. FinBERT returns continuous scores in [-1.0, 1.0] with financial domain understanding. Model loads once (singleton in `utils/finbert.py`) and persists in memory.
+4. **news_scanner.py** — Fetches/categorizes news, scores sentiment via **FinBERT** (ProsusAI/finbert) using batch inference. FinBERT returns continuous scores in [-1.0, 1.0] with financial domain understanding. Model loads once (singleton in `utils/finbert.py`) and persists in memory. Tracks per-ticker relevance via `news_ticker_relevance` junction table (many-to-many). Relevance scored by text matching: HEADLINE=1.0, SUMMARY=0.7, API_RELATED=0.5, SEARCHED=0.3. Duplicate articles (same URL) skip MarketNews creation but backfill relevance rows for newly-relevant tickers.
 5. **options_analyzer.py** — Pulls chains via yfinance, calculates IV rank, detects unusual activity (>1.5x avg volume). Includes **strike recommender** (`recommend_strikes` / `recommend_strikes_all`) with three risk profiles (conservative/moderate/aggressive) and budget-filtered contract selection.
-6. **recommendation_engine.py** — Stacks signals into conviction scores (-100 to +100), generates rationale text, selects optimal options contracts, classifies STRONG_BUY through STRONG_SELL. Each day's recommendation is stored independently (`uq_rec_date_ticker` constraint).
+6. **recommendation_engine.py** — Stacks signals into conviction scores (-100 to +100), generates rationale text, selects optimal options contracts, classifies STRONG_BUY through STRONG_SELL. Each day's recommendation is stored independently (`uq_rec_date_ticker` constraint). `analyze_single()` runs the same pipeline but returns a data dict without persisting to `recommendations` — used by the Research feature.
 
 ### Signal Stacking (conviction scoring)
 
-Bullish signals add points (+5 to +40), bearish signals subtract (-5 to -40), neutralizing factors (high IV, already-moved stock) subtract further. Classification thresholds: ≥60 STRONG_BUY, 30-59 BUY, -15 to 29 HOLD, -30 to -16 SELL, ≤-31 STRONG_SELL.
+Signals are stacked across six categories. Classification thresholds: ≥60 STRONG_BUY, 30-59 BUY, -15 to 29 HOLD, -30 to -16 SELL, ≤-31 STRONG_SELL.
+
+**Analyst signals**: T1/T2/T3 upgrades (+15 to +40) / downgrades (-15 to -40), PT raises (+10/+15) / cuts (-10/-15).
+**Earnings signals**: Beat (+20), Beat+Raised (+30), Miss (-20), Miss+Lowered (-30), Active Catalyst Window (+5).
+**Technical signals**: RSI oversold/overbought (±10/±15), price vs 50d SMA (±10), price vs 200d SMA (±5), near 52w high (+5), deep pullback from 52w high (+10), 5d momentum (±10), 20d momentum (±10), volume-confirmed moves (±10), short squeeze setup (+15), high short interest (-5).
+**Options signals**: Unusual call volume (+15) / put volume (-15) vs 20-day historical avg, put/call OI skew (±10), high IV rank (-10). Unusual volume uses `_get_historical_avg_volume()` to query past `options_snapshots` for a true baseline.
+**News signals**: FinBERT sentiment scaled by magnitude and article count (±5 to ±15), sector tailwind/headwind (±10).
+**Other**: Below consensus PT (+10), insider buying (+5) / selling (-5), stock already moved (-5).
+
+Technical indicators (RSI-14, 5d/20d momentum, volume ratio) are computed from yfinance price history via `DataSourceClient.get_technical_indicators()`. Moving averages (50d, 200d), short interest, and 52-week range come from yfinance `.info` via `get_stock_data()`.
 
 ### Strike Recommender
 
@@ -75,10 +91,11 @@ News sentiment uses `ProsusAI/finbert`, a BERT model fine-tuned on financial tex
 ### Data Sources
 
 Unified in `utils/data_sources.py` with rate limiting and fallback chains:
-- **Analyst ratings**: Financial Modeling Prep API → Benzinga → MarketBeat scraping
-- **Prices/fundamentals/options**: yfinance (primary, no key needed) → Alpha Vantage (backup)
-- **News**: Finnhub → NewsAPI → SEC EDGAR RSS
-- **Earnings**: yfinance → FMP
+- **Analyst ratings**: FMP (primary) → Finnhub → yfinance
+- **Earnings calendar**: FMP (primary, provides EPS estimates) → yfinance
+- **Insider trades**: FMP (primary) → Finnhub
+- **Prices/fundamentals/options**: yfinance (primary, no key needed)
+- **News**: Finnhub → FMP → NewsAPI
 
 ## Common Commands
 
@@ -130,7 +147,7 @@ asyncio.run(rescore())
 
 ## Database
 
-PostgreSQL 16. Key tables: `sectors`, `watchlist`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `options_snapshots`, `suggested_options`, `recommendations`, `strike_snapshots`. Schema created via `db/init_db.py` using SQLAlchemy models from `db/models.py`. The `recommendations` table must be created before `suggested_options` (FK dependency).
+PostgreSQL 16. Key tables: `sectors`, `watchlist`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `news_ticker_relevance`, `options_snapshots`, `suggested_options`, `recommendations`, `strike_snapshots`, `research_results`. Schema created via `db/init_db.py` using SQLAlchemy models from `db/models.py`. The `recommendations` table must be created before `suggested_options` (FK dependency).
 
 All `DateTime` columns use `DateTime(timezone=True)` (maps to PostgreSQL `TIMESTAMPTZ`). This is required because asyncpg strictly rejects tz-aware Python datetimes for `TIMESTAMP WITHOUT TIME ZONE` columns. Schema changes require dropping and recreating tables (no Alembic migrations yet).
 
@@ -167,7 +184,7 @@ PUT  /api/watchlist/{ticker}/lock      # Toggle lock (protected from rotation)
 GET  /api/pipeline-dates               # Distinct snapshot dates (last 90 days)
 GET  /api/recommendations              # Recs sorted by conviction; ?action=&min_conviction=&date=
 GET  /api/recommendations/{ticker}     # Ticker rec history (last 30 days)
-GET  /api/news                         # News feed; ?ticker=&category=&impact_level=&limit=
+GET  /api/news                         # News feed; ?mode=general|ticker|watchlist&ticker=&min_relevance=0.3&category=&impact_level=&limit=
 GET  /api/catalysts                    # Upcoming earnings (14 days) with fiscal quarter + EPS
 GET  /api/options/watchlist/strikes     # Strike recs for all watchlist tickers; ?budget=
 GET  /api/options/{ticker}             # Latest options snapshot
@@ -176,21 +193,28 @@ GET  /api/options/{ticker}/strikes/all # Strike recs for all 3 risk levels; ?bud
 POST /api/strikes/snapshots            # Save strike scan results { budget, results }
 GET  /api/strikes/snapshots            # Load saved snapshot; ?date=
 GET  /api/strikes/snapshots/dates      # List dates with saved snapshots
+GET  /api/trends/{ticker}               # Daily trend data with SMA; ?days=20&sma=5
 GET  /api/status                       # Health check, last refresh times
 POST /api/refresh                      # Manual full pipeline trigger
+POST /api/research/{ticker}            # On-demand full analysis for any ticker (~30-60s)
+GET  /api/research                     # List research results; ?ticker=&limit=&offset=
+GET  /api/research/{id}                # Single research result
+DELETE /api/research/{id}              # Delete research result
 ```
 
 ## Frontend
 
 ### Dashboard Layout
 
-The dashboard is a single-page app with the following sections:
+The app uses react-router-dom with two routes: `/` (Dashboard) and `/research` (Research). A top nav bar (`AppNav`) with "Dashboard" and "Research" links sits above both pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
+
+The Dashboard has the following sections:
 1. **StatusBar** — Date stepper (left/right arrows to navigate pipeline days), refresh button, system status
 2. **WatchlistChanges** — Horizontal bar showing NEW_ENTRANT (green) and REMOVED (red) badges for the selected date
-3. **Watchlist + TickerDetail** — 3:2 column layout. Left: sector-grouped stock cards with status/manual/lock badges and add-ticker input. Right: detail panel on click with price, signals, options flow (sentiment-rated), and strike recommender.
+3. **Watchlist + TickerDetail** — 3:2 column layout. Left: sector-grouped stock cards with status/manual/lock badges and add-ticker input. Right: detail panel on click with trend charts (price/conviction + IV/sentiment with configurable SMA), price, signals, options flow (sentiment-rated), and strike recommender.
 4. **Recommendations** — Expandable cards with signal bullet lists, price/risk row, entry/exit strategy
 5. **Strike Scanner** — Budget slider, "Scan Watchlist" button, "Save Snapshot" button. View selector switches between live scan and saved historical snapshots. Results in 2-column grid with risk level tabs.
-6. **News + Catalysts** — 3:2 column layout. News timeline and upcoming earnings calendar with countdown (days/hours)
+6. **News + Catalysts** — 3:2 column layout. News timeline with mode selector (All/Watchlist/Ticker) and upcoming earnings calendar with countdown (days/hours). Ticker and Watchlist modes show relevance-scored ticker badges on each article.
 
 ### Key UI Features
 
@@ -199,6 +223,12 @@ The dashboard is a single-page app with the following sections:
 - **Strike Recommender**: Budget slider ($50-$10,000), single "Find Strikes" fetch returns all 3 risk profiles, tabs switch instantly. Green/gray dots on tabs indicate which profiles have results. Call cards (green border) and put cards (red border) show strike, expiry, premium, delta, breakeven, OI, and explanation.
 - **Sentiment indicators**: Options flow metrics (IV Rank, Put/Call Ratio, volumes) show color-coded sentiment tags (Bullish/Bearish/Neutral/Elevated).
 - **Date navigation**: Historical dates poll-disabled, driven from `watchlist_daily_snapshot`. Today drives from active watchlist + snapshot overlay.
+
+### Research Page
+
+On-demand single-ticker analysis at `/research`. Enter any ticker (not just watchlist members) to run a full pipeline assessment: analyst ratings, news/sentiment, earnings, options flow, signal stacking, and recommendation. Results are persisted to `research_results` table with JSON-embedded options data and suggested contracts.
+
+Layout: ticker input + "Analyze" button at top, 3:2 grid-to-detail layout below. Research grid shows cards with ticker, action badge, conviction bar, price, timestamp, and delete button on hover. Click a card to open the detail panel (same visual patterns as TickerDetail: price/targets, conviction bar, signal bullets, entry/exit, options flow, suggested options, trend chart, strike recommender). Analysis takes ~30-60s per ticker (runs all pipeline phases for a single ticker).
 
 ### Design System
 
@@ -235,9 +265,9 @@ docker compose up --build -d
 ## Environment Variables
 
 ```
-FINNHUB_API_KEY=     # Finnhub (60 calls/min free) — news works, ratings endpoint returns 403 on free tier
-NEWSAPI_KEY=         # NewsAPI.org (100 calls/day free)
-FMP_API_KEY=         # Financial Modeling Prep (250 calls/day free) — optional, empty string default
+FINNHUB_API_KEY=     # Finnhub (60 calls/min free) — used for news; ratings fallback only
+NEWSAPI_KEY=         # NewsAPI.org (100 calls/day free) — news fallback
+FMP_API_KEY=         # Financial Modeling Prep (Starter $22/mo, 300 req/min) — primary for ratings, earnings, insider trades, news
 DATABASE_URL=postgresql+asyncpg://edgeflow:<password>@db:5432/edgeflow  # Docker internal
 ```
 
@@ -245,8 +275,8 @@ For local dev, `.env` at project root with `DATABASE_URL` pointing to `localhost
 
 ## Known Limitations
 
-- **Finnhub free tier**: The `/api/v1/stock/upgrade-downgrade` endpoint returns 403. Analyst ratings fall back to yfinance which has lower quality data.
-- **FMP API key**: Not currently configured. The `FMP_API_KEY` defaults to empty string; FMP-dependent code paths are guarded.
+- **Finnhub free tier**: The `/api/v1/stock/upgrade-downgrade` endpoint returns 403. Analyst ratings and insider trades use FMP as primary source; Finnhub serves as fallback only.
+- **FMP API key**: Required (Starter plan, $22/mo). Covers analyst ratings, earnings (with EPS estimates), insider trades, and stock news. Without it, all FMP methods gracefully fall back to Finnhub/yfinance. Rate limit: 300 requests/min, 20GB bandwidth/30 days (no daily call cap).
 - **No Alembic migrations**: Schema changes require dropping and recreating tables. On production, this means `docker compose down -v` to reset the pgdata volume. Manual columns (`is_manual`, `is_locked`) must be re-added via ALTER TABLE.
 - **FinBERT first load**: Model downloads ~500MB from HuggingFace on first pipeline run. Subsequent runs use cached model. Container restarts re-download unless a volume is mounted for the HF cache.
 - **yfinance weekend data**: Prices and volumes are stale on weekends/off-hours. Pipeline runs on non-trading days will produce similar recommendations.

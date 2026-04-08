@@ -3,7 +3,7 @@
 from datetime import date, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from sqlalchemy import select, func
+from sqlalchemy import Date, cast, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -11,8 +11,10 @@ from db.connection import get_db
 from db.models import (
     EarningsCalendar,
     MarketNews,
+    NewsTickerRelevance,
     OptionsSnapshot,
     Recommendation,
+    ResearchResult,
     Sector,
     StrikeSnapshot,
     Watchlist,
@@ -25,8 +27,11 @@ from utils.schemas import (
     OptionsSnapshotResponse,
     PipelineDatesResponse,
     RecommendationResponse,
+    ResearchResultResponse,
     StrikeSnapshotSaveRequest,
     SystemStatusResponse,
+    TrendDataPoint,
+    TrendResponse,
     WatchlistAddRequest,
     WatchlistChangeItem,
     WatchlistChangesResponse,
@@ -360,18 +365,20 @@ async def get_recommendations(
 @router.get("/recommendations/{ticker}", response_model=list[RecommendationResponse])
 async def get_recommendations_by_ticker(
     ticker: str,
+    target_date: date | None = Query(None, alias="date"),
     db: AsyncSession = Depends(get_db),
 ):
-    cutoff = date.today() - timedelta(days=30)
     stmt = (
         select(Recommendation)
         .options(selectinload(Recommendation.suggested_options))
-        .where(
-            Recommendation.ticker == ticker.upper(),
-            Recommendation.recommendation_date >= cutoff,
-        )
-        .order_by(Recommendation.recommendation_date.desc())
+        .where(Recommendation.ticker == ticker.upper())
     )
+    if target_date:
+        stmt = stmt.where(Recommendation.recommendation_date == target_date)
+    else:
+        cutoff = date.today() - timedelta(days=30)
+        stmt = stmt.where(Recommendation.recommendation_date >= cutoff)
+    stmt = stmt.order_by(Recommendation.recommendation_date.desc())
     result = await db.execute(stmt)
     recs = result.scalars().all()
     if not recs:
@@ -382,28 +389,67 @@ async def get_recommendations_by_ticker(
 # ── News ────────────────────────────────────────────────────────────────────
 
 
-@router.get("/news", response_model=list[MarketNewsResponse])
+@router.get("/news")
 async def get_news(
     ticker: str | None = Query(None),
+    mode: str = Query("general"),
     category: str | None = Query(None),
     impact_level: str | None = Query(None),
+    min_relevance: float = Query(0.3, ge=0.0, le=1.0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = (
-        select(MarketNews)
-        .order_by(MarketNews.published_at.desc())
-        .limit(limit)
-    )
-    if ticker:
-        stmt = stmt.where(MarketNews.ticker == ticker.upper())
+    if mode == "ticker" and ticker:
+        # Join through relevance table — find all news relevant to this ticker
+        stmt = (
+            select(MarketNews)
+            .join(NewsTickerRelevance)
+            .where(
+                NewsTickerRelevance.ticker == ticker.upper(),
+                NewsTickerRelevance.relevance_score >= min_relevance,
+            )
+            .options(selectinload(MarketNews.ticker_relevances))
+            .order_by(MarketNews.published_at.desc())
+            .limit(limit)
+        )
+    elif mode == "watchlist":
+        # Find news relevant to any active watchlist ticker
+        active_result = await db.execute(
+            select(Watchlist.ticker).where(Watchlist.is_active.is_(True))
+        )
+        watchlist_tickers = [row[0] for row in active_result.all()]
+        if not watchlist_tickers:
+            return []
+        stmt = (
+            select(MarketNews)
+            .join(NewsTickerRelevance)
+            .where(
+                NewsTickerRelevance.ticker.in_(watchlist_tickers),
+                NewsTickerRelevance.relevance_score >= min_relevance,
+            )
+            .options(selectinload(MarketNews.ticker_relevances))
+            .order_by(MarketNews.published_at.desc())
+            .limit(limit)
+        )
+    else:
+        # General mode — original behavior
+        stmt = (
+            select(MarketNews)
+            .options(selectinload(MarketNews.ticker_relevances))
+            .order_by(MarketNews.published_at.desc())
+            .limit(limit)
+        )
+        if ticker:
+            stmt = stmt.where(MarketNews.ticker == ticker.upper())
+
     if category:
         stmt = stmt.where(MarketNews.category == category.upper())
     if impact_level:
         stmt = stmt.where(MarketNews.impact_level == impact_level.upper())
 
     result = await db.execute(stmt)
-    return result.scalars().all()
+    news_items = result.scalars().unique().all()
+    return [MarketNewsResponse.from_news(n) for n in news_items]
 
 
 # ── Catalysts ───────────────────────────────────────────────────────────────
@@ -656,6 +702,129 @@ async def recommend_strikes_all(
         client.close()
 
 
+# ── Trends ─────────────────────────────────────────────────────────────────
+
+
+def _compute_sma(values: list[float | None], window: int) -> list[float | None]:
+    """Compute simple moving average, returning None where window is incomplete."""
+    result: list[float | None] = []
+    for i in range(len(values)):
+        if i < window - 1:
+            result.append(None)
+            continue
+        w = [v for v in values[i - window + 1 : i + 1] if v is not None]
+        result.append(round(sum(w) / len(w), 4) if w else None)
+    return result
+
+
+@router.get("/trends/{ticker}", response_model=TrendResponse)
+async def get_ticker_trends(
+    ticker: str,
+    days: int = Query(20, ge=5, le=90),
+    sma: int = Query(5, ge=2, le=20),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return daily trend data for a ticker with SMA overlays."""
+    t = ticker.upper()
+    lookback = days + sma  # extra rows so SMA is populated from first requested day
+
+    # 1. Business-day spine from recommendation dates
+    date_stmt = (
+        select(Recommendation.recommendation_date)
+        .where(Recommendation.ticker == t)
+        .distinct()
+        .order_by(Recommendation.recommendation_date.desc())
+        .limit(lookback)
+    )
+    date_result = await db.execute(date_stmt)
+    all_dates = sorted([row[0] for row in date_result.all()])
+    if not all_dates:
+        return TrendResponse(ticker=t, days=days, sma_window=sma, data=[])
+
+    start_date = all_dates[0]
+
+    # 2. Recommendations: price, target, conviction, signal_count
+    rec_stmt = (
+        select(
+            Recommendation.recommendation_date,
+            Recommendation.current_price,
+            Recommendation.target_price,
+            Recommendation.conviction_score,
+            Recommendation.signal_count,
+        )
+        .where(Recommendation.ticker == t, Recommendation.recommendation_date >= start_date)
+        .order_by(Recommendation.recommendation_date.asc())
+    )
+    rec_result = await db.execute(rec_stmt)
+    rec_rows = {row[0]: row for row in rec_result.all()}
+
+    # 3. News sentiment + article count: daily aggregates via relevance junction
+    news_date = cast(MarketNews.published_at, Date)
+    news_stmt = (
+        select(
+            news_date.label("news_date"),
+            func.avg(MarketNews.sentiment_score).label("avg_sent"),
+            func.count(MarketNews.id).label("article_count"),
+        )
+        .join(NewsTickerRelevance)
+        .where(
+            NewsTickerRelevance.ticker == t,
+            NewsTickerRelevance.relevance_score >= 0.3,
+            MarketNews.published_at >= start_date,
+        )
+        .group_by(news_date)
+    )
+    news_result = await db.execute(news_stmt)
+    news_rows = {
+        row[0]: {"sentiment": float(row[1]) if row[1] is not None else None, "count": int(row[2])}
+        for row in news_result.all()
+    }
+
+    # 4. Assemble raw data points on the date spine
+    raw: list[dict] = []
+    for d in all_dates:
+        rec = rec_rows.get(d)
+        price = float(rec[1]) if rec and rec[1] is not None else None
+        target = float(rec[2]) if rec and rec[2] is not None else None
+        conviction = float(rec[3]) if rec and rec[3] is not None else None
+        sig_count = int(rec[4]) if rec and rec[4] is not None else None
+        news = news_rows.get(d, {})
+        raw_sent = news.get("sentiment")
+        sentiment = round((raw_sent + 1) * 50, 2) if raw_sent is not None else None
+        article_count = news.get("count", 0)
+        raw.append({
+            "date": d, "price": price, "target_price": target,
+            "conviction": conviction, "signal_count": sig_count,
+            "sentiment": sentiment, "article_count": article_count,
+        })
+
+    # 5. Compute SMAs
+    prices = [r["price"] for r in raw]
+    convictions = [r["conviction"] for r in raw]
+    sig_counts = [float(r["signal_count"]) if r["signal_count"] is not None else None for r in raw]
+    sentiments = [r["sentiment"] for r in raw]
+
+    price_sma = _compute_sma(prices, sma)
+    conviction_sma = _compute_sma(convictions, sma)
+    signal_count_sma = _compute_sma(sig_counts, sma)
+    sentiment_sma = _compute_sma(sentiments, sma)
+
+    # 6. Trim to requested days and build response
+    output_start = max(0, len(raw) - days)
+    data = []
+    for i in range(output_start, len(raw)):
+        r = raw[i]
+        data.append(TrendDataPoint(
+            date=r["date"], price=r["price"], target_price=r["target_price"],
+            conviction=r["conviction"], signal_count=r["signal_count"],
+            sentiment=r["sentiment"], article_count=r["article_count"],
+            price_sma=price_sma[i], conviction_sma=conviction_sma[i],
+            signal_count_sma=signal_count_sma[i], sentiment_sma=sentiment_sma[i],
+        ))
+
+    return TrendResponse(ticker=t, days=days, sma_window=sma, data=data)
+
+
 # ── Status ──────────────────────────────────────────────────────────────────
 
 
@@ -697,3 +866,142 @@ async def trigger_refresh(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(run_full_pipeline)
     return {"status": "refresh_started"}
+
+
+# ── Research ───────────────────────────────────────────────────────────────
+
+
+@router.post("/research/{ticker}", response_model=ResearchResultResponse)
+async def analyze_ticker(ticker: str, db: AsyncSession = Depends(get_db)):
+    """Run a full on-demand analysis for any ticker."""
+    import asyncio
+    import re
+    from decimal import Decimal
+
+    from services.analyst_tracker import AnalystTracker
+    from services.earnings_calendar import EarningsCalendarService
+    from services.news_scanner import NewsScanner
+    from services.options_analyzer import OptionsAnalyzer
+    from services.recommendation_engine import RecommendationEngine
+
+    ticker = ticker.upper().strip()
+    if not re.match(r"^[A-Z]{1,5}$", ticker):
+        raise HTTPException(status_code=400, detail="Invalid ticker format")
+
+    data_client = DataSourceClient()
+
+    # Fetch stock data to get company name + validate ticker exists
+    loop = asyncio.get_event_loop()
+    stock_data = await loop.run_in_executor(
+        None, data_client.get_stock_data, ticker
+    )
+    if not stock_data or not stock_data.get("price"):
+        raise HTTPException(status_code=404, detail=f"No price data found for {ticker}")
+
+    company_name = stock_data.get("company_name")
+
+    # Instantiate all services
+    tracker = AnalystTracker(db, data_client)
+    earnings_svc = EarningsCalendarService(db, data_client)
+    scanner = NewsScanner(db, data_client)
+    analyzer = OptionsAnalyzer(db, data_client)
+
+    # Refresh data from APIs for this ticker
+    try:
+        await tracker.scan_ratings([ticker])
+    except Exception:
+        pass  # Non-fatal — analysis can proceed with existing data
+    try:
+        await earnings_svc.refresh_calendar([ticker])
+    except Exception:
+        pass
+    try:
+        ticker_company_map = {ticker: company_name} if company_name else {}
+        await scanner.scan_news([ticker], ticker_company_map)
+    except Exception:
+        pass
+    try:
+        await analyzer.analyze_ticker(ticker)
+    except Exception:
+        pass
+
+    await db.commit()
+
+    # Run scoring engine (does NOT write to recommendations table)
+    engine = RecommendationEngine(
+        db, data_client, tracker, earnings_svc, scanner, analyzer,
+    )
+    result = await engine.analyze_single(ticker)
+
+    # Persist to research_results
+    research = ResearchResult(
+        ticker=ticker,
+        company_name=company_name,
+        action=result["action"],
+        conviction_score=Decimal(str(result["conviction_score"])),
+        signal_count=result["signal_count"],
+        signals=result["signals"],
+        rationale=result["rationale"],
+        catalyst_type=result["catalyst_type"],
+        entry_strategy=result["entry_strategy"],
+        exit_rules=result["exit_rules"],
+        risk_level=result["risk_level"],
+        current_price=(
+            Decimal(str(result["current_price"]))
+            if result["current_price"] is not None
+            else None
+        ),
+        target_price=(
+            Decimal(str(result["target_price"]))
+            if result["target_price"] is not None
+            else None
+        ),
+        stop_loss_price=(
+            Decimal(str(result["stop_loss_price"]))
+            if result["stop_loss_price"] is not None
+            else None
+        ),
+        options_data=result["options_data"],
+        suggested_options=result["suggested_contracts"],
+    )
+    db.add(research)
+    await db.commit()
+    await db.refresh(research)
+
+    return ResearchResultResponse.model_validate(research)
+
+
+@router.get("/research", response_model=list[ResearchResultResponse])
+async def list_research(
+    ticker: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """List research results, optionally filtered by ticker."""
+    stmt = select(ResearchResult).order_by(ResearchResult.analyzed_at.desc())
+    if ticker:
+        stmt = stmt.where(ResearchResult.ticker == ticker.upper())
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
+    return [ResearchResultResponse.model_validate(r) for r in result.scalars().all()]
+
+
+@router.get("/research/{id_}", response_model=ResearchResultResponse)
+async def get_research(id_: int, db: AsyncSession = Depends(get_db)):
+    """Get a single research result by ID."""
+    result = await db.get(ResearchResult, id_)
+    if not result:
+        raise HTTPException(status_code=404, detail="Research result not found")
+    return ResearchResultResponse.model_validate(result)
+
+
+@router.delete("/research/{id_}")
+async def delete_research(id_: int, db: AsyncSession = Depends(get_db)):
+    """Delete a research result."""
+    result = await db.get(ResearchResult, id_)
+    if not result:
+        raise HTTPException(status_code=404, detail="Research result not found")
+    await db.delete(result)
+    await db.commit()
+    return {"status": "deleted"}

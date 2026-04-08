@@ -4,6 +4,7 @@ import { SENTIMENT_COLOR, IMPACT_COLORS } from '../utils/theme';
 
 interface NewsTimelineProps {
   items: NewsItem[];
+  showTickers?: boolean;
 }
 
 function formatTime(dateStr: string | null): string {
@@ -17,7 +18,7 @@ function formatTime(dateStr: string | null): string {
   });
 }
 
-export default function NewsTimeline({ items }: NewsTimelineProps) {
+export default function NewsTimeline({ items, showTickers = false }: NewsTimelineProps) {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [impactFilter, setImpactFilter] = useState('');
 
@@ -103,6 +104,23 @@ export default function NewsTimeline({ items }: NewsTimelineProps) {
                     >
                       {item.impact_level}
                     </span>
+                  )}
+                  {showTickers && item.related_tickers?.length > 0 && (
+                    <>
+                      {item.related_tickers
+                        .sort((a, b) => b.relevance_score - a.relevance_score)
+                        .slice(0, 5)
+                        .map((r) => (
+                          <span
+                            key={r.ticker}
+                            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-purple-900/30 text-purple-400 border border-purple-700/30"
+                            style={{ opacity: 0.4 + r.relevance_score * 0.6 }}
+                            title={`${r.relevance_source} (${r.relevance_score})`}
+                          >
+                            {r.ticker}
+                          </span>
+                        ))}
+                    </>
                   )}
                 </div>
                 {item.source_url ? (

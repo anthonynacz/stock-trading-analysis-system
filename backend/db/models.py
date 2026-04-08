@@ -118,7 +118,7 @@ class EarningsCalendar(Base):
     actual_eps: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
     consensus_revenue: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 2))
     actual_revenue: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 2))
-    surprise_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 4))
+    surprise_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
     catalyst_window_start: Mapped[Optional[date]] = mapped_column(Date)
     catalyst_window_end: Mapped[Optional[date]] = mapped_column(Date)
 
@@ -144,6 +144,31 @@ class MarketNews(Base):
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     source_url: Mapped[Optional[str]] = mapped_column(Text)
 
+    ticker_relevances: Mapped[list["NewsTickerRelevance"]] = relationship(
+        back_populates="news", cascade="all, delete-orphan"
+    )
+
+
+class NewsTickerRelevance(Base):
+    """Junction table linking news articles to tickers with relevance scores."""
+
+    __tablename__ = "news_ticker_relevance"
+    __table_args__ = (
+        UniqueConstraint("news_id", "ticker", name="uq_news_ticker_rel"),
+        Index("ix_ntr_ticker", "ticker"),
+        Index("ix_ntr_news_id", "news_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    news_id: Mapped[int] = mapped_column(
+        ForeignKey("market_news.id", ondelete="CASCADE"), nullable=False
+    )
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    relevance_score: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False)
+    relevance_source: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    news: Mapped["MarketNews"] = relationship(back_populates="ticker_relevances")
+
 
 # ── Options snapshots ────────────────────────────────────────────────────────
 
@@ -163,6 +188,8 @@ class OptionsSnapshot(Base):
     total_call_volume: Mapped[Optional[int]] = mapped_column(Integer)
     total_put_volume: Mapped[Optional[int]] = mapped_column(Integer)
     avg_call_volume: Mapped[Optional[int]] = mapped_column(Integer)
+    total_call_oi: Mapped[Optional[int]] = mapped_column(Integer)
+    total_put_oi: Mapped[Optional[int]] = mapped_column(Integer)
     unusual_activity: Mapped[bool] = mapped_column(Boolean, default=False)
     unusual_activity_detail: Mapped[Optional[str]] = mapped_column(Text)
 
@@ -233,3 +260,32 @@ class StrikeSnapshot(Base):
         UniqueConstraint("snapshot_date", "ticker", name="uq_strike_snap_date_ticker"),
         Index("ix_strike_snap_date", "snapshot_date"),
     )
+
+
+# ── Research results ────────────────────────────────────────────────────────
+
+class ResearchResult(Base):
+    __tablename__ = "research_results"
+    __table_args__ = (
+        Index("ix_research_ticker", "ticker"),
+        Index("ix_research_analyzed", "analyzed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255))
+    analyzed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    conviction_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    signal_count: Mapped[Optional[int]] = mapped_column(Integer)
+    signals: Mapped[Optional[dict]] = mapped_column(JSON)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    catalyst_type: Mapped[Optional[str]] = mapped_column(String(50))
+    entry_strategy: Mapped[Optional[str]] = mapped_column(Text)
+    exit_rules: Mapped[Optional[str]] = mapped_column(Text)
+    risk_level: Mapped[Optional[str]] = mapped_column(String(20))
+    current_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    target_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    stop_loss_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    options_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    suggested_options: Mapped[Optional[list]] = mapped_column(JSON)
