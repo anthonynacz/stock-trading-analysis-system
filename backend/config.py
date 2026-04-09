@@ -18,7 +18,7 @@ SECTORS: dict[str, dict] = {
     "AI/Semiconductors": {
         "universe": [
             "NVDA", "AMD", "AVGO", "MRVL", "QCOM", "INTC", "MU", "AMAT",
-            "LRCX", "KLAC", "ASML", "TSM", "ARM", "SMCI", "ALAB", "CRDO",
+            "LRCX", "KLAC", "ASML", "TSM", "ARM", "SMCI", "ALAB", "CRDO", "CRWV",
         ],
         "max_stocks": 6,
     },
@@ -68,12 +68,16 @@ MIN_ANALYST_COVERAGE = 5
 WATCHLIST_WEIGHTS = {
     "catalyst_proximity": 0.25,
     "analyst_momentum": 0.20,
-    "options_liquidity": 0.15,
+    "recommendation_conviction": 0.15,
+    "options_liquidity": 0.10,
     "sector_momentum": 0.15,
-    "volatility_profile": 0.10,
-    "institutional_flow": 0.10,
+    "volatility_profile": 0.05,
+    "institutional_flow": 0.05,
     "price_vs_consensus_pt": 0.05,
 }
+
+# Watchlist toxic-removal: consecutive SELL/STRONG_SELL days to trigger removal
+TOXIC_CONVICTION_DAYS = 3
 
 # Firm tiers
 TIER1_FIRMS = {

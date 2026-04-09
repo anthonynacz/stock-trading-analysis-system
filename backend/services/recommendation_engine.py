@@ -118,6 +118,9 @@ class RecommendationEngine:
         technicals: dict = await loop.run_in_executor(
             None, self._data_client.get_technical_indicators, ticker
         )
+        benchmark: dict = await loop.run_in_executor(
+            None, self._data_client.get_market_benchmark
+        )
 
         ratings = await self._analyst_tracker.get_recent_ratings(
             ticker=ticker, hours=48
@@ -135,6 +138,7 @@ class RecommendationEngine:
             "options_snapshot": options_snapshot,
             "stock_data": stock_data,
             "technicals": technicals,
+            "benchmark": benchmark,
         }
 
         # ── 2. Stack signals ────────────────────────────────────────────
@@ -236,6 +240,9 @@ class RecommendationEngine:
         technicals: dict = await loop.run_in_executor(
             None, self._data_client.get_technical_indicators, ticker
         )
+        benchmark: dict = await loop.run_in_executor(
+            None, self._data_client.get_market_benchmark
+        )
 
         ratings = await self._analyst_tracker.get_recent_ratings(
             ticker=ticker, hours=48
@@ -253,6 +260,7 @@ class RecommendationEngine:
             "options_snapshot": options_snapshot,
             "stock_data": stock_data,
             "technicals": technicals,
+            "benchmark": benchmark,
         }
 
         # ── 2. Stack signals ────────────────────────────────────────────
@@ -607,27 +615,6 @@ class RecommendationEngine:
                     "detail": f"Price {pct_vs_200:.1f}% below 200d SMA ${sma_200:.2f} — long-term downtrend",
                 })
 
-        # 52-week position
-        wk_high = stock_data.get("fifty_two_week_high")
-        wk_low = stock_data.get("fifty_two_week_low")
-        if current_price and wk_high and wk_low and wk_high > wk_low:
-            pct_from_high = ((wk_high - current_price) / wk_high) * 100
-            pct_from_low = ((current_price - wk_low) / wk_low) * 100
-            if pct_from_high < 5:
-                score += 5
-                signals.append({
-                    "signal": "Near 52w High",
-                    "points": 5,
-                    "detail": f"Within {pct_from_high:.1f}% of 52-week high ${wk_high:.2f} — breakout potential",
-                })
-            elif pct_from_high > 30:
-                score += 10
-                signals.append({
-                    "signal": "Deep Pullback from 52w High",
-                    "points": 10,
-                    "detail": f"{pct_from_high:.0f}% below 52-week high ${wk_high:.2f} — potential value",
-                })
-
         # Multi-day momentum
         momentum_5d = technicals.get("momentum_5d")
         momentum_20d = technicals.get("momentum_20d")
@@ -662,6 +649,134 @@ class RecommendationEngine:
                     "detail": f"Stock down {momentum_20d:+.1f}% over 20 trading days",
                 })
 
+        # ── Rapid drawdown detection ────────────────────────────────────
+        drawdown_1d = technicals.get("drawdown_1d")
+        drawdown_2d = technicals.get("drawdown_2d")
+        drawdown_3d = technicals.get("drawdown_3d")
+        consec_down = technicals.get("consecutive_down_days", 0)
+        down_vol_ratio = technicals.get("down_day_volume_ratio")
+        has_rapid_drawdown = False
+
+        # 1-day sharp drop
+        if drawdown_1d is not None and drawdown_1d < -5:
+            score -= 15
+            has_rapid_drawdown = True
+            signals.append({
+                "signal": "Sharp 1d Drop",
+                "points": -15,
+                "detail": f"Stock dropped {drawdown_1d:+.1f}% in a single day",
+            })
+
+        # 2-day cumulative drop
+        if drawdown_2d is not None and drawdown_2d < -7:
+            score -= 20
+            has_rapid_drawdown = True
+            signals.append({
+                "signal": "Rapid 2d Drawdown",
+                "points": -20,
+                "detail": f"Stock dropped {drawdown_2d:+.1f}% over 2 days — sustained selling",
+            })
+        # 3-day cumulative drop (if 2-day didn't fire)
+        elif drawdown_3d is not None and drawdown_3d < -10:
+            score -= 15
+            has_rapid_drawdown = True
+            signals.append({
+                "signal": "Rapid 3d Drawdown",
+                "points": -15,
+                "detail": f"Stock dropped {drawdown_3d:+.1f}% over 3 days — persistent decline",
+            })
+
+        # Distribution signal: heavy volume on down days
+        if has_rapid_drawdown and down_vol_ratio is not None and down_vol_ratio > 1.3:
+            score -= 10
+            signals.append({
+                "signal": "Distribution (Heavy Selling Volume)",
+                "points": -10,
+                "detail": f"Down-day volume {down_vol_ratio:.1f}x up-day volume — institutional selling",
+            })
+
+        # ── Oversold bounce / dip buy detection ─────────────────────────
+        # Only fires when there IS a drawdown, so user sees both signals
+        if has_rapid_drawdown and rsi is not None:
+            near_support = False
+            support_detail = ""
+
+            # Check proximity to 200d SMA (within 3%)
+            if current_price and sma_200 and sma_200 > 0:
+                dist_to_200 = abs(current_price - sma_200) / sma_200 * 100
+                if dist_to_200 < 3:
+                    near_support = True
+                    support_detail = f"near 200d SMA ${sma_200:.2f}"
+
+            # Check proximity to 52w low (within 10%)
+            wk_low = stock_data.get("fifty_two_week_low")
+            if not near_support and current_price and wk_low and wk_low > 0:
+                dist_to_low = ((current_price - wk_low) / wk_low) * 100
+                if dist_to_low < 10:
+                    near_support = True
+                    support_detail = f"near 52w low ${wk_low:.2f}"
+
+            selling_exhaustion = (
+                down_vol_ratio is not None and down_vol_ratio < 0.8
+            )
+
+            if rsi < 20 and near_support:
+                pts = 25 if selling_exhaustion else 20
+                score += pts
+                signals.append({
+                    "signal": "Strong Reversal Setup",
+                    "points": pts,
+                    "detail": f"RSI {rsi:.0f} (deeply oversold) + {support_detail}"
+                             + (" + selling exhaustion" if selling_exhaustion else ""),
+                })
+            elif rsi < 30 and near_support:
+                pts = 20 if selling_exhaustion else 15
+                score += pts
+                signals.append({
+                    "signal": "Oversold Bounce Setup",
+                    "points": pts,
+                    "detail": f"RSI {rsi:.0f} (oversold) + {support_detail}"
+                             + (" + selling exhaustion" if selling_exhaustion else ""),
+                })
+            elif rsi < 30:
+                score += 5
+                signals.append({
+                    "signal": "Oversold After Drop",
+                    "points": 5,
+                    "detail": f"RSI {rsi:.0f} after drawdown — watch for reversal, no support nearby",
+                })
+
+        # ── 52-week position (context-gated) ────────────────────────────
+        wk_high = stock_data.get("fifty_two_week_high")
+        wk_low = stock_data.get("fifty_two_week_low")
+        actively_declining = (momentum_5d is not None and momentum_5d < -5)
+
+        if current_price and wk_high and wk_low and wk_high > wk_low:
+            pct_from_high = ((wk_high - current_price) / wk_high) * 100
+            if pct_from_high < 5:
+                score += 5
+                signals.append({
+                    "signal": "Near 52w High",
+                    "points": 5,
+                    "detail": f"Within {pct_from_high:.1f}% of 52-week high ${wk_high:.2f} — breakout potential",
+                })
+            elif pct_from_high > 30:
+                # Gate: halve points during active decline (falling knife)
+                if actively_declining:
+                    score += 5
+                    signals.append({
+                        "signal": "Deep Pullback from 52w High",
+                        "points": 5,
+                        "detail": f"{pct_from_high:.0f}% below 52w high — but still declining, caution",
+                    })
+                else:
+                    score += 10
+                    signals.append({
+                        "signal": "Deep Pullback from 52w High",
+                        "points": 10,
+                        "detail": f"{pct_from_high:.0f}% below 52-week high ${wk_high:.2f} — potential value",
+                    })
+
         # Volume confirmation (high volume on directional move)
         volume_ratio = technicals.get("volume_ratio")
         if volume_ratio is not None and momentum_5d is not None:
@@ -684,8 +799,6 @@ class RecommendationEngine:
         short_pct = stock_data.get("short_pct_float")
         short_ratio = stock_data.get("short_ratio")
         if short_pct is not None and short_pct > 0.10:
-            # High short interest — bearish pressure but squeeze potential if
-            # combined with bullish momentum
             if momentum_5d is not None and momentum_5d > 3:
                 score += 15
                 signals.append({
@@ -699,6 +812,26 @@ class RecommendationEngine:
                     "signal": "High Short Interest",
                     "points": -5,
                     "detail": f"{short_pct:.0%} of float sold short (days to cover: {short_ratio:.1f})",
+                })
+
+        # ── Relative strength vs SPY ────────────────────────────────────
+        benchmark: dict = data.get("benchmark", {})
+        spy_5d = benchmark.get("spy_momentum_5d")
+        if momentum_5d is not None and spy_5d is not None:
+            relative_strength = momentum_5d - spy_5d
+            if relative_strength < -5:
+                score -= 10
+                signals.append({
+                    "signal": "Underperforming Market",
+                    "points": -10,
+                    "detail": f"Stock {momentum_5d:+.1f}% vs SPY {spy_5d:+.1f}% (5d) — lagging by {abs(relative_strength):.1f}pp",
+                })
+            elif relative_strength > 5:
+                score += 10
+                signals.append({
+                    "signal": "Outperforming Market",
+                    "points": 10,
+                    "detail": f"Stock {momentum_5d:+.1f}% vs SPY {spy_5d:+.1f}% (5d) — leading by {relative_strength:.1f}pp",
                 })
 
         # ── Options signals ─────────────────────────────────────────────
@@ -762,7 +895,6 @@ class RecommendationEngine:
         article_count = news_sentiment.get("total_count", 0)
 
         if avg_sentiment > 0.3:
-            # Scale: base 5, add up to 10 more for strong + high-count
             magnitude_bonus = min(5, int((avg_sentiment - 0.3) * 15))
             count_bonus = min(5, article_count // 3)
             pts = 5 + magnitude_bonus + count_bonus
@@ -800,18 +932,27 @@ class RecommendationEngine:
                 "detail": f"Negative sector news for {stock_data.get('sector', 'Unknown')}",
             })
 
-        # ── Price relative to consensus PT ──────────────────────────────
+        # ── Price relative to consensus PT (context-gated) ──────────────
         if current_price and avg_analyst_target:
             discount_pct = (
                 (avg_analyst_target - current_price) / current_price
             ) * 100
             if discount_pct > 15:
-                score += 10
-                signals.append({
-                    "signal": "Below Consensus PT",
-                    "points": 10,
-                    "detail": f"Stock ${current_price:.2f} vs consensus PT ${avg_analyst_target:.2f} ({discount_pct:.0f}% discount)",
-                })
+                # Gate: halve during active decline
+                if actively_declining:
+                    score += 5
+                    signals.append({
+                        "signal": "Below Consensus PT",
+                        "points": 5,
+                        "detail": f"Stock ${current_price:.2f} vs PT ${avg_analyst_target:.2f} ({discount_pct:.0f}% discount) — but declining",
+                    })
+                else:
+                    score += 10
+                    signals.append({
+                        "signal": "Below Consensus PT",
+                        "points": 10,
+                        "detail": f"Stock ${current_price:.2f} vs consensus PT ${avg_analyst_target:.2f} ({discount_pct:.0f}% discount)",
+                    })
 
         # ── Insider activity ────────────────────────────────────────────
         await self._check_insider_activity(ticker, signals)

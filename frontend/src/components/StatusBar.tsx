@@ -1,9 +1,9 @@
 import type { SystemStatus } from '../types';
+import PipelineRunner from './PipelineRunner';
 
 interface StatusBarProps {
   status: SystemStatus | null;
-  onRefresh: () => void;
-  refreshing: boolean;
+  onComplete: () => void;
   selectedDate: string;
   availableDates: string[];
   onDateChange: (date: string) => void;
@@ -22,8 +22,7 @@ function formatDate(iso: string): string {
 
 export default function StatusBar({
   status,
-  onRefresh,
-  refreshing,
+  onComplete,
   selectedDate,
   availableDates,
   onDateChange,
@@ -122,28 +121,8 @@ export default function StatusBar({
           </div>
         )}
 
-        {/* Refresh button */}
-        <button
-          onClick={onRefresh}
-          disabled={refreshing || !isToday}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-border text-text-primary text-xs font-medium hover:bg-text-secondary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          title={!isToday ? 'Refresh only available for today' : undefined}
-        >
-          <svg
-            className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-            />
-          </svg>
-          {refreshing ? 'Refreshing...' : 'Refresh'}
-        </button>
+        {/* Pipeline runner */}
+        {isToday && <PipelineRunner onComplete={onComplete} />}
       </div>
     </div>
   );

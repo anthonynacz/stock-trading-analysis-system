@@ -18,6 +18,7 @@ from services.earnings_calendar import EarningsCalendarService
 from services.news_scanner import NewsScanner
 from services.options_analyzer import OptionsAnalyzer
 from services.recommendation_engine import RecommendationEngine
+from services.universe_discoverer import UniverseDiscoverer
 from services.watchlist_manager import WatchlistManager
 from utils.data_sources import DataSourceClient
 
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 scheduler: AsyncIOScheduler | None = None
 
 last_refresh: dict[str, datetime | None] = {
+    "discovery": None,
     "watchlist": None,
     "ratings": None,
     "earnings": None,
@@ -39,6 +41,19 @@ last_refresh: dict[str, datetime | None] = {
 }
 
 EASTERN = pytz.timezone("US/Eastern")
+
+ALL_PHASES = ["discovery", "watchlist", "ratings", "earnings", "news", "options", "recommendations"]
+
+# Pipeline run tracking for frontend progress bar
+pipeline_run: dict = {
+    "status": "idle",        # idle | running | completed | failed
+    "phases": [],            # phases requested
+    "completed": [],         # phases finished so far
+    "current": None,         # phase currently executing
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +69,12 @@ async def run_pipeline_phase(phase: str) -> None:
         # Instantiate services needed for this phase
         watchlist_mgr = WatchlistManager(session, data_client)
 
-        if phase == "watchlist":
+        if phase == "discovery":
+            discoverer = UniverseDiscoverer(session, data_client)
+            candidates = await discoverer.discover()
+            logger.info("Discovery complete: %d new candidates", len(candidates))
+
+        elif phase == "watchlist":
             result = await watchlist_mgr.rotate_watchlist()
             logger.info("Watchlist rotation complete: %s", result)
 
@@ -122,15 +142,48 @@ async def run_pipeline_phase(phase: str) -> None:
 
 async def run_full_pipeline() -> None:
     """Run every phase in sequence. Used by the manual refresh endpoint."""
-    start = datetime.now(tz=EASTERN)
-    logger.info("Full pipeline started at %s", start.isoformat())
+    await run_tracked_pipeline(ALL_PHASES)
 
-    phases = ["watchlist", "ratings", "earnings", "news", "options", "recommendations"]
-    for phase in phases:
-        await run_pipeline_phase(phase)
+
+async def run_tracked_pipeline(phases: list[str]) -> None:
+    """Run selected phases in sequence with progress tracking."""
+    global pipeline_run
+
+    pipeline_run = {
+        "status": "running",
+        "phases": phases,
+        "completed": [],
+        "current": None,
+        "started_at": datetime.now(tz=EASTERN).isoformat(),
+        "finished_at": None,
+        "error": None,
+    }
+
+    start = datetime.now(tz=EASTERN)
+    logger.info("Tracked pipeline started: %s", phases)
+
+    try:
+        for phase in phases:
+            pipeline_run["current"] = phase
+            await run_pipeline_phase(phase)
+            pipeline_run["completed"].append(phase)
+
+        pipeline_run["status"] = "completed"
+        pipeline_run["current"] = None
+        pipeline_run["finished_at"] = datetime.now(tz=EASTERN).isoformat()
+    except Exception as exc:
+        pipeline_run["status"] = "failed"
+        pipeline_run["error"] = str(exc)
+        pipeline_run["finished_at"] = datetime.now(tz=EASTERN).isoformat()
+        logger.exception("Tracked pipeline failed")
 
     end = datetime.now(tz=EASTERN)
-    logger.info("Full pipeline finished at %s (elapsed %s)", end.isoformat(), end - start)
+    logger.info("Tracked pipeline finished at %s (elapsed %s)", end.isoformat(), end - start)
+
+
+def get_pipeline_run_status() -> dict:
+    """Return the current pipeline run state for the frontend."""
+    return {**pipeline_run}
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +199,10 @@ def start_scheduler() -> None:
     weekdays = "mon-fri"
 
     # -- Pre-market ----------------------------------------------------------
+    scheduler.add_job(
+        run_pipeline_phase, "cron", args=["discovery"],
+        hour=5, minute=0, day_of_week=weekdays, id="premarket_discovery",
+    )
     scheduler.add_job(
         run_pipeline_phase, "cron", args=["watchlist"],
         hour=5, minute=30, day_of_week=weekdays, id="premarket_watchlist",

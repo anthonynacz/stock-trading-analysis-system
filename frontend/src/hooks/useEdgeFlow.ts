@@ -8,6 +8,8 @@ import {
   getPipelineDates,
   getWatchlistChanges,
   getTickerTrends,
+  getUniverse,
+  getDiscoveryCandidates,
 } from '../utils/api';
 import type {
   WatchlistItem,
@@ -18,6 +20,8 @@ import type {
   WatchlistChanges,
   PipelineDates,
   TrendData,
+  UniverseSummary,
+  DiscoveryCandidate,
 } from '../types';
 
 interface HookResult<T> {
@@ -271,6 +275,60 @@ export function useTickerTrends(
       setData(null);
     }
   }, [ticker, refetch]);
+
+  return { data, loading, error, refetch };
+}
+
+export function useUniverse(): HookResult<UniverseSummary> {
+  const [data, setData] = useState<UniverseSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refetch = useCallback(async () => {
+    try {
+      setLoading(true);
+      const result = await getUniverse();
+      setData(result);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to fetch universe');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refetch();
+    const interval = setInterval(refetch, 120_000);
+    return () => clearInterval(interval);
+  }, [refetch]);
+
+  return { data, loading, error, refetch };
+}
+
+export function useDiscoveryCandidates(): HookResult<DiscoveryCandidate[]> {
+  const [data, setData] = useState<DiscoveryCandidate[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refetch = useCallback(async () => {
+    try {
+      setLoading(true);
+      const result = await getDiscoveryCandidates();
+      setData(result);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to fetch candidates');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refetch();
+    const interval = setInterval(refetch, 60_000);
+    return () => clearInterval(interval);
+  }, [refetch]);
 
   return { data, loading, error, refetch };
 }

@@ -27,6 +27,7 @@ class WatchlistAddRequest(BaseModel):
 class WatchlistChangeItem(BaseModel):
     ticker: str
     sector: Optional[str] = None
+    reason: Optional[str] = None
 
 
 class WatchlistChangesResponse(BaseModel):
@@ -264,3 +265,57 @@ class ResearchResultResponse(BaseModel):
     stop_loss_price: Optional[Decimal] = None
     options_data: Optional[dict[str, Any]] = None
     suggested_options: Optional[list[dict[str, Any]]] = None
+
+
+# ── Universe management ──────────────────────────────────────────────────
+
+
+class UniverseStockResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ticker: str
+    company_name: Optional[str] = None
+    sector: Optional[str] = None
+    source: str
+    is_active: bool
+    added_at: datetime
+
+
+class UniverseAddRequest(BaseModel):
+    ticker: str
+    sector: str
+
+
+class UniverseSectorGroup(BaseModel):
+    name: str
+    stock_count: int
+    stocks: list[UniverseStockResponse]
+
+
+class UniverseSummaryResponse(BaseModel):
+    sectors: list[UniverseSectorGroup]
+    total_stocks: int
+    pending_candidates: int
+
+
+class DiscoveryCandidateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ticker: str
+    company_name: Optional[str] = None
+    suggested_sector: Optional[str] = None
+    discovered_at: datetime
+    source: str
+    score: Optional[float] = None
+    market_cap: Optional[float] = None
+    avg_volume: Optional[float] = None
+    price: Optional[float] = None
+    change_pct: Optional[float] = None
+    rationale: Optional[str] = None
+    status: str
+
+
+class CandidateApproveRequest(BaseModel):
+    sector: str

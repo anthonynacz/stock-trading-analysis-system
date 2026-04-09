@@ -33,6 +33,53 @@ class Sector(Base):
     max_stocks: Mapped[int] = mapped_column(Integer, default=6)
 
     watchlist_items: Mapped[list["Watchlist"]] = relationship(back_populates="sector")
+    universe_stocks: Mapped[list["UniverseStock"]] = relationship(back_populates="sector")
+
+
+# ── Universe stocks ─────────────────────────────────────────────────────────
+
+class UniverseStock(Base):
+    __tablename__ = "universe_stocks"
+    __table_args__ = (
+        UniqueConstraint("ticker", name="uq_universe_ticker"),
+        Index("ix_universe_sector", "sector_id"),
+        Index("ix_universe_active", "is_active"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255))
+    sector_id: Mapped[int] = mapped_column(ForeignKey("sectors.id"), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)  # SEED, DISCOVERED, MANUAL
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    sector: Mapped["Sector"] = relationship(back_populates="universe_stocks")
+
+
+# ── Discovery candidates ───────────────────────────────────────────────────
+
+class DiscoveryCandidate(Base):
+    __tablename__ = "discovery_candidates"
+    __table_args__ = (
+        Index("ix_discovery_status", "status"),
+        Index("ix_discovery_discovered", "discovered_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255))
+    suggested_sector: Mapped[Optional[str]] = mapped_column(String(100))
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    source: Mapped[str] = mapped_column(String(20), nullable=False)  # MOST_ACTIVE, GAINER, LOSER, NEWS_TRENDING
+    score: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    market_cap: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    avg_volume: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    change_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
+    rationale: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="PENDING")  # PENDING, APPROVED, DISMISSED
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 # ── Watchlist ────────────────────────────────────────────────────────────────

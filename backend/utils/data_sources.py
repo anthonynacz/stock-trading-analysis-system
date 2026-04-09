@@ -27,6 +27,7 @@ TTL_ANALYST_RATINGS = 30 * 60
 TTL_NEWS = 15 * 60
 TTL_OPTIONS_CHAIN = 5 * 60
 TTL_EARNINGS = 60 * 60
+TTL_DISCOVERY = 30 * 60
 
 # ---------------------------------------------------------------------------
 # Rate-limit definitions: source -> (max_calls, period_seconds)
@@ -182,10 +183,12 @@ class DataSourceClient:
     # ------------------------------------------------------------------ #
 
     def get_technical_indicators(self, ticker: str) -> dict:
-        """Compute RSI-14 and multi-day momentum from yfinance price history.
+        """Compute technical indicators from yfinance price history.
 
-        Returns dict with rsi_14, momentum_5d, momentum_20d (percent changes),
-        and volume_ratio (today's volume / 20-day avg volume).
+        Returns dict with rsi_14, momentum_5d, momentum_20d, volume_ratio,
+        drawdown metrics (drawdown_1d, drawdown_2d, drawdown_3d,
+        consecutive_down_days), and volume trend on down vs up days
+        (down_day_volume_ratio).
         """
         cache_key = f"technicals:{ticker}"
         cached = self._get_cached(cache_key)
@@ -236,9 +239,79 @@ class DataSourceClient:
                     float(volumes.iloc[-1]) / float(volumes.iloc[-20:].mean())
                 )
 
+            # ── Drawdown metrics ────────────────────────────────────
+            if len(closes) >= 4:
+                # 1-day, 2-day, 3-day cumulative returns (negative = drop)
+                result["drawdown_1d"] = (
+                    (closes.iloc[-1] - closes.iloc[-2]) / closes.iloc[-2]
+                ) * 100
+                if len(closes) >= 3:
+                    result["drawdown_2d"] = (
+                        (closes.iloc[-1] - closes.iloc[-3]) / closes.iloc[-3]
+                    ) * 100
+                if len(closes) >= 4:
+                    result["drawdown_3d"] = (
+                        (closes.iloc[-1] - closes.iloc[-4]) / closes.iloc[-4]
+                    ) * 100
+
+                # Consecutive down days (counting back from today)
+                daily_returns = closes.pct_change().dropna()
+                consec = 0
+                for ret in reversed(daily_returns.values):
+                    if ret < 0:
+                        consec += 1
+                    else:
+                        break
+                result["consecutive_down_days"] = consec
+
+            # ── Volume trend on down vs up days (last 10 days) ──────
+            if len(closes) >= 11 and len(volumes) >= 11:
+                daily_rets = closes.pct_change().iloc[-10:]
+                daily_vols = volumes.iloc[-10:]
+                down_vols = [float(v) for r, v in zip(daily_rets, daily_vols) if r < 0]
+                up_vols = [float(v) for r, v in zip(daily_rets, daily_vols) if r > 0]
+                if up_vols and down_vols:
+                    avg_down_vol = sum(down_vols) / len(down_vols)
+                    avg_up_vol = sum(up_vols) / len(up_vols)
+                    if avg_up_vol > 0:
+                        # >1 = heavier volume on down days (distribution)
+                        # <1 = lighter volume on down days (exhaustion)
+                        result["down_day_volume_ratio"] = avg_down_vol / avg_up_vol
+
             self._set_cached(cache_key, result, TTL_STOCK_DATA)
         except Exception:
             logger.exception("get_technical_indicators failed for %s", ticker)
+
+        return result
+
+    # ------------------------------------------------------------------ #
+
+    def get_market_benchmark(self) -> dict:
+        """Fetch SPY 5d momentum for relative strength comparison.
+
+        Cached for the session since SPY is the same for all tickers.
+        """
+        cache_key = "benchmark:SPY"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        result: dict[str, Any] = {}
+        try:
+            self._wait_for_rate_limit("yfinance")
+            hist = yf.Ticker("SPY").history(period="1mo")
+            if hist.empty or len(hist) < 6:
+                return result
+
+            closes = hist["Close"].dropna()
+            if len(closes) >= 6:
+                result["spy_momentum_5d"] = (
+                    (closes.iloc[-1] - closes.iloc[-6]) / closes.iloc[-6]
+                ) * 100
+
+            self._set_cached(cache_key, result, TTL_STOCK_DATA)
+        except Exception:
+            logger.exception("get_market_benchmark failed")
 
         return result
 
@@ -758,6 +831,63 @@ class DataSourceClient:
 
         except Exception:
             logger.exception("Finnhub insider trades fetch failed for %s", ticker)
+            return []
+
+    # ------------------------------------------------------------------
+    # Discovery (trending / active stocks)
+    # ------------------------------------------------------------------
+
+    def get_most_active(self) -> list[dict]:
+        """Fetch most actively traded stocks from FMP."""
+        cache_key = "discovery:most_active"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+        result = self._get_fmp_market_list("/api/v3/stock/actives")
+        self._set_cached(cache_key, result, TTL_DISCOVERY)
+        return result
+
+    def get_biggest_gainers(self) -> list[dict]:
+        """Fetch biggest gainers from FMP."""
+        cache_key = "discovery:gainers"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+        result = self._get_fmp_market_list("/api/v3/stock/gainers")
+        self._set_cached(cache_key, result, TTL_DISCOVERY)
+        return result
+
+    def get_biggest_losers(self) -> list[dict]:
+        """Fetch biggest losers from FMP."""
+        cache_key = "discovery:losers"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+        result = self._get_fmp_market_list("/api/v3/stock/losers")
+        self._set_cached(cache_key, result, TTL_DISCOVERY)
+        return result
+
+    def _get_fmp_market_list(self, endpoint: str) -> list[dict]:
+        """Shared helper for FMP market list endpoints (actives/gainers/losers)."""
+        if not settings.FMP_API_KEY:
+            return []
+        try:
+            raw = self._fmp_get(endpoint)
+            if not isinstance(raw, list):
+                return []
+            return [
+                {
+                    "symbol": item.get("symbol", ""),
+                    "name": item.get("name", ""),
+                    "price": item.get("price"),
+                    "change": item.get("change"),
+                    "change_pct": item.get("changesPercentage"),
+                }
+                for item in raw
+                if item.get("symbol")
+            ]
+        except Exception:
+            logger.exception("FMP market list fetch failed for %s", endpoint)
             return []
 
     # ------------------------------------------------------------------

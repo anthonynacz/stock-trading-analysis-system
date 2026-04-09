@@ -1,6 +1,7 @@
 """EdgeFlow API routes."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import Date, cast, select, func
@@ -8,7 +9,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.connection import get_db
+
+
+def _jsonable(obj):
+    """Recursively convert Decimal/date/datetime for JSON columns."""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, date):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonable(v) for v in obj]
+    return obj
 from db.models import (
+    DiscoveryCandidate,
     EarningsCalendar,
     MarketNews,
     NewsTickerRelevance,
@@ -17,12 +34,15 @@ from db.models import (
     ResearchResult,
     Sector,
     StrikeSnapshot,
+    UniverseStock,
     Watchlist,
     WatchlistDailySnapshot,
 )
 from utils.data_sources import DataSourceClient
 from utils.schemas import (
+    CandidateApproveRequest,
     CatalystResponse,
+    DiscoveryCandidateResponse,
     MarketNewsResponse,
     OptionsSnapshotResponse,
     PipelineDatesResponse,
@@ -32,6 +52,10 @@ from utils.schemas import (
     SystemStatusResponse,
     TrendDataPoint,
     TrendResponse,
+    UniverseAddRequest,
+    UniverseStockResponse,
+    UniverseSectorGroup,
+    UniverseSummaryResponse,
     WatchlistAddRequest,
     WatchlistChangeItem,
     WatchlistChangesResponse,
@@ -307,14 +331,37 @@ async def get_watchlist_changes(
     result = await db.execute(stmt)
     changes = result.scalars().all()
 
+    # Look up entry_reason / exit_reason from the Watchlist table
+    change_tickers = [c.ticker for c in changes]
+    reason_map: dict[str, str | None] = {}
+    if change_tickers:
+        wl_result = await db.execute(
+            select(Watchlist).where(Watchlist.ticker.in_(change_tickers))
+        )
+        for wl in wl_result.scalars().all():
+            # Entrants: added_date matches effective_date
+            if wl.added_date == effective_date and wl.entry_reason:
+                reason_map.setdefault(f"entry:{wl.ticker}", wl.entry_reason)
+            # Exiters: removed_date matches effective_date
+            if wl.removed_date == effective_date and wl.exit_reason:
+                reason_map.setdefault(f"exit:{wl.ticker}", wl.exit_reason)
+
     return WatchlistChangesResponse(
         date=effective_date,
         entrants=[
-            WatchlistChangeItem(ticker=c.ticker, sector=c.sector)
+            WatchlistChangeItem(
+                ticker=c.ticker,
+                sector=c.sector,
+                reason=reason_map.get(f"entry:{c.ticker}"),
+            )
             for c in changes if c.status == "NEW_ENTRANT"
         ],
         exiters=[
-            WatchlistChangeItem(ticker=c.ticker, sector=c.sector)
+            WatchlistChangeItem(
+                ticker=c.ticker,
+                sector=c.sector,
+                reason=reason_map.get(f"exit:{c.ticker}"),
+            )
             for c in changes if c.status == "REMOVED"
         ],
     )
@@ -513,8 +560,6 @@ async def save_strike_snapshot(
     db: AsyncSession = Depends(get_db),
 ):
     """Save current strike scan results for historical review."""
-    from decimal import Decimal
-
     today = date.today()
     saved = 0
 
@@ -825,6 +870,232 @@ async def get_ticker_trends(
     return TrendResponse(ticker=t, days=days, sma_window=sma, data=data)
 
 
+# ── Universe management ─────────────────────────────────────────────────────
+
+
+@router.get("/universe", response_model=UniverseSummaryResponse)
+async def get_universe(db: AsyncSession = Depends(get_db)):
+    """List the full universe grouped by sector, plus pending candidate count."""
+    stmt = (
+        select(Sector)
+        .options(selectinload(Sector.universe_stocks))
+        .order_by(Sector.name)
+    )
+    result = await db.execute(stmt)
+    sectors = result.scalars().all()
+
+    groups = []
+    total = 0
+    for sector in sectors:
+        active = [s for s in sector.universe_stocks if s.is_active]
+        active.sort(key=lambda s: s.ticker)
+        total += len(active)
+        groups.append(UniverseSectorGroup(
+            name=sector.name,
+            stock_count=len(active),
+            stocks=[
+                UniverseStockResponse(
+                    id=s.id,
+                    ticker=s.ticker,
+                    company_name=s.company_name,
+                    sector=sector.name,
+                    source=s.source,
+                    is_active=s.is_active,
+                    added_at=s.added_at,
+                )
+                for s in active
+            ],
+        ))
+
+    pending_result = await db.execute(
+        select(func.count()).select_from(DiscoveryCandidate).where(
+            DiscoveryCandidate.status == "PENDING"
+        )
+    )
+    pending_count = pending_result.scalar() or 0
+
+    return UniverseSummaryResponse(
+        sectors=groups,
+        total_stocks=total,
+        pending_candidates=pending_count,
+    )
+
+
+@router.post("/universe", response_model=UniverseStockResponse, status_code=201)
+async def add_to_universe(
+    body: UniverseAddRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually add a stock to the universe."""
+    import asyncio
+
+    ticker = body.ticker.strip().upper()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="Ticker is required")
+
+    # Check if already exists
+    existing = await db.execute(
+        select(UniverseStock).where(UniverseStock.ticker == ticker, UniverseStock.is_active.is_(True))
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail=f"{ticker} is already in the universe")
+
+    # Find sector
+    sector_result = await db.execute(
+        select(Sector).where(Sector.name == body.sector)
+    )
+    sector = sector_result.scalar_one_or_none()
+    if not sector:
+        raise HTTPException(status_code=400, detail=f"Unknown sector: {body.sector}")
+
+    # Fetch company name
+    client = DataSourceClient()
+    try:
+        loop = asyncio.get_event_loop()
+        stock_data = await loop.run_in_executor(None, client.get_stock_data, ticker)
+        company_name = stock_data.get("company_name") if stock_data else None
+    finally:
+        client.close()
+
+    stock = UniverseStock(
+        ticker=ticker,
+        company_name=company_name,
+        sector_id=sector.id,
+        source="MANUAL",
+        is_active=True,
+    )
+    db.add(stock)
+    await db.commit()
+    await db.refresh(stock)
+
+    return UniverseStockResponse(
+        id=stock.id,
+        ticker=stock.ticker,
+        company_name=stock.company_name,
+        sector=sector.name,
+        source=stock.source,
+        is_active=stock.is_active,
+        added_at=stock.added_at,
+    )
+
+
+@router.delete("/universe/{ticker}")
+async def remove_from_universe(
+    ticker: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Soft-remove a stock from the universe."""
+    result = await db.execute(
+        select(UniverseStock).where(
+            UniverseStock.ticker == ticker.upper(),
+            UniverseStock.is_active.is_(True),
+        )
+    )
+    stock = result.scalar_one_or_none()
+    if not stock:
+        raise HTTPException(status_code=404, detail=f"No active universe entry for {ticker.upper()}")
+
+    stock.is_active = False
+    await db.commit()
+    return {"status": "removed", "ticker": ticker.upper()}
+
+
+@router.get("/universe/candidates", response_model=list[DiscoveryCandidateResponse])
+async def get_candidates(db: AsyncSession = Depends(get_db)):
+    """List pending discovery candidates."""
+    stmt = (
+        select(DiscoveryCandidate)
+        .where(DiscoveryCandidate.status == "PENDING")
+        .order_by(DiscoveryCandidate.discovered_at.desc())
+    )
+    result = await db.execute(stmt)
+    return [DiscoveryCandidateResponse.model_validate(c) for c in result.scalars().all()]
+
+
+@router.post("/universe/candidates/{candidate_id}/approve", response_model=UniverseStockResponse)
+async def approve_candidate(
+    candidate_id: int,
+    body: CandidateApproveRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Approve a discovery candidate into the universe."""
+    candidate = await db.get(DiscoveryCandidate, candidate_id)
+    if not candidate or candidate.status != "PENDING":
+        raise HTTPException(status_code=404, detail="Pending candidate not found")
+
+    # Find sector
+    sector_result = await db.execute(
+        select(Sector).where(Sector.name == body.sector)
+    )
+    sector = sector_result.scalar_one_or_none()
+    if not sector:
+        raise HTTPException(status_code=400, detail=f"Unknown sector: {body.sector}")
+
+    # Check if ticker already in universe
+    existing = await db.execute(
+        select(UniverseStock).where(
+            UniverseStock.ticker == candidate.ticker,
+            UniverseStock.is_active.is_(True),
+        )
+    )
+    if existing.scalar_one_or_none():
+        # Mark candidate as approved anyway
+        candidate.status = "APPROVED"
+        candidate.resolved_at = datetime.utcnow()
+        await db.commit()
+        raise HTTPException(status_code=409, detail=f"{candidate.ticker} is already in the universe")
+
+    # Create universe stock
+    stock = UniverseStock(
+        ticker=candidate.ticker,
+        company_name=candidate.company_name,
+        sector_id=sector.id,
+        source="DISCOVERED",
+        is_active=True,
+    )
+    db.add(stock)
+
+    candidate.status = "APPROVED"
+    candidate.resolved_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(stock)
+
+    return UniverseStockResponse(
+        id=stock.id,
+        ticker=stock.ticker,
+        company_name=stock.company_name,
+        sector=sector.name,
+        source=stock.source,
+        is_active=stock.is_active,
+        added_at=stock.added_at,
+    )
+
+
+@router.post("/universe/candidates/{candidate_id}/dismiss")
+async def dismiss_candidate(
+    candidate_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Dismiss a discovery candidate."""
+    candidate = await db.get(DiscoveryCandidate, candidate_id)
+    if not candidate or candidate.status != "PENDING":
+        raise HTTPException(status_code=404, detail="Pending candidate not found")
+
+    candidate.status = "DISMISSED"
+    candidate.resolved_at = datetime.utcnow()
+    await db.commit()
+    return {"status": "dismissed", "ticker": candidate.ticker}
+
+
+@router.post("/universe/discover")
+async def trigger_discovery(background_tasks: BackgroundTasks):
+    """Trigger universe discovery manually."""
+    from services.scheduler import run_pipeline_phase
+
+    background_tasks.add_task(run_pipeline_phase, "discovery")
+    return {"status": "discovery_started"}
+
+
 # ── Status ──────────────────────────────────────────────────────────────────
 
 
@@ -857,15 +1128,52 @@ async def get_status(db: AsyncSession = Depends(get_db)):
     )
 
 
-# ── Refresh ─────────────────────────────────────────────────────────────────
+# ── Pipeline ───────────────────────────────────────────────────────────────
 
 
 @router.post("/refresh")
 async def trigger_refresh(background_tasks: BackgroundTasks):
-    from services.scheduler import run_full_pipeline
+    """Legacy endpoint — runs full pipeline."""
+    from services.scheduler import run_tracked_pipeline, ALL_PHASES, pipeline_run
 
-    background_tasks.add_task(run_full_pipeline)
+    if pipeline_run.get("status") == "running":
+        raise HTTPException(status_code=409, detail="Pipeline already running")
+
+    background_tasks.add_task(run_tracked_pipeline, ALL_PHASES)
     return {"status": "refresh_started"}
+
+
+@router.post("/pipeline/run")
+async def run_pipeline(
+    background_tasks: BackgroundTasks,
+    body: dict | None = None,
+):
+    """Start pipeline with optional phase selection.
+
+    Body: { "phases": ["watchlist", "ratings", ...] }
+    Omit or pass empty phases for full pipeline.
+    """
+    from services.scheduler import run_tracked_pipeline, ALL_PHASES, pipeline_run
+
+    if pipeline_run.get("status") == "running":
+        raise HTTPException(status_code=409, detail="Pipeline already running")
+
+    requested = (body or {}).get("phases") or ALL_PHASES
+    # Validate phase names
+    invalid = [p for p in requested if p not in ALL_PHASES]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Unknown phases: {invalid}")
+
+    background_tasks.add_task(run_tracked_pipeline, requested)
+    return {"status": "started", "phases": requested}
+
+
+@router.get("/pipeline/status")
+async def get_pipeline_status():
+    """Poll pipeline progress."""
+    from services.scheduler import get_pipeline_run_status
+
+    return get_pipeline_run_status()
 
 
 # ── Research ───────────────────────────────────────────────────────────────
@@ -876,7 +1184,6 @@ async def analyze_ticker(ticker: str, db: AsyncSession = Depends(get_db)):
     """Run a full on-demand analysis for any ticker."""
     import asyncio
     import re
-    from decimal import Decimal
 
     from services.analyst_tracker import AnalystTracker
     from services.earnings_calendar import EarningsCalendarService
@@ -940,7 +1247,7 @@ async def analyze_ticker(ticker: str, db: AsyncSession = Depends(get_db)):
         action=result["action"],
         conviction_score=Decimal(str(result["conviction_score"])),
         signal_count=result["signal_count"],
-        signals=result["signals"],
+        signals=_jsonable(result["signals"]),
         rationale=result["rationale"],
         catalyst_type=result["catalyst_type"],
         entry_strategy=result["entry_strategy"],
@@ -961,8 +1268,8 @@ async def analyze_ticker(ticker: str, db: AsyncSession = Depends(get_db)):
             if result["stop_loss_price"] is not None
             else None
         ),
-        options_data=result["options_data"],
-        suggested_options=result["suggested_contracts"],
+        options_data=_jsonable(result["options_data"]),
+        suggested_options=_jsonable(result["suggested_contracts"]),
     )
     db.add(research)
     await db.commit()

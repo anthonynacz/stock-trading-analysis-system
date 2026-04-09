@@ -11,7 +11,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func as sa_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -22,8 +22,9 @@ from config import (
     MIN_MARKET_CAP,
     MIN_OPTIONS_VOLUME,
     SECTORS,
+    TOXIC_CONVICTION_DAYS,
 )
-from db.models import Recommendation, Sector, Watchlist, WatchlistDailySnapshot
+from db.models import Recommendation, Sector, UniverseStock, Watchlist, WatchlistDailySnapshot
 from utils.data_sources import DataSourceClient
 from utils.scoring import calculate_composite_score
 
@@ -42,74 +43,112 @@ class WatchlistManager:
     # ------------------------------------------------------------------
 
     async def score_universe(self) -> list[dict]:
-        """Score every ticker in the config universe.
+        """Score every ticker in the universe (DB-backed).
 
-        Calls ``data_client.get_stock_data`` (sync) via an executor and
-        computes sub-scores that feed into the composite score.
-        Returns a list of enriched dicts, one per ticker.
+        Reads the active universe from ``universe_stocks``, falling back
+        to ``config.SECTORS`` if the table is empty (first run before seed).
         """
         loop = asyncio.get_event_loop()
         scored: list[dict] = []
 
-        for sector_name, sector_cfg in SECTORS.items():
-            for ticker in sector_cfg["universe"]:
-                try:
-                    stock = await loop.run_in_executor(
-                        None, self._data_client.get_stock_data, ticker
-                    )
+        # Load universe from DB
+        us_result = await self._session.execute(
+            select(UniverseStock)
+            .where(UniverseStock.is_active.is_(True))
+            .options(selectinload(UniverseStock.sector))
+        )
+        universe = list(us_result.scalars().all())
 
-                    # Fetch earnings calendar for catalyst proximity
-                    earnings_list = await loop.run_in_executor(
-                        None, self._data_client.get_earnings_calendar, [ticker]
-                    )
+        # Fallback to config if DB universe is empty
+        if not universe:
+            logger.warning("universe_stocks table is empty — falling back to config.SECTORS")
+            ticker_sector_pairs = [
+                (ticker, sector_name)
+                for sector_name, cfg in SECTORS.items()
+                for ticker in cfg["universe"]
+            ]
+        else:
+            ticker_sector_pairs = [(us.ticker, us.sector.name) for us in universe]
+            logger.info("Scoring %d universe stocks from DB", len(ticker_sector_pairs))
 
-                    # Fetch analyst ratings for momentum / rating-change detection
-                    ratings = await loop.run_in_executor(
-                        None, self._data_client.get_analyst_ratings, ticker
-                    )
+        # Batch-load latest recommendation convictions for all tickers
+        conviction_map = await self._get_latest_convictions()
 
-                    # --- Sub-scores (0-100) --------------------------------
+        # Build a lookup for lazy company_name backfill
+        us_map = {us.ticker: us for us in universe} if universe else {}
 
-                    catalyst_proximity = self._score_catalyst_proximity(earnings_list)
-                    analyst_momentum = self._score_analyst_momentum(stock, ratings)
-                    options_liquidity = self._score_options_liquidity(stock)
-                    sector_momentum = self._score_sector_momentum(stock)
-                    volatility_profile = self._score_volatility_profile(stock)
-                    institutional_flow = 50.0  # hard to get freely
-                    price_vs_consensus_pt = self._score_price_vs_pt(stock)
+        for ticker, sector_name in ticker_sector_pairs:
+            try:
+                stock = await loop.run_in_executor(
+                    None, self._data_client.get_stock_data, ticker
+                )
 
-                    sub_scores: dict[str, float] = {
-                        "catalyst_proximity": catalyst_proximity,
-                        "analyst_momentum": analyst_momentum,
-                        "options_liquidity": options_liquidity,
-                        "sector_momentum": sector_momentum,
-                        "volatility_profile": volatility_profile,
-                        "institutional_flow": institutional_flow,
-                        "price_vs_consensus_pt": price_vs_consensus_pt,
+                # Lazy-fill company_name on UniverseStock if missing
+                us_row = us_map.get(ticker)
+                if us_row and not us_row.company_name and stock.get("company_name"):
+                    us_row.company_name = stock["company_name"]
+
+                # Fetch earnings calendar for catalyst proximity
+                earnings_list = await loop.run_in_executor(
+                    None, self._data_client.get_earnings_calendar, [ticker]
+                )
+
+                # Fetch analyst ratings for momentum / rating-change detection
+                ratings = await loop.run_in_executor(
+                    None, self._data_client.get_analyst_ratings, ticker
+                )
+
+                # --- Sub-scores (0-100) --------------------------------
+
+                catalyst_proximity = self._score_catalyst_proximity(earnings_list)
+                analyst_momentum = self._score_analyst_momentum(stock, ratings)
+                options_liquidity = self._score_options_liquidity(stock)
+                sector_momentum = self._score_sector_momentum(stock)
+                volatility_profile = self._score_volatility_profile(stock)
+                institutional_flow = 50.0  # hard to get freely
+                price_vs_consensus_pt = self._score_price_vs_pt(stock)
+
+                # Map conviction (-100..+100) → sub-score (0..100)
+                # No prior recommendation → neutral (50)
+                raw_conviction = conviction_map.get(ticker)
+                if raw_conviction is not None:
+                    recommendation_conviction = (raw_conviction + 100.0) / 2.0
+                else:
+                    recommendation_conviction = 50.0
+
+                sub_scores: dict[str, float] = {
+                    "catalyst_proximity": catalyst_proximity,
+                    "analyst_momentum": analyst_momentum,
+                    "recommendation_conviction": recommendation_conviction,
+                    "options_liquidity": options_liquidity,
+                    "sector_momentum": sector_momentum,
+                    "volatility_profile": volatility_profile,
+                    "institutional_flow": institutional_flow,
+                    "price_vs_consensus_pt": price_vs_consensus_pt,
+                }
+
+                composite = calculate_composite_score(sub_scores)
+
+                scored.append(
+                    {
+                        "ticker": ticker,
+                        "sector_name": sector_name,
+                        "company_name": stock.get("company_name"),
+                        "market_cap": stock.get("market_cap"),
+                        "avg_volume": stock.get("avg_volume"),
+                        "price": stock.get("price"),
+                        "beta": stock.get("beta"),
+                        "analyst_count": stock.get("analyst_count"),
+                        "avg_analyst_target": stock.get("avg_analyst_target"),
+                        "composite_score": composite,
+                        "has_catalyst_14d": catalyst_proximity >= 70,
+                        "has_recent_rating_change": self._has_recent_rating_change(ratings),
+                        **sub_scores,
                     }
+                )
 
-                    composite = calculate_composite_score(sub_scores)
-
-                    scored.append(
-                        {
-                            "ticker": ticker,
-                            "sector_name": sector_name,
-                            "company_name": stock.get("company_name"),
-                            "market_cap": stock.get("market_cap"),
-                            "avg_volume": stock.get("avg_volume"),
-                            "price": stock.get("price"),
-                            "beta": stock.get("beta"),
-                            "analyst_count": stock.get("analyst_count"),
-                            "avg_analyst_target": stock.get("avg_analyst_target"),
-                            "composite_score": composite,
-                            "has_catalyst_14d": catalyst_proximity >= 70,
-                            "has_recent_rating_change": self._has_recent_rating_change(ratings),
-                            **sub_scores,
-                        }
-                    )
-
-                except Exception:
-                    logger.exception("Failed to score ticker %s — skipping", ticker)
+            except Exception:
+                logger.exception("Failed to score ticker %s — skipping", ticker)
 
         return scored
 
@@ -292,7 +331,7 @@ class WatchlistManager:
         raw_additions_backfill.sort(key=lambda x: x["composite_score"], reverse=True)
 
         # Priority adds first, then backfill if watchlist is below target (30)
-        target_size = MAX_PER_SECTOR * len(SECTORS)
+        target_size = MAX_PER_SECTOR * len(by_sector)
         current_size = len(active_tickers)
         raw_additions = list(raw_additions_priority)
         if current_size + len(raw_additions) < target_size:
@@ -300,9 +339,11 @@ class WatchlistManager:
             raw_additions.extend(raw_additions_backfill[:slots])
 
         # Determine removals: in active watchlist but not in candidates,
-        # or stale (>30 days, no catalyst, no open recommendation)
+        # stale (>30 days, no catalyst, no open recommendation),
+        # or toxic (consecutive SELL/STRONG_SELL recommendations)
         today = date.today()
         open_rec_tickers = await self._get_open_recommendation_tickers()
+        toxic_tickers = await self._get_toxic_tickers()
 
         raw_removals: list[dict] = []
         for ticker, wl in active_map.items():
@@ -310,6 +351,14 @@ class WatchlistManager:
                 continue  # never auto-remove manual or locked entries
             if ticker not in candidate_tickers:
                 raw_removals.append({"ticker": ticker, "reason": "dropped from top candidates"})
+                continue
+
+            # Toxic removal: consecutive bearish recommendations
+            if ticker in toxic_tickers:
+                raw_removals.append({
+                    "ticker": ticker,
+                    "reason": f"toxic — {TOXIC_CONVICTION_DAYS}+ consecutive SELL/STRONG_SELL",
+                })
                 continue
 
             days_on = (today - wl.added_date).days if wl.added_date else 0
@@ -353,6 +402,79 @@ class WatchlistManager:
             return {row[0] for row in result.all()}
         except Exception:
             logger.exception("Failed to query open recommendations")
+            return set()
+
+    async def _get_latest_convictions(self) -> dict[str, float]:
+        """Return the most recent conviction score for each ticker.
+
+        Used to feed recommendation output back into watchlist scoring.
+        Maps conviction (-100..+100) → raw value; caller converts to 0-100.
+        """
+        try:
+            # Subquery: latest recommendation date per ticker
+            latest_sq = (
+                select(
+                    Recommendation.ticker,
+                    sa_func.max(Recommendation.recommendation_date).label("max_date"),
+                )
+                .group_by(Recommendation.ticker)
+                .subquery()
+            )
+            result = await self._session.execute(
+                select(Recommendation.ticker, Recommendation.conviction_score)
+                .join(
+                    latest_sq,
+                    (Recommendation.ticker == latest_sq.c.ticker)
+                    & (Recommendation.recommendation_date == latest_sq.c.max_date),
+                )
+            )
+            return {
+                row.ticker: float(row.conviction_score)
+                for row in result.all()
+                if row.conviction_score is not None
+            }
+        except Exception:
+            logger.exception("Failed to query latest convictions")
+            return {}
+
+    async def _get_toxic_tickers(self) -> set[str]:
+        """Return tickers with N+ consecutive SELL/STRONG_SELL recommendations.
+
+        These should be flagged for removal regardless of composite score.
+        """
+        try:
+            cutoff = date.today() - timedelta(days=TOXIC_CONVICTION_DAYS + 5)
+            result = await self._session.execute(
+                select(
+                    Recommendation.ticker,
+                    Recommendation.action,
+                    Recommendation.recommendation_date,
+                )
+                .where(Recommendation.recommendation_date >= cutoff)
+                .order_by(Recommendation.ticker, Recommendation.recommendation_date.desc())
+            )
+            rows = result.all()
+
+            # Group by ticker, check if last N recs are all SELL/STRONG_SELL
+            by_ticker: dict[str, list[str]] = {}
+            for row in rows:
+                by_ticker.setdefault(row.ticker, []).append(row.action)
+
+            toxic = set()
+            for ticker, actions in by_ticker.items():
+                # actions are ordered most-recent-first
+                consecutive_bearish = 0
+                for action in actions:
+                    if action in ("SELL", "STRONG_SELL"):
+                        consecutive_bearish += 1
+                    else:
+                        break
+                if consecutive_bearish >= TOXIC_CONVICTION_DAYS:
+                    toxic.add(ticker)
+
+            return toxic
+        except Exception:
+            logger.exception("Failed to query toxic tickers")
             return set()
 
     # ------------------------------------------------------------------

@@ -50,7 +50,8 @@ edgeflow/
 
 The daily workflow runs as a phased pipeline orchestrated by APScheduler in `scheduler.py`. All times US Eastern:
 
-1. **watchlist_manager.py** — Scores ~70 stocks across 5 sectors, applies liquidity filters (≥$5B cap, ≥2M vol, ≥1K options vol, ≥5 analysts), rotates watchlist (max 30 active, max 5 changes/day). Manual (`is_manual`) and locked (`is_locked`) entries are protected from rotation. Uses delete-before-insert for idempotent daily snapshots.
+0. **universe_discoverer.py** — Scans FMP market lists (most active, gainers, losers) and news-trending tickers to surface candidates for user approval into the universe. Runs at 05:00 EST before watchlist rotation. Candidates go to `discovery_candidates` table with `PENDING` status; user approves/dismisses via `/api/universe/candidates/{id}/approve|dismiss`.
+1. **watchlist_manager.py** — Scores stocks from `universe_stocks` DB table (not hardcoded config) across 5 sectors, applies liquidity filters (≥$5B cap, ≥2M vol, ≥1K options vol, ≥5 analysts), rotates watchlist (max 30 active, max 5 changes/day). Manual (`is_manual`) and locked (`is_locked`) entries are protected from rotation. Uses delete-before-insert for idempotent daily snapshots. Composite score includes `recommendation_conviction` (15% weight) — feeds the recommendation engine's output back into watchlist ranking so SELL/STRONG_SELL stocks are deprioritized. Toxic removal: tickers with 3+ consecutive SELL/STRONG_SELL recommendations are flagged for removal regardless of composite score (`TOXIC_CONVICTION_DAYS` in config).
 2. **analyst_tracker.py** — Detects rating changes since prior close, classifies as TIER_CHANGE/PT_CHANGE/INITIATION/REITERATION, scores by firm tier (T1=bulge bracket, T2=mid-tier, T3=boutique)
 3. **earnings_calendar.py** — Tracks earnings dates, manages catalyst windows (T-7 to T+10). Sanitizes yfinance garbage in `earnings_time` (float values → null) and `fiscal_quarter` (revenue estimates → null).
 4. **news_scanner.py** — Fetches/categorizes news, scores sentiment via **FinBERT** (ProsusAI/finbert) using batch inference. FinBERT returns continuous scores in [-1.0, 1.0] with financial domain understanding. Model loads once (singleton in `utils/finbert.py`) and persists in memory. Tracks per-ticker relevance via `news_ticker_relevance` junction table (many-to-many). Relevance scored by text matching: HEADLINE=1.0, SUMMARY=0.7, API_RELATED=0.5, SEARCHED=0.3. Duplicate articles (same URL) skip MarketNews creation but backfill relevance rows for newly-relevant tickers.
@@ -59,16 +60,20 @@ The daily workflow runs as a phased pipeline orchestrated by APScheduler in `sch
 
 ### Signal Stacking (conviction scoring)
 
-Signals are stacked across six categories. Classification thresholds: ≥60 STRONG_BUY, 30-59 BUY, -15 to 29 HOLD, -30 to -16 SELL, ≤-31 STRONG_SELL.
+Signals are stacked across eight categories. Classification thresholds: ≥60 STRONG_BUY, 30-59 BUY, -15 to 29 HOLD, -30 to -16 SELL, ≤-31 STRONG_SELL.
 
 **Analyst signals**: T1/T2/T3 upgrades (+15 to +40) / downgrades (-15 to -40), PT raises (+10/+15) / cuts (-10/-15).
 **Earnings signals**: Beat (+20), Beat+Raised (+30), Miss (-20), Miss+Lowered (-30), Active Catalyst Window (+5).
-**Technical signals**: RSI oversold/overbought (±10/±15), price vs 50d SMA (±10), price vs 200d SMA (±5), near 52w high (+5), deep pullback from 52w high (+10), 5d momentum (±10), 20d momentum (±10), volume-confirmed moves (±10), short squeeze setup (+15), high short interest (-5).
-**Options signals**: Unusual call volume (+15) / put volume (-15) vs 20-day historical avg, put/call OI skew (±10), high IV rank (-10). Unusual volume uses `_get_historical_avg_volume()` to query past `options_snapshots` for a true baseline.
+**Technical signals**: RSI oversold/overbought (±10/±15), price vs 50d SMA (±10), price vs 200d SMA (±5), 5d/20d momentum (±10), volume-confirmed moves (±10), short squeeze setup (+15), high short interest (-5).
+**Drawdown signals**: Sharp 1d drop >5% (-15), rapid 2d drawdown >7% (-20), rapid 3d drawdown >10% (-15), distribution/heavy selling volume (-10). These fire independently and stack.
+**Reversal signals**: Oversold Bounce Setup (+15/+20) and Strong Reversal Setup (+20/+25) fire only when drawdown is active AND RSI <30 AND price near support (200d SMA or 52w low). Selling exhaustion (low down-day volume) adds confidence.
+**52-week & value signals (context-gated)**: Near 52w high (+5), deep pullback (+10 normally, +5 if actively declining). Below consensus PT (+10 normally, +5 if actively declining). Gating prevents value traps during falling-knife scenarios.
+**Relative strength**: Stock vs SPY 5d momentum comparison. Outperforming (+10), underperforming (-10). SPY data fetched once per pipeline via `get_market_benchmark()`.
+**Options signals**: Unusual call volume (+15) / put volume (-15) vs 20-day historical avg, put/call OI skew (±10), high IV rank (-10).
 **News signals**: FinBERT sentiment scaled by magnitude and article count (±5 to ±15), sector tailwind/headwind (±10).
-**Other**: Below consensus PT (+10), insider buying (+5) / selling (-5), stock already moved (-5).
+**Other**: Insider buying (+5) / selling (-5), stock already moved (-5).
 
-Technical indicators (RSI-14, 5d/20d momentum, volume ratio) are computed from yfinance price history via `DataSourceClient.get_technical_indicators()`. Moving averages (50d, 200d), short interest, and 52-week range come from yfinance `.info` via `get_stock_data()`.
+Technical indicators (RSI-14, 5d/20d momentum, volume ratio, drawdown metrics, consecutive down days, down-day volume ratio) are computed from yfinance 2-month price history via `DataSourceClient.get_technical_indicators()`. Moving averages (50d, 200d), short interest, and 52-week range come from yfinance `.info` via `get_stock_data()`. SPY benchmark comes from `get_market_benchmark()`.
 
 ### Strike Recommender
 
@@ -147,7 +152,7 @@ asyncio.run(rescore())
 
 ## Database
 
-PostgreSQL 16. Key tables: `sectors`, `watchlist`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `news_ticker_relevance`, `options_snapshots`, `suggested_options`, `recommendations`, `strike_snapshots`, `research_results`. Schema created via `db/init_db.py` using SQLAlchemy models from `db/models.py`. The `recommendations` table must be created before `suggested_options` (FK dependency).
+PostgreSQL 16. Key tables: `sectors`, `universe_stocks`, `discovery_candidates`, `watchlist`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `news_ticker_relevance`, `options_snapshots`, `suggested_options`, `recommendations`, `strike_snapshots`, `research_results`. Schema created via `db/init_db.py` using SQLAlchemy models from `db/models.py`. The `recommendations` table must be created before `suggested_options` (FK dependency). `universe_stocks` is seeded from `config.SECTORS` on first init.
 
 All `DateTime` columns use `DateTime(timezone=True)` (maps to PostgreSQL `TIMESTAMPTZ`). This is required because asyncpg strictly rejects tz-aware Python datetimes for `TIMESTAMP WITHOUT TIME ZONE` columns. Schema changes require dropping and recreating tables (no Alembic migrations yet).
 
@@ -195,18 +200,27 @@ GET  /api/strikes/snapshots            # Load saved snapshot; ?date=
 GET  /api/strikes/snapshots/dates      # List dates with saved snapshots
 GET  /api/trends/{ticker}               # Daily trend data with SMA; ?days=20&sma=5
 GET  /api/status                       # Health check, last refresh times
-POST /api/refresh                      # Manual full pipeline trigger
+POST /api/refresh                      # Legacy full pipeline trigger (same as /pipeline/run with no body)
+POST /api/pipeline/run                 # Start pipeline; body { phases?: string[] } for selective runs
+GET  /api/pipeline/status              # Poll pipeline progress (status, current phase, completed phases)
 POST /api/research/{ticker}            # On-demand full analysis for any ticker (~30-60s)
 GET  /api/research                     # List research results; ?ticker=&limit=&offset=
 GET  /api/research/{id}                # Single research result
 DELETE /api/research/{id}              # Delete research result
+GET  /api/universe                     # Universe grouped by sector + pending candidate count
+POST /api/universe                     # Add stock to universe { ticker, sector }
+DELETE /api/universe/{ticker}          # Soft-remove stock from universe
+GET  /api/universe/candidates          # List pending discovery candidates
+POST /api/universe/candidates/{id}/approve  # Approve candidate into sector { sector }
+POST /api/universe/candidates/{id}/dismiss  # Dismiss candidate
+POST /api/universe/discover            # Trigger discovery manually
 ```
 
 ## Frontend
 
 ### Dashboard Layout
 
-The app uses react-router-dom with two routes: `/` (Dashboard) and `/research` (Research). A top nav bar (`AppNav`) with "Dashboard" and "Research" links sits above both pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
+The app uses react-router-dom with three routes: `/` (Dashboard), `/universe` (Universe), and `/research` (Research). A top nav bar (`AppNav`) with "Dashboard", "Universe", and "Research" links sits above all pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
 
 The Dashboard has the following sections:
 1. **StatusBar** — Date stepper (left/right arrows to navigate pipeline days), refresh button, system status
@@ -223,6 +237,10 @@ The Dashboard has the following sections:
 - **Strike Recommender**: Budget slider ($50-$10,000), single "Find Strikes" fetch returns all 3 risk profiles, tabs switch instantly. Green/gray dots on tabs indicate which profiles have results. Call cards (green border) and put cards (red border) show strike, expiry, premium, delta, breakeven, OI, and explanation.
 - **Sentiment indicators**: Options flow metrics (IV Rank, Put/Call Ratio, volumes) show color-coded sentiment tags (Bullish/Bearish/Neutral/Elevated).
 - **Date navigation**: Historical dates poll-disabled, driven from `watchlist_daily_snapshot`. Today drives from active watchlist + snapshot overlay.
+
+### Universe Page
+
+Universe management at `/universe`. Two-tab layout: **Universe** tab shows all stocks grouped by sector with source badges (SEED/MANUAL/DISCOVERED), add-ticker input with sector dropdown, and remove buttons. **Candidates** tab shows pending discovery candidates with price, change %, market cap, rationale, sector dropdown defaulting to suggested sector, and approve/dismiss buttons. "Run Discovery" button triggers manual discovery scan. Pending count badge on the Candidates tab.
 
 ### Research Page
 
@@ -283,7 +301,7 @@ For local dev, `.env` at project root with `DATABASE_URL` pointing to `localhost
 
 ## Sector Universe
 
-5 sectors with ~13 stocks each (~70 total universe). Active watchlist is max 30 (6 per sector). Sectors: AI/Semiconductors, Fintech/Payments, Energy/Commodities, Healthcare/Biotech, Consumer/Cloud/Enterprise.
+5 sectors with ~13 stocks each (~68 total universe, stored in `universe_stocks` table). Seeded from `config.SECTORS` on first init; expandable via Universe page (manual add or discovery approval). Active watchlist is max 30 (6 per sector). Sectors: AI/Semiconductors, Fintech/Payments, Energy/Commodities, Healthcare/Biotech, Consumer/Cloud/Enterprise.
 
 ## Pipeline Idempotency
 

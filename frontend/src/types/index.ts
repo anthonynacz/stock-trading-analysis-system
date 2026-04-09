@@ -141,9 +141,20 @@ export interface SystemStatus {
   version: string;
 }
 
+export interface PipelineRunStatus {
+  status: 'idle' | 'running' | 'completed' | 'failed';
+  phases: string[];
+  completed: string[];
+  current: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+}
+
 export interface WatchlistChange {
   ticker: string;
   sector: string | null;
+  reason: string | null;
 }
 
 export interface WatchlistChanges {
@@ -205,4 +216,44 @@ export interface ResearchResult {
     unusual_activity_detail: string | null;
   } | null;
   suggested_options: SuggestedOption[];
+}
+
+// ── Universe management ──────────────────────────────────────────────────
+
+export interface UniverseStock {
+  id: number;
+  ticker: string;
+  company_name: string | null;
+  sector: string | null;
+  source: 'SEED' | 'MANUAL' | 'DISCOVERED';
+  is_active: boolean;
+  added_at: string;
+}
+
+export interface UniverseSectorGroup {
+  name: string;
+  stock_count: number;
+  stocks: UniverseStock[];
+}
+
+export interface UniverseSummary {
+  sectors: UniverseSectorGroup[];
+  total_stocks: number;
+  pending_candidates: number;
+}
+
+export interface DiscoveryCandidate {
+  id: number;
+  ticker: string;
+  company_name: string | null;
+  suggested_sector: string | null;
+  discovered_at: string;
+  source: string;
+  score: number | null;
+  market_cap: number | null;
+  avg_volume: number | null;
+  price: number | null;
+  change_pct: number | null;
+  rationale: string | null;
+  status: 'PENDING' | 'APPROVED' | 'DISMISSED';
 }

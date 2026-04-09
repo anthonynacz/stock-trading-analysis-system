@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useMemo, useCallback } from 'react';
+import type { Recommendation } from '../types';
 import {
   useWatchlist,
   useRecommendations,
@@ -8,7 +9,7 @@ import {
   usePipelineDates,
   useWatchlistChanges,
 } from '../hooks/useEdgeFlow';
-import { triggerRefresh, addToWatchlist, removeFromWatchlist, toggleLockTicker } from '../utils/api';
+import { addToWatchlist, removeFromWatchlist, toggleLockTicker } from '../utils/api';
 import StatusBar from '../components/StatusBar';
 import WatchlistChanges from '../components/WatchlistChanges';
 import WatchlistGrid from '../components/WatchlistGrid';
@@ -37,7 +38,6 @@ function SectionError({ message }: { message: string }) {
 }
 
 export default function Dashboard() {
-  const [refreshing, setRefreshing] = useState(false);
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().slice(0, 10),
   );
@@ -64,23 +64,25 @@ export default function Dashboard() {
     ? watchlist.data?.find((w) => w.ticker === selectedTicker)?.company_name ?? undefined
     : undefined;
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    try {
-      await triggerRefresh();
-      watchlist.refetch();
-      recommendations.refetch();
-      watchlistChanges.refetch();
-      news.refetch();
-      catalysts.refetch();
-      status.refetch();
-      pipelineDates.refetch();
-    } catch {
-      // Status bar will reflect errors via status hook
-    } finally {
-      setRefreshing(false);
+  // Build ticker → recommendation map for watchlist card sorting/coloring
+  const recMap = useMemo(() => {
+    const map = new Map<string, Recommendation>();
+    for (const rec of recommendations.data ?? []) {
+      if (!map.has(rec.ticker)) map.set(rec.ticker, rec);
     }
-  };
+    return map;
+  }, [recommendations.data]);
+
+  const handlePipelineComplete = useCallback(() => {
+    watchlist.refetch();
+    recommendations.refetch();
+    watchlistChanges.refetch();
+    news.refetch();
+    catalysts.refetch();
+    status.refetch();
+    pipelineDates.refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleAddTicker = async () => {
     const ticker = addTickerInput.trim().toUpperCase();
@@ -126,8 +128,7 @@ export default function Dashboard() {
       {/* Status Bar with Date Stepper */}
       <StatusBar
         status={status.data}
-        onRefresh={handleRefresh}
-        refreshing={refreshing}
+        onComplete={handlePipelineComplete}
         selectedDate={selectedDate}
         availableDates={pipelineDates.data?.dates ?? []}
         onDateChange={setSelectedDate}
@@ -135,11 +136,18 @@ export default function Dashboard() {
 
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-8">
         {/* Watchlist Changes (Entrants / Exiters) */}
-        {watchlistChanges.data && (
-          <WatchlistChanges
-            entrants={watchlistChanges.data.entrants}
-            exiters={watchlistChanges.data.exiters}
-          />
+        {watchlistChanges.data &&
+          (watchlistChanges.data.entrants.length > 0 ||
+            watchlistChanges.data.exiters.length > 0) && (
+          <section>
+            <h2 className="text-xl font-bold text-text-primary mb-4">
+              Watchlist Changes
+            </h2>
+            <WatchlistChanges
+              entrants={watchlistChanges.data.entrants}
+              exiters={watchlistChanges.data.exiters}
+            />
+          </section>
         )}
 
         {/* Watchlist + Ticker Detail — two-column layout */}
@@ -181,6 +189,7 @@ export default function Dashboard() {
                 onRemove={handleRemoveTicker}
                 onToggleLock={handleToggleLock}
                 selectedTicker={selectedTicker}
+                recommendations={recMap}
               />
             )}
           </section>

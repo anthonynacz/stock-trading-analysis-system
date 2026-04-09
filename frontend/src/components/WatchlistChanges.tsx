@@ -5,50 +5,74 @@ interface WatchlistChangesProps {
   exiters: WatchlistChange[];
 }
 
-export default function WatchlistChanges({ entrants, exiters }: WatchlistChangesProps) {
-  if (entrants.length === 0 && exiters.length === 0) {
-    return (
-      <div className="bg-card border border-border rounded-lg px-4 py-2.5 text-text-secondary text-sm text-center">
-        No watchlist changes
+function ChangeCard({
+  item,
+  type,
+}: {
+  item: WatchlistChange;
+  type: 'entrant' | 'exiter';
+}) {
+  const isEntrant = type === 'entrant';
+  return (
+    <div
+      className={`bg-card border rounded-lg p-3 ${
+        isEntrant
+          ? 'border-green-800/60'
+          : 'border-red-800/60'
+      }`}
+    >
+      <div className="flex items-center gap-2 mb-1">
+        <span
+          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+            isEntrant ? 'bg-green-500' : 'bg-red-500'
+          }`}
+        />
+        <span className="text-sm font-bold text-text-primary">
+          {item.ticker}
+        </span>
+        {item.sector && (
+          <span className="text-[10px] text-text-secondary">
+            {item.sector}
+          </span>
+        )}
       </div>
-    );
-  }
+      {item.reason && (
+        <p className="text-xs text-text-secondary ml-3.5 leading-relaxed">
+          {item.reason}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export default function WatchlistChanges({
+  entrants,
+  exiters,
+}: WatchlistChangesProps) {
+  if (entrants.length === 0 && exiters.length === 0) return null;
 
   return (
-    <div className="bg-card border border-border rounded-lg px-4 py-2.5 flex items-center gap-4 text-sm flex-wrap">
+    <div className="space-y-3">
       {entrants.length > 0 && (
-        <div className="flex items-center gap-2">
-          <span className="text-green-500 font-bold text-xs">+</span>
-          <span className="text-text-secondary">Entered:</span>
-          <div className="flex items-center gap-1.5">
+        <div>
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-green-400 mb-2">
+            + Entered ({entrants.length})
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
             {entrants.map((e) => (
-              <span
-                key={e.ticker}
-                className="px-1.5 py-0.5 rounded bg-green-900/30 text-green-400 font-semibold text-xs"
-              >
-                {e.ticker}
-              </span>
+              <ChangeCard key={e.ticker} item={e} type="entrant" />
             ))}
           </div>
         </div>
       )}
-
-      {entrants.length > 0 && exiters.length > 0 && (
-        <div className="w-px h-4 bg-border" />
-      )}
-
       {exiters.length > 0 && (
-        <div className="flex items-center gap-2">
-          <span className="text-red-500 font-bold text-xs">-</span>
-          <span className="text-text-secondary">Removed:</span>
-          <div className="flex items-center gap-1.5">
+        <div>
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-red-400 mb-2">
+            - Removed ({exiters.length})
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
             {exiters.map((e) => (
-              <span
-                key={e.ticker}
-                className="px-1.5 py-0.5 rounded bg-red-900/30 text-red-400 font-semibold text-xs"
-              >
-                {e.ticker}
-              </span>
+              <ChangeCard key={e.ticker} item={e} type="exiter" />
             ))}
           </div>
         </div>

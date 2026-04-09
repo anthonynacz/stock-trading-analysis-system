@@ -8,11 +8,15 @@ import type {
   SystemStatus,
   WatchlistChanges,
   PipelineDates,
+  PipelineRunStatus,
   StrikeRecommenderResult,
   StrikeAllResult,
   WatchlistStrikesResult,
   TrendData,
   ResearchResult,
+  UniverseSummary,
+  UniverseStock,
+  DiscoveryCandidate,
 } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
@@ -101,6 +105,12 @@ export const getStatus = () =>
 
 export const triggerRefresh = () =>
   api.post<{ status: string }>('/refresh').then((r) => r.data);
+
+export const startPipeline = (phases?: string[]) =>
+  api.post<{ status: string; phases: string[] }>('/pipeline/run', phases ? { phases } : {}).then((r) => r.data);
+
+export const getPipelineStatus = () =>
+  api.get<PipelineRunStatus>('/pipeline/status').then((r) => r.data);
 
 export const getPipelineDates = () =>
   api.get<PipelineDates>('/pipeline-dates').then((r) => r.data);
@@ -195,4 +205,27 @@ export const getResearchResult = (id: number) =>
 
 export const deleteResearchResult = (id: number) =>
   api.delete(`/research/${id}`);
+
+// ── Universe ────────────────────────────────────────────────────────────────
+
+export const getUniverse = () =>
+  api.get<UniverseSummary>('/universe').then((r) => r.data);
+
+export const addToUniverse = (ticker: string, sector: string) =>
+  api.post<UniverseStock>('/universe', { ticker, sector }).then((r) => r.data);
+
+export const removeFromUniverse = (ticker: string) =>
+  api.delete(`/universe/${ticker}`).then((r) => r.data);
+
+export const getDiscoveryCandidates = () =>
+  api.get<DiscoveryCandidate[]>('/universe/candidates').then((r) => r.data);
+
+export const approveCandidate = (id: number, sector: string) =>
+  api.post<UniverseStock>(`/universe/candidates/${id}/approve`, { sector }).then((r) => r.data);
+
+export const dismissCandidate = (id: number) =>
+  api.post(`/universe/candidates/${id}/dismiss`).then((r) => r.data);
+
+export const triggerDiscovery = () =>
+  api.post('/universe/discover').then((r) => r.data);
 
