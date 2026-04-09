@@ -44,12 +44,16 @@ EASTERN = pytz.timezone("US/Eastern")
 
 ALL_PHASES = ["discovery", "watchlist", "ratings", "earnings", "news", "options", "recommendations"]
 
+# Phases that are safe to run concurrently (independent data-fetchers,
+# separate tables, no cross-reads).
+PARALLEL_PHASES = {"ratings", "earnings", "news", "options"}
+
 # Pipeline run tracking for frontend progress bar
 pipeline_run: dict = {
     "status": "idle",        # idle | running | completed | failed
     "phases": [],            # phases requested
     "completed": [],         # phases finished so far
-    "current": None,         # phase currently executing
+    "current": None,         # phase currently executing (or "ratings+earnings+..." for parallel)
     "started_at": None,
     "finished_at": None,
     "error": None,
@@ -146,8 +150,15 @@ async def run_full_pipeline() -> None:
 
 
 async def run_tracked_pipeline(phases: list[str]) -> None:
-    """Run selected phases in sequence with progress tracking."""
+    """Run selected phases with progress tracking.
+
+    Consecutive parallelizable phases (ratings, earnings, news, options)
+    are grouped and run concurrently via ``asyncio.gather``, each with
+    its own DB session and DataSourceClient.  All other phases run
+    sequentially in order.
+    """
     global pipeline_run
+    import asyncio
 
     pipeline_run = {
         "status": "running",
@@ -160,13 +171,62 @@ async def run_tracked_pipeline(phases: list[str]) -> None:
     }
 
     start = datetime.now(tz=EASTERN)
-    logger.info("Tracked pipeline started: %s", phases)
+
+    # Group consecutive parallelizable phases into batches.
+    # E.g. [discovery, watchlist, ratings, earnings, news, options, recommendations]
+    # becomes: [[discovery], [watchlist], [ratings, earnings, news, options], [recommendations]]
+    batches: list[list[str]] = []
+    for phase in phases:
+        if phase in PARALLEL_PHASES:
+            # Append to current parallel batch if the last batch is also parallel
+            if batches and all(p in PARALLEL_PHASES for p in batches[-1]):
+                batches[-1].append(phase)
+            else:
+                batches.append([phase])
+        else:
+            batches.append([phase])
+
+    logger.info(
+        "Tracked pipeline started: %s (%d batches, parallel: %s)",
+        phases, len(batches),
+        [b for b in batches if len(b) > 1],
+    )
 
     try:
-        for phase in phases:
-            pipeline_run["current"] = phase
-            await run_pipeline_phase(phase)
-            pipeline_run["completed"].append(phase)
+        for batch in batches:
+            if len(batch) == 1:
+                # Sequential phase
+                phase = batch[0]
+                pipeline_run["current"] = phase
+                await run_pipeline_phase(phase)
+                pipeline_run["completed"].append(phase)
+            else:
+                # Parallel batch
+                pipeline_run["current"] = "+".join(batch)
+                logger.info("Running parallel batch: %s", batch)
+
+                async def _run_and_track(p: str) -> None:
+                    """Wrapper that marks a phase complete as soon as it finishes."""
+                    await run_pipeline_phase(p)
+                    pipeline_run["completed"].append(p)
+                    # Update current to only show still-running phases
+                    remaining = [
+                        x for x in batch
+                        if x not in pipeline_run["completed"]
+                    ]
+                    pipeline_run["current"] = "+".join(remaining) if remaining else None
+
+                results = await asyncio.gather(
+                    *[_run_and_track(p) for p in batch],
+                    return_exceptions=True,
+                )
+
+                # Log any failures but don't abort the whole pipeline
+                for phase, result in zip(batch, results):
+                    if isinstance(result, Exception):
+                        logger.error("Parallel phase '%s' failed: %s", phase, result)
+                        if phase not in pipeline_run["completed"]:
+                            pipeline_run["completed"].append(phase)
 
         pipeline_run["status"] = "completed"
         pipeline_run["current"] = None

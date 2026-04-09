@@ -131,9 +131,19 @@ export default function PipelineRunner({ onComplete }: Props) {
     const phases = run?.phases ?? ALL_PHASES.map((p) => p.key);
     const completedSet = new Set(run?.completed ?? []);
     const current = run?.current;
+    // current can be "ratings+earnings+news+options" for parallel batches
+    const currentSet = new Set(current?.split('+') ?? []);
+    const isParallel = currentSet.size > 1;
     const pct = phases.length > 0
       ? Math.round((completedSet.size / phases.length) * 100)
       : 0;
+
+    // Build a display label for the current phase(s)
+    const currentLabel = isParallel
+      ? `${currentSet.size} phases`
+      : current
+        ? ALL_PHASES.find((p) => p.key === current)?.label ?? current
+        : null;
 
     return (
       <div className="flex items-center gap-3">
@@ -147,11 +157,9 @@ export default function PipelineRunner({ onComplete }: Props) {
 
             if (completedSet.has(phase)) {
               color = PHASE_COLORS.done;
-            } else if (phase === current) {
+            } else if (currentSet.has(phase)) {
               color = PHASE_COLORS.running;
               animate = true;
-            } else if (run?.status === 'failed' && phase === current) {
-              color = PHASE_COLORS.failed;
             } else {
               color = PHASE_COLORS.pending;
             }
@@ -193,8 +201,8 @@ export default function PipelineRunner({ onComplete }: Props) {
             ? 'Failed'
             : isDone
               ? 'Done'
-              : current
-                ? `${ALL_PHASES.find((p) => p.key === current)?.label ?? current}...`
+              : currentLabel
+                ? `${currentLabel}...`
                 : 'Starting...'}
         </span>
       </div>
