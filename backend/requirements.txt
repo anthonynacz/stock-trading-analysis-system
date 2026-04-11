@@ -14,3 +14,4 @@ pytz>=2024.1
 tzdata>=2024.1
 transformers>=4.40.0
 torch>=2.2.0
+reportlab>=4.1.0

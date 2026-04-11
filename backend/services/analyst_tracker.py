@@ -89,11 +89,11 @@ class AnalystTracker:
 
         # Deduplicate: same ticker + firm + published_at already in DB?
         existing = await self._session.execute(
-            select(AnalystRating).where(
+            select(AnalystRating.id).where(
                 AnalystRating.ticker == ticker,
                 AnalystRating.analyst_firm == firm,
                 AnalystRating.published_at == published_at,
-            )
+            ).limit(1)
         )
         if existing.scalar_one_or_none() is not None:
             return None

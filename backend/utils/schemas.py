@@ -319,3 +319,60 @@ class DiscoveryCandidateResponse(BaseModel):
 
 class CandidateApproveRequest(BaseModel):
     sector: str
+
+
+# ── Positions ────────────────────────────────────────────────────────────
+
+
+class PositionCreateRequest(BaseModel):
+    ticker: str
+    position_type: str  # CALL, PUT, STOCK
+    quantity: int = 1
+    entry_price: Decimal
+    strike_price: Optional[Decimal] = None
+    premium_paid: Optional[Decimal] = None
+    expiry: Optional[date] = None
+    stop_loss: Optional[Decimal] = None
+    target_price: Optional[Decimal] = None
+    notes: Optional[str] = None
+
+
+class PositionUpdateRequest(BaseModel):
+    stop_loss: Optional[Decimal] = None
+    target_price: Optional[Decimal] = None
+    notes: Optional[str] = None
+    current_price: Optional[Decimal] = None
+
+
+class PositionCloseRequest(BaseModel):
+    close_price: Decimal
+    notes: Optional[str] = None
+
+
+class PositionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ticker: str
+    company_name: Optional[str] = None
+    position_type: str
+    quantity: int
+    entry_price: Decimal
+    current_price: Optional[Decimal] = None
+    strike_price: Optional[Decimal] = None
+    premium_paid: Optional[Decimal] = None
+    expiry: Optional[date] = None
+    stop_loss: Optional[Decimal] = None
+    target_price: Optional[Decimal] = None
+    status: str
+    opened_at: datetime
+    closed_at: Optional[datetime] = None
+    close_price: Optional[Decimal] = None
+    realized_pnl: Optional[Decimal] = None
+    notes: Optional[str] = None
+    # Computed fields (not in DB)
+    unrealized_pnl: Optional[Decimal] = None
+    unrealized_pnl_pct: Optional[float] = None
+    days_to_expiry: Optional[int] = None
+    is_on_watchlist: bool = False
+    recommendation: Optional[RecommendationResponse] = None

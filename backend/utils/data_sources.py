@@ -7,6 +7,7 @@ per-source rate limiting, TTL caching, and fallback chains.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -158,6 +159,7 @@ class DataSourceClient:
                 "beta": info.get("beta"),
                 "pe_ratio": info.get("trailingPE"),
                 "sector": info.get("sector"),
+                "industry": info.get("industry"),
                 "company_name": info.get("shortName") or info.get("longName"),
                 "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
                 "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
@@ -204,6 +206,19 @@ class DataSourceClient:
 
             closes = hist["Close"].dropna()
             volumes = hist["Volume"].dropna()
+
+            # ── OHLC extraction (fallback-safe) ────────────────────
+            ohlc_available = (
+                "Open" in hist.columns and "High" in hist.columns
+                and "Low" in hist.columns
+                and not hist[["Open", "High", "Low"]].dropna().empty
+            )
+            if ohlc_available:
+                opens = hist["Open"].dropna()
+                highs = hist["High"].dropna()
+                lows = hist["Low"].dropna()
+            else:
+                opens = highs = lows = None
 
             # ── RSI-14 (Wilder's smoothed) ──────────────────────────
             if len(closes) >= 15:
@@ -277,6 +292,43 @@ class DataSourceClient:
                         # >1 = heavier volume on down days (distribution)
                         # <1 = lighter volume on down days (exhaustion)
                         result["down_day_volume_ratio"] = avg_down_vol / avg_up_vol
+
+            # ── OHLC: Upper Wick Rejection ──────────────────────────
+            if ohlc_available and len(closes) >= 2 and len(highs) >= 1 and len(lows) >= 1:
+                today_close = float(closes.iloc[-1])
+                prior_close = float(closes.iloc[-2])
+                today_high = float(highs.iloc[-1])
+                today_low = float(lows.iloc[-1])
+                day_range = today_high - today_low
+                if (today_close > prior_close and day_range > 0
+                        and not any(math.isnan(v) for v in (today_close, today_high, today_low))):
+                    wick_pct = (today_high - today_close) / day_range
+                    if wick_pct > 0.60:
+                        result["ohlc_upper_wick_rejection"] = round(wick_pct * 100, 1)
+
+            # ── OHLC: Gap-Down After Up Day ─────────────────────────
+            if ohlc_available and len(closes) >= 3 and len(opens) >= 1:
+                yesterday_close = float(closes.iloc[-2])
+                prior_close_2d = float(closes.iloc[-3])
+                today_open = float(opens.iloc[-1])
+                if (prior_close_2d > 0 and yesterday_close > 0
+                        and not any(math.isnan(v) for v in (yesterday_close, prior_close_2d, today_open))):
+                    yesterday_return = ((yesterday_close - prior_close_2d) / prior_close_2d) * 100
+                    gap_pct = ((today_open - yesterday_close) / yesterday_close) * 100
+                    if yesterday_return > 1.0 and gap_pct < -0.5:
+                        result["ohlc_gap_down_after_up"] = round(gap_pct, 2)
+
+            # ── OHLC: Close Position in Range ───────────────────────
+            if ohlc_available and len(closes) >= 1 and len(highs) >= 1 and len(lows) >= 1:
+                today_close = float(closes.iloc[-1])
+                today_high = float(highs.iloc[-1])
+                today_low = float(lows.iloc[-1])
+                day_range = today_high - today_low
+                if (day_range > 0
+                        and not any(math.isnan(v) for v in (today_close, today_high, today_low))):
+                    result["ohlc_close_position_in_range"] = round(
+                        (today_close - today_low) / day_range, 4
+                    )
 
             self._set_cached(cache_key, result, TTL_STOCK_DATA)
         except Exception:
@@ -873,18 +925,23 @@ class DataSourceClient:
             return []
         try:
             raw = self._fmp_get(endpoint)
+            # FMP wraps results in a dict (e.g. {"mostActiveStock": [...]})
+            if isinstance(raw, dict):
+                # Extract the first (and only) value which is the list
+                lists = [v for v in raw.values() if isinstance(v, list)]
+                raw = lists[0] if lists else []
             if not isinstance(raw, list):
                 return []
             return [
                 {
-                    "symbol": item.get("symbol", ""),
-                    "name": item.get("name", ""),
+                    "symbol": item.get("ticker") or item.get("symbol", ""),
+                    "name": item.get("companyName") or item.get("name", ""),
                     "price": item.get("price"),
-                    "change": item.get("change"),
+                    "change": item.get("changes") or item.get("change"),
                     "change_pct": item.get("changesPercentage"),
                 }
                 for item in raw
-                if item.get("symbol")
+                if item.get("ticker") or item.get("symbol")
             ]
         except Exception:
             logger.exception("FMP market list fetch failed for %s", endpoint)

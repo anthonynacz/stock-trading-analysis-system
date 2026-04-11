@@ -4,6 +4,8 @@ const links = [
   { to: '/', label: 'Dashboard' },
   { to: '/universe', label: 'Universe' },
   { to: '/research', label: 'Research' },
+  { to: '/positions', label: 'Positions' },
+  { to: '/knowledge', label: 'Knowledge' },
 ] as const;
 
 export default function AppNav() {

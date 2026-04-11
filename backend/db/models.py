@@ -336,3 +336,33 @@ class ResearchResult(Base):
     stop_loss_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     options_data: Mapped[Optional[dict]] = mapped_column(JSON)
     suggested_options: Mapped[Optional[list]] = mapped_column(JSON)
+
+
+# ── Positions (user portfolio tracking) ────────────────────────────────────
+
+class Position(Base):
+    __tablename__ = "positions"
+    __table_args__ = (
+        Index("ix_position_ticker", "ticker"),
+        Index("ix_position_status", "status"),
+        Index("ix_position_opened", "opened_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255))
+    position_type: Mapped[str] = mapped_column(String(10), nullable=False)  # CALL, PUT, STOCK
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    entry_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    current_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    strike_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    premium_paid: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    expiry: Mapped[Optional[date]] = mapped_column(Date)
+    stop_loss: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    target_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    status: Mapped[str] = mapped_column(String(10), default="OPEN")  # OPEN, CLOSED
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    close_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    realized_pnl: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    notes: Mapped[Optional[str]] = mapped_column(Text)

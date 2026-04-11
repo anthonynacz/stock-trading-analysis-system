@@ -3,7 +3,10 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+from io import BytesIO
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import Date, cast, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -30,6 +33,7 @@ from db.models import (
     MarketNews,
     NewsTickerRelevance,
     OptionsSnapshot,
+    Position,
     Recommendation,
     ResearchResult,
     Sector,
@@ -46,9 +50,14 @@ from utils.schemas import (
     MarketNewsResponse,
     OptionsSnapshotResponse,
     PipelineDatesResponse,
+    PositionCloseRequest,
+    PositionCreateRequest,
+    PositionResponse,
+    PositionUpdateRequest,
     RecommendationResponse,
     ResearchResultResponse,
     StrikeSnapshotSaveRequest,
+    SuggestedOptionResponse,
     SystemStatusResponse,
     TrendDataPoint,
     TrendResponse,
@@ -205,7 +214,7 @@ async def add_to_watchlist(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail=f"{ticker} is already on the watchlist")
 
-    # Fetch company name via yfinance
+    # Fetch company name + sector via yfinance
     client = DataSourceClient()
     try:
         loop = asyncio.get_event_loop()
@@ -214,9 +223,31 @@ async def add_to_watchlist(
     finally:
         client.close()
 
+    # Auto-detect EdgeFlow sector from yfinance sector/industry
+    from services.universe_discoverer import YFINANCE_SECTOR_MAP
+
+    sector_id = None
+    sector_name = None
+    if stock_data:
+        yf_sector = stock_data.get("sector") or ""
+        yf_industry = stock_data.get("industry") or ""
+        edgeflow_sector = YFINANCE_SECTOR_MAP.get(yf_sector)
+        # Refine: semiconductor industry overrides to AI/Semiconductors
+        if "semiconductor" in yf_industry.lower() or "chip" in yf_industry.lower():
+            edgeflow_sector = "AI/Semiconductors"
+        if edgeflow_sector:
+            row = await db.execute(
+                select(Sector).where(Sector.name == edgeflow_sector)
+            )
+            sector_obj = row.scalar_one_or_none()
+            if sector_obj:
+                sector_id = sector_obj.id
+                sector_name = sector_obj.name
+
     wl = Watchlist(
         ticker=ticker,
         company_name=company_name,
+        sector_id=sector_id,
         added_date=date.today(),
         is_active=True,
         is_manual=True,
@@ -230,7 +261,7 @@ async def add_to_watchlist(
         id=wl.id,
         ticker=wl.ticker,
         company_name=wl.company_name or "",
-        sector=None,
+        sector=sector_name,
         added_date=wl.added_date,
         is_active=True,
         is_manual=True,
@@ -549,6 +580,28 @@ async def get_catalysts(db: AsyncSession = Depends(get_db)):
         )
 
     return response
+
+
+# ── Reports ──────────────────────────────────────────────────────────────
+
+
+@router.get("/reports/daily")
+async def get_daily_report(
+    target_date: date | None = Query(None, alias="date"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate and download a PDF daily analysis report."""
+    from services.report_generator import generate_daily_report
+
+    effective_date = target_date or date.today()
+    pdf_bytes = await generate_daily_report(effective_date, db)
+    return StreamingResponse(
+        BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=edgeflow-{effective_date}.pdf",
+        },
+    )
 
 
 # ── Strike snapshots ──────────────────────────────────────────────────────
@@ -1312,3 +1365,328 @@ async def delete_research(id_: int, db: AsyncSession = Depends(get_db)):
     await db.delete(result)
     await db.commit()
     return {"status": "deleted"}
+
+
+# ── Positions ────────────────────────────────────────────────────────────────
+
+
+def _compute_position_fields(
+    pos: Position,
+    watchlist_tickers: set[str],
+    rec_map: dict[str, RecommendationResponse],
+) -> PositionResponse:
+    """Build a PositionResponse with computed P&L and recommendation overlay."""
+    current = float(pos.current_price) if pos.current_price is not None else None
+    entry = float(pos.entry_price)
+    premium = float(pos.premium_paid) if pos.premium_paid is not None else None
+
+    unrealized_pnl = None
+    unrealized_pnl_pct = None
+    if pos.status == "OPEN" and current is not None:
+        if pos.position_type == "STOCK":
+            unrealized_pnl = (current - entry) * pos.quantity
+            cost_basis = entry * pos.quantity
+        else:
+            # CALL/PUT: current_price = current option premium
+            basis = premium if premium is not None else entry
+            unrealized_pnl = (current - basis) * pos.quantity * 100
+            cost_basis = basis * pos.quantity * 100
+        if cost_basis and cost_basis != 0:
+            unrealized_pnl_pct = round(unrealized_pnl / cost_basis * 100, 2)
+        unrealized_pnl = round(unrealized_pnl, 2)
+
+    days_to_expiry = None
+    if pos.expiry:
+        days_to_expiry = (pos.expiry - date.today()).days
+
+    is_on_watchlist = pos.ticker in watchlist_tickers
+    rec_response = rec_map.get(pos.ticker)
+
+    return PositionResponse(
+        id=pos.id,
+        ticker=pos.ticker,
+        company_name=pos.company_name,
+        position_type=pos.position_type,
+        quantity=pos.quantity,
+        entry_price=pos.entry_price,
+        current_price=pos.current_price,
+        strike_price=pos.strike_price,
+        premium_paid=pos.premium_paid,
+        expiry=pos.expiry,
+        stop_loss=pos.stop_loss,
+        target_price=pos.target_price,
+        status=pos.status,
+        opened_at=pos.opened_at,
+        closed_at=pos.closed_at,
+        close_price=pos.close_price,
+        realized_pnl=pos.realized_pnl,
+        notes=pos.notes,
+        unrealized_pnl=Decimal(str(unrealized_pnl)) if unrealized_pnl is not None else None,
+        unrealized_pnl_pct=unrealized_pnl_pct,
+        days_to_expiry=days_to_expiry,
+        is_on_watchlist=is_on_watchlist,
+        recommendation=rec_response,
+    )
+
+
+async def _get_watchlist_context(
+    db: AsyncSession,
+    position_tickers: set[str] | None = None,
+) -> tuple[set[str], dict[str, RecommendationResponse]]:
+    """Load active watchlist tickers and latest recommendations for each.
+
+    Also queries recommendations for *position_tickers* not on the watchlist,
+    and falls back to research_results when no recommendation exists.
+    """
+    wl_result = await db.execute(
+        select(Watchlist.ticker).where(Watchlist.is_active.is_(True))
+    )
+    watchlist_tickers = {row[0] for row in wl_result.all()}
+
+    # All tickers we need recommendations for
+    all_tickers = watchlist_tickers | (position_tickers or set())
+
+    rec_map: dict[str, RecommendationResponse] = {}
+    if all_tickers:
+        rec_result = await db.execute(
+            select(Recommendation)
+            .where(Recommendation.ticker.in_(all_tickers))
+            .order_by(Recommendation.recommendation_date.desc())
+            .options(selectinload(Recommendation.suggested_options))
+        )
+        for rec in rec_result.scalars():
+            if rec.ticker not in rec_map:
+                rec_map[rec.ticker] = RecommendationResponse.model_validate(rec)
+
+    # For tickers still missing, fall back to research_results
+    missing = all_tickers - set(rec_map.keys())
+    if missing:
+        from db.models import ResearchResult as RR
+        rr_result = await db.execute(
+            select(RR)
+            .where(RR.ticker.in_(missing))
+            .order_by(RR.analyzed_at.desc())
+        )
+        for rr in rr_result.scalars():
+            if rr.ticker not in rec_map:
+                # Build a RecommendationResponse from research result
+                opts = []
+                if rr.suggested_options:
+                    for o in rr.suggested_options:
+                        opts.append(SuggestedOptionResponse(
+                            id=o.get("id", 0),
+                            contract_type=o.get("contract_type", "CALL"),
+                            strike=o.get("strike"),
+                            expiry=o.get("expiry"),
+                            premium_estimate=o.get("premium_estimate"),
+                            delta_estimate=o.get("delta_estimate"),
+                            strategy=o.get("strategy"),
+                            strategy_rationale=o.get("strategy_rationale"),
+                            days_to_expiry=o.get("days_to_expiry"),
+                            breakeven_price=o.get("breakeven_price"),
+                        ))
+                rec_map[rr.ticker] = RecommendationResponse(
+                    id=rr.id,
+                    recommendation_date=rr.analyzed_at.date() if rr.analyzed_at else date.today(),
+                    ticker=rr.ticker,
+                    action=rr.action,
+                    conviction_score=rr.conviction_score,
+                    signal_count=rr.signal_count,
+                    signals=rr.signals,
+                    rationale=rr.rationale,
+                    catalyst_type=rr.catalyst_type,
+                    entry_strategy=rr.entry_strategy,
+                    exit_rules=rr.exit_rules,
+                    risk_level=rr.risk_level,
+                    current_price=rr.current_price,
+                    target_price=rr.target_price,
+                    stop_loss_price=rr.stop_loss_price,
+                    suggested_options=opts,
+                )
+
+    return watchlist_tickers, rec_map
+
+
+@router.post("/positions", response_model=PositionResponse, status_code=201)
+async def create_position(
+    body: PositionCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new tracked position."""
+    import asyncio
+
+    ticker = body.ticker.strip().upper()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="Ticker is required")
+    if body.position_type not in ("CALL", "PUT", "STOCK"):
+        raise HTTPException(status_code=400, detail="position_type must be CALL, PUT, or STOCK")
+
+    # Fetch company name + current stock price
+    client = DataSourceClient()
+    try:
+        loop = asyncio.get_event_loop()
+        stock_data = await loop.run_in_executor(None, client.get_stock_data, ticker)
+        company_name = stock_data.get("company_name", ticker) if stock_data else ticker
+        stock_price = stock_data.get("price") if stock_data else None
+    finally:
+        client.close()
+
+    # For STOCK positions, current_price = stock price. For options, user provides it.
+    current_price = None
+    if body.position_type == "STOCK" and stock_price is not None:
+        current_price = Decimal(str(stock_price))
+
+    pos = Position(
+        ticker=ticker,
+        company_name=company_name,
+        position_type=body.position_type,
+        quantity=body.quantity,
+        entry_price=body.entry_price,
+        current_price=current_price,
+        strike_price=body.strike_price,
+        premium_paid=body.premium_paid,
+        expiry=body.expiry,
+        stop_loss=body.stop_loss,
+        target_price=body.target_price,
+        status="OPEN",
+        notes=body.notes,
+    )
+    db.add(pos)
+    await db.commit()
+    await db.refresh(pos)
+
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker})
+    return _compute_position_fields(pos, watchlist_tickers, rec_map)
+
+
+@router.get("/positions", response_model=list[PositionResponse])
+async def list_positions(
+    status: str | None = Query(None),
+    ticker: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """List positions with computed P&L and recommendation overlay."""
+    query = select(Position).order_by(Position.opened_at.desc())
+    if status:
+        query = query.where(Position.status == status.upper())
+    if ticker:
+        query = query.where(Position.ticker == ticker.upper())
+
+    result = await db.execute(query)
+    positions = result.scalars().all()
+
+    pos_tickers = {p.ticker for p in positions}
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, pos_tickers)
+    return [_compute_position_fields(p, watchlist_tickers, rec_map) for p in positions]
+
+
+@router.get("/positions/{id_}", response_model=PositionResponse)
+async def get_position(id_: int, db: AsyncSession = Depends(get_db)):
+    """Get a single position with computed fields."""
+    pos = await db.get(Position, id_)
+    if not pos:
+        raise HTTPException(status_code=404, detail="Position not found")
+
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker})
+    return _compute_position_fields(pos, watchlist_tickers, rec_map)
+
+
+@router.put("/positions/{id_}", response_model=PositionResponse)
+async def update_position(
+    id_: int,
+    body: PositionUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update mutable position fields."""
+    pos = await db.get(Position, id_)
+    if not pos:
+        raise HTTPException(status_code=404, detail="Position not found")
+
+    if body.stop_loss is not None:
+        pos.stop_loss = body.stop_loss
+    if body.target_price is not None:
+        pos.target_price = body.target_price
+    if body.notes is not None:
+        pos.notes = body.notes
+    if body.current_price is not None:
+        pos.current_price = body.current_price
+
+    await db.commit()
+    await db.refresh(pos)
+
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker})
+    return _compute_position_fields(pos, watchlist_tickers, rec_map)
+
+
+@router.post("/positions/{id_}/close", response_model=PositionResponse)
+async def close_position(
+    id_: int,
+    body: PositionCloseRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Close an open position and compute realized P&L."""
+    pos = await db.get(Position, id_)
+    if not pos:
+        raise HTTPException(status_code=404, detail="Position not found")
+    if pos.status != "OPEN":
+        raise HTTPException(status_code=409, detail="Position is already closed")
+
+    pos.status = "CLOSED"
+    pos.closed_at = datetime.utcnow()
+    pos.close_price = body.close_price
+    if body.notes:
+        pos.notes = (pos.notes or "") + ("\n" if pos.notes else "") + body.notes
+
+    # Compute realized P&L
+    close = float(body.close_price)
+    entry = float(pos.entry_price)
+    premium = float(pos.premium_paid) if pos.premium_paid is not None else None
+
+    if pos.position_type == "STOCK":
+        pos.realized_pnl = Decimal(str(round((close - entry) * pos.quantity, 2)))
+    else:
+        basis = premium if premium is not None else entry
+        pos.realized_pnl = Decimal(str(round((close - basis) * pos.quantity * 100, 2)))
+
+    await db.commit()
+    await db.refresh(pos)
+
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker})
+    return _compute_position_fields(pos, watchlist_tickers, rec_map)
+
+
+@router.delete("/positions/{id_}")
+async def delete_position(id_: int, db: AsyncSession = Depends(get_db)):
+    """Delete a position."""
+    pos = await db.get(Position, id_)
+    if not pos:
+        raise HTTPException(status_code=404, detail="Position not found")
+    await db.delete(pos)
+    await db.commit()
+    return {"status": "deleted"}
+
+
+@router.post("/positions/{id_}/refresh-price", response_model=PositionResponse)
+async def refresh_position_price(id_: int, db: AsyncSession = Depends(get_db)):
+    """Refresh the current stock price for a position via yfinance."""
+    import asyncio
+
+    pos = await db.get(Position, id_)
+    if not pos:
+        raise HTTPException(status_code=404, detail="Position not found")
+
+    client = DataSourceClient()
+    try:
+        loop = asyncio.get_event_loop()
+        stock_data = await loop.run_in_executor(None, client.get_stock_data, pos.ticker)
+        price = stock_data.get("price") if stock_data else None
+    finally:
+        client.close()
+
+    if price is not None and pos.position_type == "STOCK":
+        pos.current_price = Decimal(str(price))
+        await db.commit()
+        await db.refresh(pos)
+
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker})
+    return _compute_position_fields(pos, watchlist_tickers, rec_map)

@@ -10,6 +10,7 @@ import {
   getTickerTrends,
   getUniverse,
   getDiscoveryCandidates,
+  getPositions,
 } from '../utils/api';
 import type {
   WatchlistItem,
@@ -22,6 +23,7 @@ import type {
   TrendData,
   UniverseSummary,
   DiscoveryCandidate,
+  Position,
 } from '../types';
 
 interface HookResult<T> {
@@ -323,6 +325,33 @@ export function useDiscoveryCandidates(): HookResult<DiscoveryCandidate[]> {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    refetch();
+    const interval = setInterval(refetch, 60_000);
+    return () => clearInterval(interval);
+  }, [refetch]);
+
+  return { data, loading, error, refetch };
+}
+
+export function usePositions(status?: string): HookResult<Position[]> {
+  const [data, setData] = useState<Position[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const refetch = useCallback(async () => {
+    try {
+      setLoading(true);
+      const result = await getPositions(status);
+      setData(result);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to fetch positions');
+    } finally {
+      setLoading(false);
+    }
+  }, [status]);
 
   useEffect(() => {
     refetch();

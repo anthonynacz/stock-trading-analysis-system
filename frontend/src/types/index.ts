@@ -257,3 +257,47 @@ export interface DiscoveryCandidate {
   rationale: string | null;
   status: 'PENDING' | 'APPROVED' | 'DISMISSED';
 }
+
+// ── Positions ─────────────────────────────────────────────────────────
+
+export type PositionType = 'CALL' | 'PUT' | 'STOCK';
+export type PositionStatus = 'OPEN' | 'CLOSED';
+
+export interface Position {
+  id: number;
+  ticker: string;
+  company_name: string | null;
+  position_type: PositionType;
+  quantity: number;
+  entry_price: number;
+  current_price: number | null;
+  strike_price: number | null;
+  premium_paid: number | null;
+  expiry: string | null;
+  stop_loss: number | null;
+  target_price: number | null;
+  status: PositionStatus;
+  opened_at: string;
+  closed_at: string | null;
+  close_price: number | null;
+  realized_pnl: number | null;
+  unrealized_pnl: number | null;
+  unrealized_pnl_pct: number | null;
+  days_to_expiry: number | null;
+  is_on_watchlist: boolean;
+  recommendation: Recommendation | null;
+  notes: string | null;
+}
+
+export interface PositionCreateRequest {
+  ticker: string;
+  position_type: PositionType;
+  quantity: number;
+  entry_price: number;
+  strike_price?: number;
+  premium_paid?: number;
+  expiry?: string;
+  stop_loss?: number;
+  target_price?: number;
+  notes?: string;
+}

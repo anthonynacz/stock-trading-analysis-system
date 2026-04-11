@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import type { SystemStatus } from '../types';
+import { downloadReport } from '../utils/api';
 import PipelineRunner from './PipelineRunner';
 
 interface StatusBarProps {
@@ -27,9 +29,21 @@ export default function StatusBar({
   availableDates,
   onDateChange,
 }: StatusBarProps) {
+  const [downloading, setDownloading] = useState(false);
   const lastRefresh = status?.last_refresh?.recommendations;
   const todayStr = new Date().toISOString().slice(0, 10);
   const isToday = selectedDate === todayStr;
+
+  const handleExportPDF = async () => {
+    setDownloading(true);
+    try {
+      await downloadReport(selectedDate);
+    } catch (err) {
+      console.error('PDF export failed:', err);
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   // Find position in sorted (descending) date list
   const idx = availableDates.indexOf(selectedDate);
@@ -94,6 +108,19 @@ export default function StatusBar({
 
       {/* Status indicators */}
       <div className="flex items-center gap-3">
+        {/* Export PDF */}
+        <button
+          onClick={handleExportPDF}
+          disabled={downloading}
+          className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-border/60 text-text-primary hover:bg-border transition-colors disabled:opacity-40"
+          title={`Export PDF report for ${formatDate(selectedDate)}`}
+        >
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+          </svg>
+          {downloading ? 'Generating...' : 'Export PDF'}
+        </button>
+
         {/* Last refresh */}
         {lastRefresh && (
           <span className="text-xs text-text-secondary">

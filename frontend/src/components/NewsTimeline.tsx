@@ -18,9 +18,12 @@ function formatTime(dateStr: string | null): string {
   });
 }
 
+const PAGE_SIZE = 15;
+
 export default function NewsTimeline({ items, showTickers = false }: NewsTimelineProps) {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [impactFilter, setImpactFilter] = useState('');
+  const [page, setPage] = useState(0);
 
   const categories = useMemo(
     () => [...new Set(items.map((n) => n.category).filter(Boolean))] as string[],
@@ -34,13 +37,20 @@ export default function NewsTimeline({ items, showTickers = false }: NewsTimelin
     return result;
   }, [items, categoryFilter, impactFilter]);
 
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  // Reset page when filters change and current page is out of bounds
+  const safePage = Math.min(page, totalPages - 1);
+  if (safePage !== page) setPage(safePage);
+
+  const paged = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
   return (
     <div className="space-y-3">
-      {/* Filters */}
-      <div className="flex gap-2">
+      {/* Filters + Pagination */}
+      <div className="flex items-center gap-2 flex-wrap">
         <select
           value={categoryFilter}
-          onChange={(e) => setCategoryFilter(e.target.value)}
+          onChange={(e) => { setCategoryFilter(e.target.value); setPage(0); }}
           className="bg-card border border-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-text-secondary"
         >
           <option value="">All Categories</option>
@@ -50,7 +60,7 @@ export default function NewsTimeline({ items, showTickers = false }: NewsTimelin
         </select>
         <select
           value={impactFilter}
-          onChange={(e) => setImpactFilter(e.target.value)}
+          onChange={(e) => { setImpactFilter(e.target.value); setPage(0); }}
           className="bg-card border border-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-text-secondary"
         >
           <option value="">All Impact</option>
@@ -58,6 +68,42 @@ export default function NewsTimeline({ items, showTickers = false }: NewsTimelin
           <option value="MEDIUM">Medium</option>
           <option value="LOW">Low</option>
         </select>
+        {filtered.length > 0 && (
+          <span className="text-[10px] text-text-secondary self-center">
+            {filtered.length} article{filtered.length !== 1 ? 's' : ''}
+          </span>
+        )}
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1 ml-auto">
+            <button
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={safePage === 0}
+              className="px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-border/60 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              Prev
+            </button>
+            {Array.from({ length: totalPages }, (_, i) => (
+              <button
+                key={i}
+                onClick={() => setPage(i)}
+                className={`w-7 h-7 rounded text-xs font-medium transition-colors ${
+                  i === safePage
+                    ? 'bg-purple-500/20 text-purple-400'
+                    : 'text-text-secondary hover:text-text-primary hover:bg-border/60'
+                }`}
+              >
+                {i + 1}
+              </button>
+            ))}
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={safePage === totalPages - 1}
+              className="px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-border/60 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              Next
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Items */}
@@ -65,7 +111,7 @@ export default function NewsTimeline({ items, showTickers = false }: NewsTimelin
         <p className="text-text-secondary text-sm text-center py-6">No news available</p>
       ) : (
         <div className="space-y-1">
-          {filtered.map((item) => (
+          {paged.map((item) => (
             <div
               key={item.id}
               className="flex items-start gap-3 py-2 border-b border-border/50 last:border-0"
@@ -141,6 +187,7 @@ export default function NewsTimeline({ items, showTickers = false }: NewsTimelin
           ))}
         </div>
       )}
+
     </div>
   );
 }

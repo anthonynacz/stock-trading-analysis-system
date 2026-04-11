@@ -24,7 +24,7 @@ from config import (
     SECTORS,
     TOXIC_CONVICTION_DAYS,
 )
-from db.models import Recommendation, Sector, UniverseStock, Watchlist, WatchlistDailySnapshot
+from db.models import OptionsSnapshot, Recommendation, Sector, UniverseStock, Watchlist, WatchlistDailySnapshot
 from utils.data_sources import DataSourceClient
 from utils.scoring import calculate_composite_score
 
@@ -344,11 +344,15 @@ class WatchlistManager:
         today = date.today()
         open_rec_tickers = await self._get_open_recommendation_tickers()
         toxic_tickers = await self._get_toxic_tickers()
+        unusual_options_tickers = await self._get_unusual_options_tickers()
 
         raw_removals: list[dict] = []
         for ticker, wl in active_map.items():
             if wl.is_manual or wl.is_locked:
                 continue  # never auto-remove manual or locked entries
+            if ticker in unusual_options_tickers and ticker not in toxic_tickers:
+                logger.info("Protecting %s from rotation — unusual options activity", ticker)
+                continue  # unusual options activity signals pending move
             if ticker not in candidate_tickers:
                 raw_removals.append({"ticker": ticker, "reason": "dropped from top candidates"})
                 continue
@@ -475,6 +479,70 @@ class WatchlistManager:
             return toxic
         except Exception:
             logger.exception("Failed to query toxic tickers")
+            return set()
+
+    async def _get_unusual_options_tickers(self) -> set[str]:
+        """Return tickers where today's call volume is ≥3x the 20-day avg.
+
+        These are protected from auto-rotation — strongly elevated call
+        volume often precedes large moves that the signal engine hasn't
+        scored yet.  Uses the same historical average as the recommendation
+        engine but with a higher threshold (3x vs 1.5x) so only genuinely
+        unusual activity blocks rotation.
+        """
+        try:
+            from sqlalchemy import case, cast, Float
+
+            cutoff_20d = datetime.now() - timedelta(days=20)
+            today_start = datetime.now().replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+
+            # Subquery: 20-day historical avg call volume per ticker (excluding today)
+            hist_avg = (
+                select(
+                    OptionsSnapshot.ticker,
+                    sa_func.avg(
+                        cast(OptionsSnapshot.total_call_volume, Float)
+                    ).label("avg_call"),
+                )
+                .where(
+                    OptionsSnapshot.snapshot_time >= cutoff_20d,
+                    OptionsSnapshot.snapshot_time < today_start,
+                )
+                .group_by(OptionsSnapshot.ticker)
+                .subquery()
+            )
+
+            # Today's latest snapshot per ticker
+            today_snap = (
+                select(
+                    OptionsSnapshot.ticker,
+                    sa_func.max(OptionsSnapshot.total_call_volume).label("today_call"),
+                )
+                .where(OptionsSnapshot.snapshot_time >= today_start)
+                .group_by(OptionsSnapshot.ticker)
+                .subquery()
+            )
+
+            # Join and filter: today_call >= 3 * avg_call
+            result = await self._session.execute(
+                select(today_snap.c.ticker).join(
+                    hist_avg, today_snap.c.ticker == hist_avg.c.ticker
+                ).where(
+                    hist_avg.c.avg_call > 0,
+                    today_snap.c.today_call >= 3 * hist_avg.c.avg_call,
+                )
+            )
+            tickers = {row[0] for row in result.all()}
+            if tickers:
+                logger.info(
+                    "Unusual options activity (≥3x avg): %s",
+                    ", ".join(sorted(tickers)),
+                )
+            return tickers
+        except Exception:
+            logger.exception("Failed to query unusual options tickers")
             return set()
 
     # ------------------------------------------------------------------

@@ -795,6 +795,43 @@ class RecommendationEngine:
                     "detail": f"Volume {volume_ratio:.1f}x avg with {momentum_5d:+.1f}% 5d move — distribution",
                 })
 
+        # ── OHLC candlestick signals (skip if OHLC unavailable) ──
+
+        wick_rejection = technicals.get("ohlc_upper_wick_rejection")
+        if wick_rejection is not None:
+            score -= 8
+            signals.append({
+                "signal": "Upper Wick Rejection",
+                "points": -8,
+                "detail": f"Up day but {wick_rejection:.0f}% of range above close — selling into strength",
+            })
+
+        gap_down = technicals.get("ohlc_gap_down_after_up")
+        if gap_down is not None:
+            score -= 12
+            signals.append({
+                "signal": "Gap-Down After Up Day",
+                "points": -12,
+                "detail": f"Opened {gap_down:.1f}% below prior close after an up day — overnight sentiment reversal",
+            })
+
+        close_pos = technicals.get("ohlc_close_position_in_range")
+        if close_pos is not None:
+            if close_pos < 0.20:
+                score -= 5
+                signals.append({
+                    "signal": "Closed Near Low",
+                    "points": -5,
+                    "detail": f"Closed at {close_pos:.0%} of day's range — bears dominated",
+                })
+            elif close_pos > 0.80:
+                score += 5
+                signals.append({
+                    "signal": "Closed Near High",
+                    "points": 5,
+                    "detail": f"Closed at {close_pos:.0%} of day's range — bulls dominated",
+                })
+
         # Short interest
         short_pct = stock_data.get("short_pct_float")
         short_ratio = stock_data.get("short_ratio")

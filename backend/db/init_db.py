@@ -4,7 +4,7 @@ from sqlalchemy import select
 
 from config import SECTORS
 from db.connection import engine, async_session
-from db.models import Base, Sector, UniverseStock
+from db.models import Base, Position, Sector, UniverseStock  # noqa: F401 — Position imported for metadata
 
 SEED_SECTORS = [
     "AI/Semiconductors",

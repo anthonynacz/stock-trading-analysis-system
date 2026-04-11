@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { Recommendation, OptionsSnapshot, SignalDetail } from '../types';
 import { getTickerRecommendations, getOptions } from '../utils/api';
 import { useTickerTrends } from '../hooks/useEdgeFlow';
@@ -94,6 +95,7 @@ function StatRow({ label, value, mono, sentiment }: {
 }
 
 export default function TickerDetail({ ticker, companyName, selectedDate, onClose }: TickerDetailProps) {
+  const navigate = useNavigate();
   const [rec, setRec] = useState<Recommendation | null>(null);
   const [options, setOptions] = useState<OptionsSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -307,6 +309,27 @@ export default function TickerDetail({ ticker, companyName, selectedDate, onClos
           {/* Strike Recommender — always visible */}
           <div className="border-t border-border/40 pt-3">
             <StrikeRecommender ticker={ticker} />
+          </div>
+
+          {/* Open Position */}
+          <div className="border-t border-border/40 pt-3">
+            <button
+              onClick={() => {
+                const params = new URLSearchParams({ open: 'true', ticker });
+                if (rec?.current_price != null) params.set('price', String(rec.current_price));
+                const opt = rec?.suggested_options?.[0];
+                if (opt) {
+                  params.set('type', opt.contract_type);
+                  params.set('strike', String(opt.strike));
+                  params.set('expiry', opt.expiry);
+                  if (opt.premium_estimate != null) params.set('premium', String(opt.premium_estimate));
+                }
+                navigate(`/positions?${params.toString()}`);
+              }}
+              className="w-full py-2 px-3 rounded-md text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white transition-colors"
+            >
+              Open Position
+            </button>
           </div>
 
           {/* Trend Charts */}

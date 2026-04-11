@@ -17,6 +17,8 @@ import type {
   UniverseSummary,
   UniverseStock,
   DiscoveryCandidate,
+  Position,
+  PositionCreateRequest,
 } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
@@ -229,3 +231,61 @@ export const dismissCandidate = (id: number) =>
 export const triggerDiscovery = () =>
   api.post('/universe/discover').then((r) => r.data);
 
+// ── Positions ────────────────────────────────────────────────────────────────
+
+const POS_NUMERIC = [
+  'entry_price', 'current_price', 'strike_price', 'premium_paid',
+  'stop_loss', 'target_price', 'close_price', 'realized_pnl', 'unrealized_pnl',
+];
+
+function parsePosition(p: Position): Position {
+  const parsed = parseNumericFields(p, POS_NUMERIC);
+  if (parsed.recommendation) {
+    parsed.recommendation = {
+      ...parseNumericFields(parsed.recommendation, REC_NUMERIC),
+      suggested_options: parsed.recommendation.suggested_options.map((o) =>
+        parseNumericFields(o, OPT_NUMERIC),
+      ),
+    };
+  }
+  return parsed;
+}
+
+export const getPositions = (status?: string, ticker?: string) =>
+  api.get<Position[]>('/positions', { params: { status, ticker } })
+    .then((r) => r.data.map(parsePosition));
+
+export const getPosition = (id: number) =>
+  api.get<Position>(`/positions/${id}`).then((r) => parsePosition(r.data));
+
+export const createPosition = (data: PositionCreateRequest) =>
+  api.post<Position>('/positions', data).then((r) => parsePosition(r.data));
+
+export const updatePosition = (id: number, data: Record<string, unknown>) =>
+  api.put<Position>(`/positions/${id}`, data).then((r) => parsePosition(r.data));
+
+export const closePosition = (id: number, data: { close_price: number; notes?: string }) =>
+  api.post<Position>(`/positions/${id}/close`, data).then((r) => parsePosition(r.data));
+
+export const deletePosition = (id: number) =>
+  api.delete(`/positions/${id}`);
+
+export const refreshPositionPrice = (id: number) =>
+  api.post<Position>(`/positions/${id}/refresh-price`).then((r) => parsePosition(r.data));
+
+// ── Reports ──────────────────────────────────────────────────────────────
+
+export const downloadReport = async (date?: string) => {
+  const response = await api.get('/reports/daily', {
+    params: { date },
+    responseType: 'blob',
+  });
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', `edgeflow-report-${date || 'today'}.pdf`);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
