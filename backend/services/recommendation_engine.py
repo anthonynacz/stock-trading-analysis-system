@@ -19,13 +19,16 @@ from db.models import (
     MarketNews,
     OptionsSnapshot,
     Recommendation,
+    Sector,
     SuggestedOption,
+    UniverseStock,
 )
 from services.analyst_tracker import AnalystTracker
 from services.earnings_calendar import EarningsCalendarService
 from services.news_scanner import NewsScanner
 from services.options_analyzer import OptionsAnalyzer
 from utils.data_sources import DataSourceClient
+from utils.geopolitical import detect_and_score
 
 logger = logging.getLogger(__name__)
 
@@ -969,6 +972,12 @@ class RecommendationEngine:
                 "detail": f"Negative sector news for {stock_data.get('sector', 'Unknown')}",
             })
 
+        # ── Geopolitical signals ────────────────────────────────────────
+        geo_signals = await self._check_geopolitical_signals(ticker)
+        for gs in geo_signals:
+            score += gs["points"]
+            signals.append(gs)
+
         # ── Price relative to consensus PT (context-gated) ──────────────
         if current_price and avg_analyst_target:
             discount_pct = (
@@ -1209,6 +1218,50 @@ class RecommendationEngine:
             return "MISS"
         return None
 
+    async def _resolve_edgeflow_sector(self, ticker: str) -> str | None:
+        """Resolve a ticker to its EdgeFlow sector name via UniverseStock -> Sector."""
+        stmt = (
+            select(Sector.name)
+            .join(UniverseStock, UniverseStock.sector_id == Sector.id)
+            .where(UniverseStock.ticker == ticker, UniverseStock.is_active.is_(True))
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def _check_geopolitical_signals(self, ticker: str) -> list[dict]:
+        """Detect geopolitical events and return sector-specific signal dicts."""
+        edgeflow_sector = await self._resolve_edgeflow_sector(ticker)
+        if not edgeflow_sector:
+            return []
+
+        try:
+            # Scan all general news — geopolitical articles can be classified
+            # as any category (MACRO, PRODUCT, SECTOR, etc.) so don't filter
+            all_articles = await self._news_scanner.get_recent_news(
+                ticker=None, hours=48
+            )
+        except Exception:
+            logger.exception("Failed to fetch news for geopolitical scan")
+            return []
+
+        if not all_articles:
+            return []
+
+        article_dicts = [
+            {
+                "headline": n.headline or "",
+                "summary": n.summary or "",
+                "sentiment_score": float(n.sentiment_score or 0),
+            }
+            for n in all_articles
+        ]
+
+        geo_signals = detect_and_score(article_dicts, edgeflow_sector)
+        return [
+            {"signal": gs.signal_name, "points": gs.points, "detail": gs.detail}
+            for gs in geo_signals
+        ]
+
     async def _check_sector_news(
         self, ticker: str, stock_data: dict
     ) -> str | None:
@@ -1331,4 +1384,6 @@ class RecommendationEngine:
             return "SECTOR"
         if "INSIDER" in name:
             return "INSIDER"
+        if "GEOPOLITICAL" in name:
+            return "GEOPOLITICAL"
         return "MIXED"

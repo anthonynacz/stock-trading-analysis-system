@@ -70,6 +70,12 @@ _CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "launch", "product", "release", "patent", "FDA",
         "approval", "innovation", "partnership", "deal", "contract",
     ],
+    "GEOPOLITICAL": [
+        "geopolitical", "sanctions", "sanctioned", "tariff", "tariffs",
+        "trade war", "military", "conflict", "invasion", "missile",
+        "ceasefire", "embargo", "escalation", "retaliation",
+        "diplomatic", "treaty", "opec", "troops",
+    ],
 }
 
 # ── Tier bonus helpers ──────────────────────────────────────────────────────
