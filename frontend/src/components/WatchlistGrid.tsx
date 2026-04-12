@@ -98,7 +98,7 @@ export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggle
                 <button
                   key={item.id}
                   onClick={() => onTickerClick?.(item.ticker)}
-                  className={`bg-card border ${isSelected ? 'border-new-entrant ring-1 ring-new-entrant/40' : statusClasses(item.status)} rounded-lg p-3 text-left hover:bg-border/40 transition-colors relative group`}
+                  className={`bg-card border ${isSelected ? 'border-new-entrant ring-1 ring-new-entrant/40' : item.rotation_protected && !isSelected ? 'border-cyan-700/60 ring-1 ring-cyan-500/20' : statusClasses(item.status)} rounded-lg p-3 text-left hover:bg-border/40 transition-colors relative group`}
                 >
                   {/* Conviction indicator bar */}
                   <div
@@ -146,6 +146,16 @@ export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggle
                       )}
                     </div>
                     <div className="flex items-center gap-1">
+                      {item.rotation_protected && !item.is_manual && !item.is_locked && (
+                        <span
+                          className="text-[10px] text-cyan-400"
+                          title={item.protection_reasons.join('; ')}
+                        >
+                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm-1 15l-4-4 1.41-1.41L11 14.17l6.59-6.59L19 9l-8 8z" />
+                          </svg>
+                        </span>
+                      )}
                       {item.is_manual && (
                         <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-900/60 text-purple-400">
                           MANUAL

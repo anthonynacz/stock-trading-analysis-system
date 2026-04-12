@@ -2,6 +2,7 @@
 
 Lazy-loads ProsusAI/finbert on first use. The model is cached after
 the initial download so subsequent loads are instant.
+Pre-loaded at startup via preload() to avoid cold-start latency.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 _model: "AutoModelForSequenceClassification | None" = None
 _tokenizer: "AutoTokenizer | None" = None
-_labels: list[str] = ["positive", "negative", "neutral"]
 
 
 def _load_model() -> tuple["AutoModelForSequenceClassification", "AutoTokenizer"]:
@@ -27,12 +27,17 @@ def _load_model() -> tuple["AutoModelForSequenceClassification", "AutoTokenizer"
 
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-    logger.info("Loading FinBERT model (first call)...")
+    logger.info("Loading FinBERT model...")
     _tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
     _model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
     _model.eval()
     logger.info("FinBERT loaded successfully")
     return _model, _tokenizer
+
+
+def preload():
+    """Pre-load the model at startup to avoid cold-start latency."""
+    _load_model()
 
 
 def score_sentiment(text: str) -> float:

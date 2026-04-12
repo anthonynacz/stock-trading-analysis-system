@@ -13,6 +13,8 @@ interface TickerDetailProps {
   companyName?: string;
   selectedDate?: string;
   onClose: () => void;
+  rotationProtected?: boolean;
+  protectionReasons?: string[];
 }
 
 function SignalBullet({ signal }: { signal: SignalDetail }) {
@@ -94,7 +96,7 @@ function StatRow({ label, value, mono, sentiment }: {
   );
 }
 
-export default function TickerDetail({ ticker, companyName, selectedDate, onClose }: TickerDetailProps) {
+export default function TickerDetail({ ticker, companyName, selectedDate, onClose, rotationProtected, protectionReasons }: TickerDetailProps) {
   const navigate = useNavigate();
   const [rec, setRec] = useState<Recommendation | null>(null);
   const [options, setOptions] = useState<OptionsSnapshot | null>(null);
@@ -155,6 +157,21 @@ export default function TickerDetail({ ticker, companyName, selectedDate, onClos
         <div className="px-4 py-3 space-y-4 max-h-[calc(100vh-10rem)] overflow-y-auto">
           {companyName && (
             <p className="text-xs text-text-secondary -mt-1">{companyName}</p>
+          )}
+
+          {/* Rotation protection banner */}
+          {rotationProtected && protectionReasons && protectionReasons.length > 0 && (
+            <div className="flex items-start gap-2 px-2.5 py-2 rounded-md bg-cyan-950/40 border border-cyan-800/40">
+              <svg className="w-3.5 h-3.5 text-cyan-400 mt-0.5 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm-1 15l-4-4 1.41-1.41L11 14.17l6.59-6.59L19 9l-8 8z" />
+              </svg>
+              <div className="space-y-0.5">
+                <span className="text-[10px] font-semibold text-cyan-400 uppercase tracking-wider">Rotation Protected</span>
+                {protectionReasons.map((r, i) => (
+                  <p key={i} className="text-[11px] text-cyan-300/70 leading-snug">{r}</p>
+                ))}
+              </div>
+            </div>
           )}
 
           {/* Price info */}

@@ -18,6 +18,8 @@ class WatchlistItemResponse(BaseModel):
     is_locked: bool = False
     entry_reason: Optional[str] = None
     status: str  # NEW_ENTRANT / EXISTING / REMOVED
+    rotation_protected: bool = False
+    protection_reasons: list[str] = []
 
 
 class WatchlistAddRequest(BaseModel):

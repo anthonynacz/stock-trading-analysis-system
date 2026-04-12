@@ -20,6 +20,10 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    # Pre-load FinBERT in a thread so it's ready before the first pipeline run
+    import asyncio
+    from utils.finbert import preload
+    asyncio.get_event_loop().run_in_executor(None, preload)
     start_scheduler()
     yield
     shutdown_scheduler()

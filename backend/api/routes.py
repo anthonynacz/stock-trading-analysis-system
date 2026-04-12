@@ -7,7 +7,7 @@ from io import BytesIO
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import Date, cast, select, func
+from sqlalchemy import Date, Float, cast, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -77,6 +77,56 @@ router = APIRouter(prefix="/api")
 # ── Watchlist ───────────────────────────────────────────────────────────────
 
 
+async def _get_unusual_options_set(db: AsyncSession) -> set[str]:
+    """Return tickers with ≥3x historical avg call volume (today vs 20-day)."""
+    try:
+        now = datetime.now()
+        cutoff_20d = now - timedelta(days=20)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        hist_avg = (
+            select(
+                OptionsSnapshot.ticker,
+                func.avg(cast(OptionsSnapshot.total_call_volume, Float)).label("avg_call"),
+            )
+            .where(OptionsSnapshot.snapshot_time >= cutoff_20d, OptionsSnapshot.snapshot_time < today_start)
+            .group_by(OptionsSnapshot.ticker)
+            .subquery()
+        )
+        today_snap = (
+            select(
+                OptionsSnapshot.ticker,
+                func.max(OptionsSnapshot.total_call_volume).label("today_call"),
+            )
+            .where(OptionsSnapshot.snapshot_time >= today_start)
+            .group_by(OptionsSnapshot.ticker)
+            .subquery()
+        )
+        result = await db.execute(
+            select(today_snap.c.ticker)
+            .join(hist_avg, today_snap.c.ticker == hist_avg.c.ticker)
+            .where(hist_avg.c.avg_call > 0, today_snap.c.today_call >= 3 * hist_avg.c.avg_call)
+        )
+        return {row[0] for row in result.all()}
+    except Exception:
+        return set()
+
+
+def _apply_protection(item: WatchlistItemResponse, unusual_tickers: set[str]) -> WatchlistItemResponse:
+    """Set rotation_protected flag and reasons on a watchlist response item."""
+    reasons: list[str] = []
+    if item.is_locked:
+        reasons.append("Locked by user — protected from auto-rotation")
+    if item.is_manual:
+        reasons.append("Manually added — not subject to auto-rotation")
+    if item.ticker in unusual_tickers:
+        reasons.append("Unusual options activity — call volume ≥3x the 20-day average")
+    if reasons:
+        item.rotation_protected = True
+        item.protection_reasons = reasons
+    return item
+
+
 @router.get("/watchlist", response_model=list[WatchlistItemResponse])
 async def get_watchlist(
     sector: str | None = Query(None),
@@ -96,6 +146,9 @@ async def get_watchlist(
     snapshots = snap_result.scalars().all()
     status_map: dict[str, str] = {s.ticker: s.status for s in snapshots}
     sector_map: dict[str, str | None] = {s.ticker: s.sector for s in snapshots}
+
+    # Fetch unusual options tickers once for protection annotations
+    unusual_tickers = await _get_unusual_options_set(db) if is_today else set()
 
     if is_today:
         # For today: query active watchlist, overlay snapshot statuses,
@@ -158,7 +211,7 @@ async def get_watchlist(
                         status="REMOVED",
                     )
                 )
-        return response
+        return [_apply_protection(r, unusual_tickers) for r in response]
     else:
         # Historical: drive entirely from snapshots, join Watchlist for metadata
         all_tickers = [s.ticker for s in snapshots]
@@ -190,7 +243,7 @@ async def get_watchlist(
                     status=snap.status,
                 )
             )
-        return response
+        return [_apply_protection(r, unusual_tickers) for r in response]
 
 
 # ── Watchlist manual add/remove ─────────────────────────────────────────────

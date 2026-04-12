@@ -9,6 +9,8 @@ export interface WatchlistItem {
   is_locked: boolean;
   entry_reason: string | null;
   status: 'NEW_ENTRANT' | 'EXISTING' | 'REMOVED';
+  rotation_protected: boolean;
+  protection_reasons: string[];
 }
 
 export interface StrikeRecommendation {

@@ -59,10 +59,11 @@ export default function Dashboard() {
   const catalysts = useCatalysts();
   const status = useStatus();
 
-  // Find company name for selected ticker
-  const selectedCompany = selectedTicker
-    ? watchlist.data?.find((w) => w.ticker === selectedTicker)?.company_name ?? undefined
+  // Find watchlist item for selected ticker
+  const selectedItem = selectedTicker
+    ? watchlist.data?.find((w) => w.ticker === selectedTicker)
     : undefined;
+  const selectedCompany = selectedItem?.company_name ?? undefined;
 
   // Build ticker → recommendation map for watchlist card sorting/coloring
   const recMap = useMemo(() => {
@@ -201,6 +202,8 @@ export default function Dashboard() {
                 companyName={selectedCompany}
                 selectedDate={selectedDate}
                 onClose={() => setSelectedTicker(null)}
+                rotationProtected={selectedItem?.rotation_protected}
+                protectionReasons={selectedItem?.protection_reasons}
               />
             ) : (
               <div className="bg-card border border-border rounded-lg p-8 text-center text-text-secondary text-sm mt-9">
