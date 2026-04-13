@@ -898,6 +898,78 @@ function TradingGuideSection() {
         </div>
       </div>
 
+      {/* ── Entry Strategies ────────────────────────────────────── */}
+      <div>
+        <h3 className="text-lg font-bold text-text-primary mb-1">Entry Strategies</h3>
+        <p className="text-xs text-text-secondary mb-4">
+          Each recommendation includes an entry strategy that tells you <span className="font-semibold text-text-primary">when and how</span> to enter,
+          not just <span className="font-semibold text-text-primary">what</span> to trade. The strategy is determined by conviction strength, whether the stock has already moved, and earnings proximity.
+        </p>
+
+        <div className="overflow-hidden rounded-lg border border-border mb-6">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-border/40">
+                <th className="text-left px-3 py-2 text-text-secondary font-medium w-36">Strategy</th>
+                <th className="text-left px-3 py-2 text-text-secondary font-medium">Condition</th>
+                <th className="text-left px-3 py-2 text-text-secondary font-medium">What It Means</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="border-t border-border/60">
+                <td className="px-3 py-2">
+                  <span className="px-2 py-0.5 rounded text-xs font-bold bg-blue-900/40 text-blue-400">PRE_POSITION</span>
+                </td>
+                <td className="px-3 py-2 text-text-secondary">Conviction &ge; 30 AND inside an active earnings catalyst window (T-7 to T+10)</td>
+                <td className="px-3 py-2 text-text-secondary">Get in before the catalyst fires. The earnings event hasn't happened yet — you're positioning for the anticipated move.</td>
+              </tr>
+              <tr className="border-t border-border/60">
+                <td className="px-3 py-2">
+                  <span className="px-2 py-0.5 rounded text-xs font-bold bg-amber-900/40 text-amber-400">REACTIVE</span>
+                </td>
+                <td className="px-3 py-2 text-text-secondary">Conviction &ge; 30 AND stock already moved &gt; 3%</td>
+                <td className="px-3 py-2 text-text-secondary">The catalyst already triggered a move — you'd be chasing. Entry is still valid but use smaller size and tighter stops.</td>
+              </tr>
+              <tr className="border-t border-border/60">
+                <td className="px-3 py-2">
+                  <span className="px-2 py-0.5 rounded text-xs font-bold bg-purple-900/40 text-purple-400">WAIT</span>
+                </td>
+                <td className="px-3 py-2 text-text-secondary">Conviction 15-29, or conviction &ge; 30 but stock hasn't moved yet</td>
+                <td className="px-3 py-2 text-text-secondary">Signals are positive but need confirmation — a pullback entry, volume breakout, or another signal stacking before committing.</td>
+              </tr>
+              <tr className="border-t border-border/60">
+                <td className="px-3 py-2">
+                  <span className="px-2 py-0.5 rounded text-xs font-bold bg-zinc-800 text-text-secondary">HOLD</span>
+                </td>
+                <td className="px-3 py-2 text-text-secondary">Conviction &lt; 15</td>
+                <td className="px-3 py-2 text-text-secondary">Not actionable. Mixed or weak signals — no edge for entry. Sit tight or look elsewhere.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <GuideCard title="How to Use Entry Strategies" accent="#58a6ff">
+            <div className="text-xs text-text-secondary space-y-2">
+              <p><span className="font-semibold text-text-primary">PRE_POSITION:</span> Set your limit orders the night before or pre-market. Queue them to fire at the open. Best entry for weeklies — you're ahead of the catalyst.</p>
+              <p><span className="font-semibold text-text-primary">REACTIVE:</span> Don't market-order at the open — spreads are wide in the first 10 minutes. Wait until 9:45-10:00 AM for spreads to tighten. Size down to 50-75% of normal. Use tighter stops (30% vs 50%).</p>
+              <p><span className="font-semibold text-text-primary">WAIT:</span> Add to your watchlist and monitor. Enter only when conviction rises above 30 on a subsequent day, or when a confirming signal fires (e.g., unusual call volume, T1 upgrade). Don't force it.</p>
+              <p><span className="font-semibold text-text-primary">HOLD:</span> No action. Check back tomorrow — conviction may shift as new data arrives.</p>
+            </div>
+          </GuideCard>
+
+          <GuideCard title="Entry Strategy + Action Matrix" accent="#58a6ff">
+            <div className="text-xs text-text-secondary space-y-2">
+              <p><span className="font-semibold text-green-400">STRONG_BUY + PRE_POSITION</span> — Best possible setup. High conviction before an earnings catalyst. Enter aggressively with full size.</p>
+              <p><span className="font-semibold text-green-400">STRONG_BUY + REACTIVE</span> — Strong signals but the stock has moved. Still tradeable — use spreads or smaller size to manage the chase risk.</p>
+              <p><span className="font-semibold text-green-400">BUY + WAIT</span> — Moderate conviction, stock is flat. The signal exists but isn't screaming. Wait for confirmation or a pullback to support before entering.</p>
+              <p><span className="font-semibold text-amber-400">BUY + REACTIVE</span> — Moderate conviction and already moved. Worst risk/reward of the actionable setups. Consider skipping unless Day-by-Day shows rising trend.</p>
+              <p><span className="font-semibold text-red-400">SELL/STRONG_SELL + HOLD</span> — Bearish but not actionable for entry. Only trade these if you actively play puts and conviction is below -30.</p>
+            </div>
+          </GuideCard>
+        </div>
+      </div>
+
       {/* ── Risk Management ──────────────────────────────────────── */}
       <div>
         <h3 className="text-lg font-bold text-text-primary mb-1">Risk Management Rules</h3>
