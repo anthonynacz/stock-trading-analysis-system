@@ -133,12 +133,16 @@ class RecommendationEngine:
             ticker=ticker, hours=48
         )
         options_snapshot = await self._options_analyzer.get_latest_snapshot(ticker)
+        greeks_summary = await self._options_analyzer.get_chain_greeks_summary(
+            ticker, float(stock_data.get("price", 0))
+        )
 
         signals_data: dict[str, Any] = {
             "ratings": ratings,
             "catalyst_window": catalyst_window,
             "news_sentiment": news_sentiment,
             "options_snapshot": options_snapshot,
+            "greeks_summary": greeks_summary,
             "stock_data": stock_data,
             "technicals": technicals,
             "benchmark": benchmark,
@@ -255,12 +259,16 @@ class RecommendationEngine:
             ticker=ticker, hours=48
         )
         options_snapshot = await self._options_analyzer.get_latest_snapshot(ticker)
+        greeks_summary = await self._options_analyzer.get_chain_greeks_summary(
+            ticker, float(stock_data.get("price", 0))
+        )
 
         signals_data: dict[str, Any] = {
             "ratings": ratings,
             "catalyst_window": catalyst_window,
             "news_sentiment": news_sentiment,
             "options_snapshot": options_snapshot,
+            "greeks_summary": greeks_summary,
             "stock_data": stock_data,
             "technicals": technicals,
             "benchmark": benchmark,
@@ -930,6 +938,61 @@ class RecommendationEngine:
                     "detail": f"IV rank {iv_rank:.0f} (>70) — elevated premium risk",
                 })
 
+        # ── Greek-based signals ────────────────────────────────────────
+        greeks_summary: dict | None = data.get("greeks_summary")
+        if greeks_summary:
+            theta_pct = greeks_summary.get("avg_atm_theta_pct", 0)
+            vega_pct = greeks_summary.get("avg_atm_vega_pct", 0)
+            near_dte = greeks_summary.get("near_term_dte", 999)
+
+            # Heavy Theta Decay warning
+            if theta_pct > 0.03:
+                score -= 8
+                signals.append({
+                    "signal": "Heavy Theta Decay",
+                    "points": -8,
+                    "detail": f"Near-term ATM options losing {theta_pct * 100:.1f}% premium/day — time decay accelerating",
+                })
+            elif theta_pct > 0.02:
+                score -= 5
+                signals.append({
+                    "signal": "Elevated Theta Decay",
+                    "points": -5,
+                    "detail": f"Near-term ATM options losing {theta_pct * 100:.1f}% premium/day",
+                })
+
+            # IV Crush Risk — high vega + imminent earnings
+            earnings_imminent = False
+            if catalyst_window:
+                earnings_date = catalyst_window.get("earnings_date")
+                if earnings_date:
+                    if isinstance(earnings_date, str):
+                        try:
+                            from datetime import datetime as dt
+                            earnings_date = dt.strptime(earnings_date, "%Y-%m-%d").date()
+                        except ValueError:
+                            earnings_date = None
+                    if earnings_date:
+                        days_to_earnings = (earnings_date - date.today()).days
+                        earnings_imminent = 0 < days_to_earnings <= 7
+
+            if earnings_imminent and vega_pct > 0.08:
+                score -= 12
+                signals.append({
+                    "signal": "IV Crush Risk",
+                    "points": -12,
+                    "detail": f"Earnings within 7 days + high vega ({vega_pct * 100:.1f}% premium per 1% IV) — expect IV crush post-event",
+                })
+
+            # Favorable Theta — low decay with strong conviction
+            if near_dte <= 14 and theta_pct < 0.01 and score > 30:
+                score += 5
+                signals.append({
+                    "signal": "Favorable Theta",
+                    "points": 5,
+                    "detail": f"Low theta decay ({theta_pct * 100:.1f}%/day) with strong conviction — time is manageable",
+                })
+
         # ── News sentiment (scaled by magnitude and count) ──────────────
         avg_sentiment = news_sentiment.get("avg_sentiment", 0.0)
         article_count = news_sentiment.get("total_count", 0)
@@ -977,6 +1040,18 @@ class RecommendationEngine:
         for gs in geo_signals:
             score += gs["points"]
             signals.append(gs)
+
+        # Discount news sentiment when geopolitical signals fire — the same
+        # articles drive both signals, so full stacking double-counts.
+        if geo_signals:
+            for s in signals:
+                if s["signal"] in ("Positive News Sentiment", "Negative News Sentiment"):
+                    old_pts = s["points"]
+                    new_pts = round(old_pts / 2)
+                    score += new_pts - old_pts
+                    s["points"] = new_pts
+                    s["detail"] += " (halved — geo overlap)"
+                    break
 
         # ── Price relative to consensus PT (context-gated) ──────────────
         if current_price and avg_analyst_target:
@@ -1257,10 +1332,22 @@ class RecommendationEngine:
         ]
 
         geo_signals = detect_and_score(article_dicts, edgeflow_sector)
-        return [
+        result = [
             {"signal": gs.signal_name, "points": gs.points, "detail": gs.detail}
             for gs in geo_signals
         ]
+
+        # Cap total geopolitical contribution to ±20 to prevent correlated
+        # events (e.g. MILITARY_CONFLICT + OIL_DISRUPTION) from stacking
+        if result:
+            total = sum(s["points"] for s in result)
+            cap = 20
+            if abs(total) > cap:
+                scale = cap / abs(total)
+                for s in result:
+                    s["points"] = round(s["points"] * scale)
+
+        return result
 
     async def _check_sector_news(
         self, ticker: str, stock_data: dict

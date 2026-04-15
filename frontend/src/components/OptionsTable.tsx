@@ -21,6 +21,8 @@ export default function OptionsTable({ options }: OptionsTableProps) {
             <th className="text-left py-1.5 px-3 font-medium">Expiry</th>
             <th className="text-right py-1.5 px-3 font-medium">Est. Premium</th>
             <th className="text-right py-1.5 px-3 font-medium">Delta</th>
+            <th className="text-right py-1.5 px-3 font-medium">Theta</th>
+            <th className="text-right py-1.5 px-3 font-medium">Vega</th>
             <th className="text-right py-1.5 px-3 font-medium">Breakeven</th>
             <th className="text-left py-1.5 pl-3 font-medium">Strategy</th>
           </tr>
@@ -42,6 +44,12 @@ export default function OptionsTable({ options }: OptionsTableProps) {
               </td>
               <td className="py-1.5 px-3 text-right font-mono text-text-primary">
                 {opt.delta_estimate != null ? opt.delta_estimate.toFixed(2) : '-'}
+              </td>
+              <td className={`py-1.5 px-3 text-right font-mono ${opt.theta_estimate != null && opt.premium_estimate != null && opt.premium_estimate > 0 && Math.abs(opt.theta_estimate) / opt.premium_estimate > 0.02 ? 'text-amber-400' : 'text-text-primary'}`}>
+                {opt.theta_estimate != null ? opt.theta_estimate.toFixed(4) : '-'}
+              </td>
+              <td className="py-1.5 px-3 text-right font-mono text-text-primary">
+                {opt.vega_estimate != null ? opt.vega_estimate.toFixed(4) : '-'}
               </td>
               <td className="py-1.5 px-3 text-right font-mono text-text-primary">
                 {opt.breakeven_price != null ? `$${opt.breakeven_price.toFixed(2)}` : '-'}

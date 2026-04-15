@@ -54,9 +54,9 @@ SECTORS: dict[str, dict] = {
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-MAX_WATCHLIST = 30
-MAX_PER_SECTOR = 6
-MAX_CHANGES_PER_DAY = 5
+MAX_WATCHLIST = 60
+MAX_PER_SECTOR = 12
+MAX_CHANGES_PER_DAY = 10
 
 # Watchlist filters
 MIN_MARKET_CAP = 5_000_000_000      # $5B

@@ -199,6 +199,9 @@ class StrikeRecommendation(BaseModel):
     expiry: date
     premium_estimate: Decimal
     delta_estimate: Decimal
+    gamma_estimate: Optional[Decimal] = None
+    theta_estimate: Optional[Decimal] = None
+    vega_estimate: Optional[Decimal] = None
     breakeven: Decimal
     days_to_expiry: int
     open_interest: int

@@ -18,6 +18,9 @@ export interface StrikeRecommendation {
   expiry: string;
   premium_estimate: number;
   delta_estimate: number;
+  gamma_estimate: number | null;
+  theta_estimate: number | null;
+  vega_estimate: number | null;
   breakeven: number;
   days_to_expiry: number;
   open_interest: number;
@@ -60,6 +63,9 @@ export interface SuggestedOption {
   expiry: string;
   premium_estimate: number | null;
   delta_estimate: number | null;
+  gamma_estimate: number | null;
+  theta_estimate: number | null;
+  vega_estimate: number | null;
   strategy: string | null;
   strategy_rationale: string | null;
   days_to_expiry: number | null;

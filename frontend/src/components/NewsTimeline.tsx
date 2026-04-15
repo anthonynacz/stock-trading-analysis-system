@@ -116,8 +116,8 @@ export default function NewsTimeline({ items, showTickers = false }: NewsTimelin
               key={item.id}
               className="flex items-start gap-3 py-2 border-b border-border/50 last:border-0"
             >
-              {/* Sentiment dot */}
-              <div className="mt-1.5 flex-shrink-0">
+              {/* Sentiment dot + score */}
+              <div className="mt-1 flex-shrink-0 flex items-center gap-1.5">
                 <div
                   className="w-2 h-2 rounded-full"
                   style={{
@@ -126,6 +126,14 @@ export default function NewsTimeline({ items, showTickers = false }: NewsTimelin
                       : '#8b949e',
                   }}
                 />
+                {item.sentiment_score != null && (
+                  <span
+                    className="text-[10px] font-mono font-medium tabular-nums"
+                    style={{ color: SENTIMENT_COLOR(item.sentiment_score) }}
+                  >
+                    {item.sentiment_score > 0 ? '+' : ''}{item.sentiment_score.toFixed(2)}
+                  </span>
+                )}
               </div>
 
               <div className="flex-1 min-w-0">

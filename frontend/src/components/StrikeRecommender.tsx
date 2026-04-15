@@ -36,11 +36,32 @@ function StrikeCard({
         <span className="text-text-primary font-mono text-right">${rec.premium_estimate.toFixed(2)}</span>
         <span className="text-text-secondary">Delta</span>
         <span className="text-text-primary font-mono text-right">{rec.delta_estimate.toFixed(3)}</span>
+        {rec.theta_estimate != null && (
+          <>
+            <span className="text-text-secondary">Theta</span>
+            <span className={`font-mono text-right ${rec.premium_estimate > 0 && Math.abs(rec.theta_estimate) / rec.premium_estimate > 0.02 ? 'text-amber-400' : 'text-text-primary'}`}>
+              {rec.theta_estimate.toFixed(4)}/day
+            </span>
+          </>
+        )}
+        {rec.vega_estimate != null && (
+          <>
+            <span className="text-text-secondary">Vega</span>
+            <span className="text-text-primary font-mono text-right">{rec.vega_estimate.toFixed(4)}</span>
+          </>
+        )}
         <span className="text-text-secondary">Breakeven</span>
         <span className="text-text-primary font-mono text-right">${rec.breakeven.toFixed(2)}</span>
         <span className="text-text-secondary">Open Interest</span>
         <span className="text-text-primary font-mono text-right">{rec.open_interest.toLocaleString()}</span>
       </div>
+      {rec.theta_estimate != null && rec.premium_estimate > 0 &&
+        Math.abs(rec.theta_estimate) / rec.premium_estimate > 0.02 && (
+        <div className="flex items-center gap-1.5 text-[10px] text-amber-400 mt-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+          Heavy theta decay — {(Math.abs(rec.theta_estimate) / rec.premium_estimate * 100).toFixed(1)}% premium/day
+        </div>
+      )}
       <p className="text-[11px] text-text-secondary leading-relaxed border-t border-border/40 pt-2 mt-1">
         {rec.explanation}
       </p>

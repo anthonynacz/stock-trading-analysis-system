@@ -73,8 +73,9 @@ Signals are stacked across eight categories. Classification thresholds: ≥60 ST
 **Relative strength**: Stock vs SPY 5d momentum comparison. Outperforming (+10), underperforming (-10). SPY data fetched once per pipeline via `get_market_benchmark()`.
 **OHLC candlestick signals**: Gap-Down After Up Day (-12), Upper Wick Rejection (-8), Close Near Low (-5), Close Near High (+5). Derived from Open/High/Low in yfinance 2-month history. Silently skip when OHLC unavailable — all close-only signals unaffected.
 **Options signals**: Unusual call volume (+15) / put volume (-15) vs 20-day historical avg, put/call OI skew (±10), high IV rank (-10).
-**News signals**: FinBERT sentiment scaled by magnitude and article count (±5 to ±15), sector tailwind/headwind (±10).
-**Geopolitical signals**: Keyword-detected events (MILITARY_CONFLICT, TRADE_WAR, SANCTIONS, DIPLOMATIC_BREAKTHROUGH, OIL_DISRUPTION, REGULATION) from MACRO/SECTOR/GEOPOLITICAL news. Sector-specific impact mapping — same event has different points per EdgeFlow sector (e.g., military conflict: Energy +18, Semis -12). Points scaled by FinBERT sentiment magnitude (0.6x–1.0x of base), clamped ±20. One signal per event type (deduplicated). Detection in `utils/geopolitical.py`.
+**Greek signals**: Computed from Black-Scholes (`utils/greeks.py`) using yfinance IV per contract. Heavy Theta Decay (-8 if ATM theta >3% premium/day, -5 if >2%). IV Crush Risk (-12 if earnings within 7 days AND vega >8% premium per 1% IV). Favorable Theta (+5 if theta <1%, near-term DTE ≤14, and score >30). Greeks replace the crude moneyness-based delta estimate with proper BS delta. Gamma, theta, vega are computed on-the-fly (not persisted — too ephemeral).
+**News signals**: FinBERT sentiment scaled by magnitude and article count (±5 to ±15), sector tailwind/headwind (±10). **When geopolitical signals fire, news sentiment points are halved** to reduce double-counting (same articles drive both signals).
+**Geopolitical signals**: Keyword-detected events (MILITARY_CONFLICT, TRADE_WAR, SANCTIONS, DIPLOMATIC_BREAKTHROUGH, OIL_DISRUPTION, REGULATION) from MACRO/SECTOR/GEOPOLITICAL news. Sector-specific impact mapping — same event has different points per EdgeFlow sector (e.g., military conflict: Energy +18, Semis -12). Points scaled by FinBERT sentiment magnitude (0.6x–1.0x of base), clamped ±20 per signal. One signal per event type (deduplicated). **Total geopolitical contribution capped at ±20** to prevent correlated events (e.g., MILITARY_CONFLICT + OIL_DISRUPTION) from stacking beyond a single event's impact. Detection in `utils/geopolitical.py`.
 **Other**: Insider buying (+5) / selling (-5), stock already moved (-5).
 
 Technical indicators (RSI-14, 5d/20d momentum, volume ratio, drawdown metrics, consecutive down days, down-day volume ratio, OHLC candlestick metrics) are computed from yfinance 2-month price history via `DataSourceClient.get_technical_indicators()`. Moving averages (50d, 200d), short interest, and 52-week range come from yfinance `.info` via `get_stock_data()`. SPY benchmark comes from `get_market_benchmark()`.
@@ -86,7 +87,7 @@ Three risk profiles control delta ranges, DTE windows, and contract filtering:
 - **Moderate**: delta 0.30-0.55, DTE 14-50 — ATM to slightly OTM, balanced
 - **Aggressive**: delta 0.10-0.35, DTE 21-75 — OTM, maximum leverage
 
-Filters: OI ≥ 10, bid-ask spread ≤ 1.50, premium * 100 ≤ budget. Delta estimated from moneyness with 3x slope. The `/strikes/all` endpoint fetches the options chain once and returns all three profiles in a single response.
+Filters: OI ≥ 10, bid-ask spread ≤ 1.50, premium * 100 ≤ budget. Delta computed via Black-Scholes using yfinance IV per contract (`utils/greeks.py`). Gamma, theta, vega also returned per contract. Contracts with heavy theta (>3% premium/day) are scored lower. Explanation text includes greek warnings (HIGH THETA, HIGH VEGA). The `/strikes/all` endpoint fetches the options chain once and returns all three profiles in a single response.
 
 ### Sentiment Analysis (FinBERT)
 
@@ -321,7 +322,7 @@ For local dev, `.env` at project root with `DATABASE_URL` pointing to `localhost
 
 ## Sector Universe
 
-5 sectors with ~13 stocks each (~68 total universe, stored in `universe_stocks` table). Seeded from `config.SECTORS` on first init; expandable via Universe page (manual add or discovery approval). Active watchlist is max 30 (6 per sector). Sectors: AI/Semiconductors, Fintech/Payments, Energy/Commodities, Healthcare/Biotech, Consumer/Cloud/Enterprise.
+5 sectors with ~13 stocks each (~68 total universe, stored in `universe_stocks` table). Seeded from `config.SECTORS` on first init; expandable via Universe page (manual add or discovery approval). Active watchlist is max 60 (12 per sector). Sectors: AI/Semiconductors, Fintech/Payments, Energy/Commodities, Healthcare/Biotech, Consumer/Cloud/Enterprise.
 
 ## Pipeline Idempotency
 

@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import OptionsSnapshot, SuggestedOption
 from utils.data_sources import DataSourceClient
+from utils.greeks import RISK_FREE_RATE, compute_greeks
 from utils.scoring import calculate_iv_rank
 
 logger = logging.getLogger(__name__)
@@ -329,16 +330,13 @@ class OptionsAnalyzer:
                     if bid > 0 and ask > 0 and (ask / bid) > 1.15:
                         continue
 
-                    # Delta estimate
-                    abs_pct = abs(pct_from_atm)
-                    if abs_pct <= 0.005:
-                        delta_est = 0.50
-                    elif abs_pct <= 0.01:
-                        delta_est = 0.45
-                    elif abs_pct <= 0.02:
-                        delta_est = 0.40
-                    else:
-                        delta_est = 0.35
+                    # Compute greeks via Black-Scholes
+                    iv = contract.get("impliedVolatility") or 0.30
+                    greeks = compute_greeks(
+                        S=current_price, K=strike, T=dte / 365.0,
+                        r=RISK_FREE_RATE, sigma=iv, is_call=is_call,
+                    )
+                    delta_est = greeks["delta"] if greeks["delta"] is not None else 0.50
 
                     # Breakeven
                     if is_call:
@@ -355,7 +353,10 @@ class OptionsAnalyzer:
                         "strike": Decimal(str(strike)),
                         "expiry": exp_date,
                         "premium_estimate": Decimal(str(round(premium, 2))),
-                        "delta_estimate": Decimal(str(delta_est)),
+                        "delta_estimate": Decimal(str(round(abs(delta_est), 4))),
+                        "gamma_estimate": Decimal(str(round(greeks["gamma"], 6))) if greeks["gamma"] else None,
+                        "theta_estimate": Decimal(str(round(greeks["theta"], 4))) if greeks["theta"] else None,
+                        "vega_estimate": Decimal(str(round(greeks["vega"], 4))) if greeks["vega"] else None,
                         "strategy": strategy,
                         "strategy_rationale": strategy_rationale,
                         "days_to_expiry": dte,
@@ -456,60 +457,68 @@ class OptionsAnalyzer:
                     if max_budget is not None and premium * 100 > max_budget:
                         continue
 
-                    # Estimate delta from moneyness
-                    pct = (strike - current_price) / current_price
-                    abs_pct = abs(pct)
+                    # Compute greeks via Black-Scholes
+                    iv = c.get("impliedVolatility") or 0.30
+                    greeks = compute_greeks(
+                        S=current_price, K=strike, T=dte / 365.0,
+                        r=RISK_FREE_RATE, sigma=iv, is_call=is_call,
+                    )
                     if is_call:
-                        if abs_pct <= 0.005:
-                            delta = 0.50
-                        elif pct < 0:  # ITM call
-                            delta = min(0.50 + abs_pct * 3, 0.95)
-                        else:  # OTM call
-                            delta = max(0.50 - abs_pct * 3, 0.05)
+                        delta = greeks["delta"] if greeks["delta"] is not None else 0.50
                     else:
-                        if abs_pct <= 0.005:
-                            delta = -0.50
-                        elif pct > 0:  # ITM put
-                            delta = max(-0.50 - abs_pct * 3, -0.95)
-                        else:  # OTM put
-                            delta = min(-0.50 + abs_pct * 3, -0.05)
+                        delta = greeks["delta"] if greeks["delta"] is not None else -0.50
 
-                    if is_call:
-                        if delta < lo or delta > hi:
-                            continue
-                    else:
-                        if delta < lo or delta > hi:
-                            continue
+                    if delta < lo or delta > hi:
+                        continue
 
                     # Score: prefer delta near midpoint of target range, then higher OI
                     mid = (lo + hi) / 2
                     score = 1.0 - abs(delta - mid) / max(abs(hi - lo), 0.01)
                     score += min(oi / 10000, 0.3)  # OI bonus
 
+                    # Theta penalty: heavy theta contracts ranked lower
+                    if greeks["theta"] is not None and premium > 0:
+                        theta_pct = abs(greeks["theta"]) / premium
+                        if theta_pct > 0.03:
+                            score -= 0.15
+                        elif theta_pct > 0.015:
+                            score -= 0.05
+
                     if score > best_score:
                         breakeven = (strike + premium) if is_call else (strike - premium)
                         risk_label = profile["label"]
-                        if is_call:
-                            expl = (
-                                f"{risk_label} call: ${strike:.0f} strike, {dte} DTE, "
-                                f"est. delta {delta:.2f}. "
-                                f"Premium ${premium:.2f} (${premium * 100:.0f}/contract). "
-                                f"Breakeven at ${breakeven:.2f}. "
-                                f"{profile['desc']}"
-                            )
-                        else:
-                            expl = (
-                                f"{risk_label} put: ${strike:.0f} strike, {dte} DTE, "
-                                f"est. delta {delta:.2f}. "
-                                f"Premium ${premium:.2f} (${premium * 100:.0f}/contract). "
-                                f"Breakeven at ${breakeven:.2f}. "
-                                f"{profile['desc']}"
-                            )
+                        contract_label = "call" if is_call else "put"
+                        expl = (
+                            f"{risk_label} {contract_label}: ${strike:.0f} strike, {dte} DTE, "
+                            f"delta {abs(delta):.2f}. "
+                            f"Premium ${premium:.2f} (${premium * 100:.0f}/contract). "
+                            f"Breakeven at ${breakeven:.2f}. "
+                            f"{profile['desc']}"
+                        )
+
+                        # Greek warnings
+                        warnings = []
+                        if greeks["theta"] is not None and premium > 0:
+                            t_pct = abs(greeks["theta"]) / premium * 100
+                            if t_pct > 3:
+                                warnings.append(f"HIGH THETA: losing {t_pct:.1f}% premium/day")
+                            elif t_pct > 1.5:
+                                warnings.append(f"Theta: {t_pct:.1f}% daily decay")
+                        if greeks["vega"] is not None and premium > 0:
+                            v_pct = abs(greeks["vega"]) / premium * 100
+                            if v_pct > 10:
+                                warnings.append(f"HIGH VEGA: {v_pct:.1f}% per 1% IV move")
+                        if warnings:
+                            expl += " | " + "; ".join(warnings)
+
                         best = {
                             "strike": round(strike, 2),
                             "expiry": exp_date.isoformat(),
                             "premium_estimate": round(premium, 2),
-                            "delta_estimate": round(delta, 2),
+                            "delta_estimate": round(abs(delta), 4),
+                            "gamma_estimate": round(greeks["gamma"], 6) if greeks["gamma"] else None,
+                            "theta_estimate": round(greeks["theta"], 4) if greeks["theta"] else None,
+                            "vega_estimate": round(greeks["vega"], 4) if greeks["vega"] else None,
                             "breakeven": round(breakeven, 2),
                             "days_to_expiry": dte,
                             "open_interest": oi,
@@ -614,33 +623,31 @@ class OptionsAnalyzer:
                 if max_budget is not None and premium * 100 > max_budget:
                     continue
 
-                pct = (strike - current_price) / current_price
-                abs_pct = abs(pct)
+                # Compute greeks via Black-Scholes
+                iv = c.get("impliedVolatility") or 0.30
+                greeks = compute_greeks(
+                    S=current_price, K=strike, T=dte / 365.0,
+                    r=RISK_FREE_RATE, sigma=iv, is_call=is_call,
+                )
                 if is_call:
-                    if abs_pct <= 0.005:
-                        delta = 0.50
-                    elif pct < 0:
-                        delta = min(0.50 + abs_pct * 3, 0.95)
-                    else:
-                        delta = max(0.50 - abs_pct * 3, 0.05)
+                    delta = greeks["delta"] if greeks["delta"] is not None else 0.50
                 else:
-                    if abs_pct <= 0.005:
-                        delta = -0.50
-                    elif pct > 0:
-                        delta = max(-0.50 - abs_pct * 3, -0.95)
-                    else:
-                        delta = min(-0.50 + abs_pct * 3, -0.05)
+                    delta = greeks["delta"] if greeks["delta"] is not None else -0.50
 
-                if is_call:
-                    if delta < lo or delta > hi:
-                        continue
-                else:
-                    if delta < lo or delta > hi:
-                        continue
+                if delta < lo or delta > hi:
+                    continue
 
                 mid = (lo + hi) / 2
                 score = 1.0 - abs(delta - mid) / max(abs(hi - lo), 0.01)
                 score += min(oi / 10000, 0.3)
+
+                # Theta penalty: heavy theta contracts ranked lower
+                if greeks["theta"] is not None and premium > 0:
+                    theta_pct = abs(greeks["theta"]) / premium
+                    if theta_pct > 0.03:
+                        score -= 0.15
+                    elif theta_pct > 0.015:
+                        score -= 0.05
 
                 if score > best_score:
                     breakeven = (strike + premium) if is_call else (strike - premium)
@@ -648,16 +655,35 @@ class OptionsAnalyzer:
                     contract_label = "call" if is_call else "put"
                     expl = (
                         f"{risk_label} {contract_label}: ${strike:.0f} strike, {dte} DTE, "
-                        f"est. delta {delta:.2f}. "
+                        f"delta {abs(delta):.2f}. "
                         f"Premium ${premium:.2f} (${premium * 100:.0f}/contract). "
                         f"Breakeven at ${breakeven:.2f}. "
                         f"{profile['desc']}"
                     )
+
+                    # Greek warnings
+                    warnings = []
+                    if greeks["theta"] is not None and premium > 0:
+                        t_pct = abs(greeks["theta"]) / premium * 100
+                        if t_pct > 3:
+                            warnings.append(f"HIGH THETA: losing {t_pct:.1f}% premium/day")
+                        elif t_pct > 1.5:
+                            warnings.append(f"Theta: {t_pct:.1f}% daily decay")
+                    if greeks["vega"] is not None and premium > 0:
+                        v_pct = abs(greeks["vega"]) / premium * 100
+                        if v_pct > 10:
+                            warnings.append(f"HIGH VEGA: {v_pct:.1f}% per 1% IV move")
+                    if warnings:
+                        expl += " | " + "; ".join(warnings)
+
                     best = {
                         "strike": round(strike, 2),
                         "expiry": exp_date.isoformat(),
                         "premium_estimate": round(premium, 2),
-                        "delta_estimate": round(delta, 2),
+                        "delta_estimate": round(abs(delta), 4),
+                        "gamma_estimate": round(greeks["gamma"], 6) if greeks["gamma"] else None,
+                        "theta_estimate": round(greeks["theta"], 4) if greeks["theta"] else None,
+                        "vega_estimate": round(greeks["vega"], 4) if greeks["vega"] else None,
                         "breakeven": round(breakeven, 2),
                         "days_to_expiry": dte,
                         "open_interest": oi,
@@ -666,6 +692,105 @@ class OptionsAnalyzer:
                     best_score = score
 
         return best
+
+    # ------------------------------------------------------------------
+    # Chain greeks summary (for recommendation engine signals)
+    # ------------------------------------------------------------------
+
+    async def get_chain_greeks_summary(
+        self, ticker: str, current_price: float
+    ) -> dict | None:
+        """Compute aggregate greek metrics from ATM contracts.
+
+        Fetches the options chain and finds ATM contracts for the nearest
+        expirations. Returns average theta and vega as percentages of
+        premium, used by the recommendation engine for greek signals.
+        """
+        if not current_price or current_price <= 0:
+            return None
+
+        try:
+            loop = asyncio.get_event_loop()
+            chain_data = await loop.run_in_executor(
+                None, self._data_client.get_options_chain, ticker
+            )
+            chains = chain_data.get("chains", {})
+            if not chains:
+                return None
+
+            today = date.today()
+            samples: list[dict] = []
+
+            # Sample from DTE >= 14 (moderate profile minimum) to reflect
+            # contracts traders actually hold. Weeklies (< 14 DTE) have
+            # naturally extreme theta that would fire on every ticker.
+            eligible_exps = []
+            for exp_str in sorted(chains.keys()):
+                try:
+                    exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                dte = (exp_date - today).days
+                if dte >= 14:
+                    eligible_exps.append((exp_str, dte))
+                if len(eligible_exps) >= 2:
+                    break
+
+            for exp_str, dte in eligible_exps:
+
+                sides = chains[exp_str]
+                # Find ATM call and put (nearest strike to current price)
+                for side_key, is_call in [("calls", True), ("puts", False)]:
+                    contracts = sides.get(side_key, [])
+                    if not contracts:
+                        continue
+
+                    # Find contract with strike closest to current price
+                    atm = min(
+                        contracts,
+                        key=lambda c: abs((c.get("strike") or 0) - current_price),
+                    )
+                    strike = atm.get("strike")
+                    if not strike:
+                        continue
+
+                    bid = atm.get("bid") or 0
+                    ask = atm.get("ask") or 0
+                    premium = atm.get("lastPrice") or ((bid + ask) / 2 if bid and ask else 0)
+                    iv = atm.get("impliedVolatility") or 0
+
+                    if premium <= 0 or iv <= 0:
+                        continue
+
+                    greeks = compute_greeks(
+                        S=current_price, K=strike, T=dte / 365.0,
+                        r=RISK_FREE_RATE, sigma=iv, is_call=is_call,
+                    )
+                    if greeks["theta"] is None:
+                        continue
+
+                    samples.append({
+                        "theta_pct": abs(greeks["theta"]) / premium,
+                        "vega_pct": abs(greeks["vega"]) / premium if greeks["vega"] else 0,
+                        "dte": dte,
+                    })
+
+            if not samples:
+                return None
+
+            avg_theta_pct = sum(s["theta_pct"] for s in samples) / len(samples)
+            avg_vega_pct = sum(s["vega_pct"] for s in samples) / len(samples)
+            near_term_dte = min(s["dte"] for s in samples)
+
+            return {
+                "avg_atm_theta_pct": round(avg_theta_pct, 6),
+                "avg_atm_vega_pct": round(avg_vega_pct, 6),
+                "near_term_dte": near_term_dte,
+            }
+
+        except Exception:
+            logger.exception("get_chain_greeks_summary failed for %s", ticker)
+            return None
 
     # ------------------------------------------------------------------
     # Internal helpers
