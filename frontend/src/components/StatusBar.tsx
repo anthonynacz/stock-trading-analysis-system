@@ -45,13 +45,22 @@ export default function StatusBar({
     }
   };
 
-  // Find position in sorted (descending) date list
+  // Find position in sorted (descending) date list.
+  // idx === -1 means the selected date isn't in availableDates — typically
+  // happens when the user lands on today but today's pipeline hasn't run yet.
+  // In that case treat it as "newer than all available" so the left arrow
+  // can jump back to the most recent available run.
   const idx = availableDates.indexOf(selectedDate);
+  const isUnknownDate = idx === -1;
   const canGoNewer = idx > 0;
-  const canGoOlder = idx >= 0 && idx < availableDates.length - 1;
+  const canGoOlder =
+    (isUnknownDate && availableDates.length > 0) ||
+    (idx >= 0 && idx < availableDates.length - 1);
 
   const goOlder = () => {
-    if (canGoOlder) onDateChange(availableDates[idx + 1]);
+    if (!canGoOlder) return;
+    if (isUnknownDate) onDateChange(availableDates[0]);
+    else onDateChange(availableDates[idx + 1]);
   };
   const goNewer = () => {
     if (canGoNewer) onDateChange(availableDates[idx - 1]);

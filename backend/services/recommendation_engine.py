@@ -159,13 +159,19 @@ class RecommendationEngine:
         # ── 4. Entry strategy ───────────────────────────────────────────
         current_price = stock_data.get("price")
         stock_moved_pct = self._calc_stock_move_pct(stock_data)
-        entry_strategy = self._determine_entry_strategy(
-            conviction_score, catalyst_window, stock_moved_pct
+        action, stale_move_gated = self._apply_stale_move_gate(
+            action, stock_moved_pct, signal_details
         )
+        entry_strategy = self._determine_entry_strategy(
+            conviction_score, catalyst_window, stock_moved_pct, signal_details
+        )
+        if stale_move_gated:
+            entry_strategy = "WAIT"
 
         # ── 5. Rationale ───────────────────────────────────────────────
         rationale = await self._generate_rationale(
-            ticker, action, conviction_score, signal_details, stock_data
+            ticker, action, conviction_score, signal_details, stock_data,
+            entry_strategy=entry_strategy,
         )
 
         # ── 6. Risk level ──────────────────────────────────────────────
@@ -285,13 +291,19 @@ class RecommendationEngine:
         # ── 4. Entry strategy ───────────────────────────────────────────
         current_price = stock_data.get("price")
         stock_moved_pct = self._calc_stock_move_pct(stock_data)
-        entry_strategy = self._determine_entry_strategy(
-            conviction_score, catalyst_window, stock_moved_pct
+        action, stale_move_gated = self._apply_stale_move_gate(
+            action, stock_moved_pct, signal_details
         )
+        entry_strategy = self._determine_entry_strategy(
+            conviction_score, catalyst_window, stock_moved_pct, signal_details
+        )
+        if stale_move_gated:
+            entry_strategy = "WAIT"
 
         # ── 5. Rationale ───────────────────────────────────────────────
         rationale = await self._generate_rationale(
-            ticker, action, conviction_score, signal_details, stock_data
+            ticker, action, conviction_score, signal_details, stock_data,
+            entry_strategy=entry_strategy,
         )
 
         # ── 6. Risk level ──────────────────────────────────────────────
@@ -322,7 +334,27 @@ class RecommendationEngine:
             )
 
         # ── 9. Upsert recommendation ──────────────────────────────────
-        # Delete existing recommendation for same date + ticker
+        # Capture prior values BEFORE deletion so the new row can store them
+        # for revision-diff display in the UI. Single-row-per-(date,ticker)
+        # invariant is preserved; only the most recent prior is kept.
+        existing_q = await self._session.execute(
+            select(Recommendation).where(
+                Recommendation.recommendation_date == today,
+                Recommendation.ticker == ticker,
+            )
+        )
+        existing = existing_q.scalars().first()
+        if existing is not None:
+            prior_action = existing.action
+            prior_conviction = existing.conviction_score
+            revision_number = (existing.revision_number or 0) + 1
+            revised_at = datetime.now(tz=timezone.utc)
+        else:
+            prior_action = None
+            prior_conviction = None
+            revision_number = 0
+            revised_at = None
+
         await self._session.execute(
             delete(SuggestedOption).where(
                 SuggestedOption.recommendation_id.in_(
@@ -362,6 +394,10 @@ class RecommendationEngine:
                 if stop_loss_price is not None
                 else None
             ),
+            prior_action=prior_action,
+            prior_conviction_score=prior_conviction,
+            revision_number=revision_number,
+            revised_at=revised_at,
         )
         self._session.add(rec)
         await self._session.flush()  # populate rec.id
@@ -430,6 +466,140 @@ class RecommendationEngine:
         except Exception:
             logger.exception("_get_historical_avg_volume failed for %s", ticker)
             return 0.0, 0.0
+
+    # ------------------------------------------------------------------
+    # Analyst revision cluster (14-day window)
+    # ------------------------------------------------------------------
+
+    async def _analyst_revision_cluster(self, ticker: str) -> dict:
+        """Count bullish/bearish analyst actions from T1/T2 firms in last 14 days.
+
+        Bullish action = upgrade, PT raise >5%.
+        Bearish action = downgrade, PT cut >5%.
+        Only T1/T2 firms count (firm_tier in {1, 2}).
+        Each distinct firm counts at most once per direction.
+        """
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=14)
+        stmt = (
+            select(AnalystRating)
+            .where(
+                AnalystRating.ticker == ticker,
+                AnalystRating.published_at >= cutoff,
+            )
+            .order_by(AnalystRating.published_at.desc())
+        )
+        result = await self._session.execute(stmt)
+        ratings = list(result.scalars().all())
+
+        bullish_firms: set[str] = set()
+        bearish_firms: set[str] = set()
+        for r in ratings:
+            if (r.firm_tier or 3) > 2:
+                continue
+            firm = r.analyst_firm or "Unknown"
+            prev = (r.previous_rating or "").upper()
+            new = (r.new_rating or "").upper()
+
+            if self._is_upgrade(prev, new):
+                bullish_firms.add(firm)
+                continue
+            if self._is_downgrade(prev, new):
+                bearish_firms.add(firm)
+                continue
+
+            if r.previous_pt is not None and r.new_pt is not None:
+                prev_pt = float(r.previous_pt)
+                new_pt = float(r.new_pt)
+                if prev_pt > 0:
+                    pct = ((new_pt - prev_pt) / prev_pt) * 100.0
+                    if pct > 5:
+                        bullish_firms.add(firm)
+                    elif pct < -5:
+                        bearish_firms.add(firm)
+
+        return {
+            "bullish_count": len(bullish_firms),
+            "bearish_count": len(bearish_firms),
+            "bullish_firms": sorted(bullish_firms),
+            "bearish_firms": sorted(bearish_firms),
+        }
+
+    # ------------------------------------------------------------------
+    # IV rank trajectory (5-day delta)
+    # ------------------------------------------------------------------
+
+    async def _iv_rank_trajectory(self, ticker: str) -> float | None:
+        """Return IV-rank delta over last ~5 days (today - baseline 5d ago).
+
+        Uses the earliest snapshot within the last 7 days (excluding today)
+        as baseline, latest snapshot as current.  Returns None if either
+        missing.
+        """
+        try:
+            now = datetime.now(tz=timezone.utc)
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            window_start = now - timedelta(days=7)
+
+            stmt = (
+                select(OptionsSnapshot.iv_rank, OptionsSnapshot.snapshot_time)
+                .where(
+                    OptionsSnapshot.ticker == ticker,
+                    OptionsSnapshot.snapshot_time >= window_start,
+                    OptionsSnapshot.snapshot_time < today_start,
+                    OptionsSnapshot.iv_rank.isnot(None),
+                )
+                .order_by(OptionsSnapshot.snapshot_time.asc())
+            )
+            result = await self._session.execute(stmt)
+            rows = list(result.all())
+            if not rows:
+                return None
+
+            baseline = float(rows[0][0])
+
+            # Latest (today if present, else most-recent pre-today)
+            latest_stmt = (
+                select(OptionsSnapshot.iv_rank)
+                .where(
+                    OptionsSnapshot.ticker == ticker,
+                    OptionsSnapshot.iv_rank.isnot(None),
+                )
+                .order_by(OptionsSnapshot.snapshot_time.desc())
+                .limit(1)
+            )
+            latest_result = await self._session.execute(latest_stmt)
+            latest_row = latest_result.first()
+            if latest_row is None or latest_row[0] is None:
+                return None
+            latest = float(latest_row[0])
+            return latest - baseline
+        except Exception:
+            logger.exception("_iv_rank_trajectory failed for %s", ticker)
+            return None
+
+    async def _rolling_call_volume_3d(self, ticker: str) -> float:
+        """Return average call volume over last 3 snapshots (excluding today)."""
+        try:
+            now = datetime.now(tz=timezone.utc)
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            stmt = (
+                select(OptionsSnapshot.total_call_volume)
+                .where(
+                    OptionsSnapshot.ticker == ticker,
+                    OptionsSnapshot.snapshot_time < today_start,
+                    OptionsSnapshot.total_call_volume.isnot(None),
+                )
+                .order_by(OptionsSnapshot.snapshot_time.desc())
+                .limit(3)
+            )
+            result = await self._session.execute(stmt)
+            vols = [float(r[0]) for r in result.all()]
+            if not vols:
+                return 0.0
+            return sum(vols) / len(vols)
+        except Exception:
+            logger.exception("_rolling_call_volume_3d failed for %s", ticker)
+            return 0.0
 
     # ------------------------------------------------------------------
     # Signal stacking
@@ -520,6 +690,31 @@ class RecommendationEngine:
                             "detail": f"{firm} PT cut from ${prev_pt:.0f} to ${new_pt:.0f} ({pt_change_pct:+.1f}%)",
                         })
 
+        # ── Analyst Revision Momentum (14-day cluster) ──────────────────
+        cluster = await self._analyst_revision_cluster(ticker)
+        if cluster["bullish_count"] >= 2:
+            pts = 15 if cluster["bullish_count"] >= 3 else 10
+            score += pts
+            signals.append({
+                "signal": "Analyst Revision Cluster",
+                "points": pts,
+                "detail": (
+                    f"{cluster['bullish_count']} bullish analyst actions in last 14d "
+                    f"(T1/T2 firms: {', '.join(cluster['bullish_firms'][:3])})"
+                ),
+            })
+        elif cluster["bearish_count"] >= 2:
+            pts = -15 if cluster["bearish_count"] >= 3 else -10
+            score += pts
+            signals.append({
+                "signal": "Analyst Revision Cluster",
+                "points": pts,
+                "detail": (
+                    f"{cluster['bearish_count']} bearish analyst actions in last 14d "
+                    f"(T1/T2 firms: {', '.join(cluster['bearish_firms'][:3])})"
+                ),
+            })
+
         # ── Earnings signals ────────────────────────────────────────────
         if catalyst_window:
             earnings_date = catalyst_window.get("earnings_date")
@@ -588,43 +783,66 @@ class RecommendationEngine:
                     "detail": f"RSI(14) at {rsi:.1f} — overbought, potential pullback",
                 })
 
-        # Price vs 50-day SMA
+        # Price vs 50/200-day SMA — horizon-scaled.
+        #
+        # SMAs describe regime over a 2-6 month window. For a weekly option,
+        # being "above the 50d SMA" rarely matters by itself — the move is
+        # already priced in and the mean-reversion thesis (when below) takes
+        # 3-8 weeks to play out. We scale the contribution by the suggested
+        # trade's estimated DTE so SMAs land at full weight on 30+ DTE
+        # contracts and shrink to a token contribution on weeklies.
+        est_dte = self._estimated_trade_dte(catalyst_window)
+        sma_mult = self._sma_horizon_multiplier(est_dte)
+
+        def _emit_sma(label: str, base_pts: int, detail_core: str) -> None:
+            scaled = round(base_pts * sma_mult)
+            if scaled == 0:
+                return
+            note = (
+                ""
+                if sma_mult >= 0.99
+                else f" (×{sma_mult:.2f} for ~{est_dte}d DTE)"
+            )
+            nonlocal_score[0] += scaled
+            signals.append({
+                "signal": label,
+                "points": scaled,
+                "detail": detail_core + note,
+            })
+
+        # Workaround for not having `nonlocal score` in the current scope —
+        # Python closures can't rebind outer-scope ints. Use a 1-element list.
+        nonlocal_score = [score]
+
         sma_50 = stock_data.get("sma_50")
         if current_price and sma_50 and sma_50 > 0:
             pct_vs_50 = ((current_price - sma_50) / sma_50) * 100
             if pct_vs_50 > 5:
-                score += 10
-                signals.append({
-                    "signal": "Above 50d SMA",
-                    "points": 10,
-                    "detail": f"Price ${current_price:.2f} is {pct_vs_50:.1f}% above 50d SMA ${sma_50:.2f}",
-                })
+                _emit_sma(
+                    "Above 50d SMA", 10,
+                    f"Price ${current_price:.2f} is {pct_vs_50:.1f}% above 50d SMA ${sma_50:.2f}",
+                )
             elif pct_vs_50 < -5:
-                score -= 10
-                signals.append({
-                    "signal": "Below 50d SMA",
-                    "points": -10,
-                    "detail": f"Price ${current_price:.2f} is {pct_vs_50:.1f}% below 50d SMA ${sma_50:.2f}",
-                })
+                _emit_sma(
+                    "Below 50d SMA", -10,
+                    f"Price ${current_price:.2f} is {pct_vs_50:.1f}% below 50d SMA ${sma_50:.2f}",
+                )
 
-        # Price vs 200-day SMA
         sma_200 = stock_data.get("sma_200")
         if current_price and sma_200 and sma_200 > 0:
             pct_vs_200 = ((current_price - sma_200) / sma_200) * 100
             if pct_vs_200 > 5:
-                score += 5
-                signals.append({
-                    "signal": "Above 200d SMA",
-                    "points": 5,
-                    "detail": f"Price {pct_vs_200:.1f}% above 200d SMA ${sma_200:.2f} — long-term uptrend",
-                })
+                _emit_sma(
+                    "Above 200d SMA", 5,
+                    f"Price {pct_vs_200:.1f}% above 200d SMA ${sma_200:.2f} — long-term uptrend",
+                )
             elif pct_vs_200 < -5:
-                score -= 5
-                signals.append({
-                    "signal": "Below 200d SMA",
-                    "points": -5,
-                    "detail": f"Price {pct_vs_200:.1f}% below 200d SMA ${sma_200:.2f} — long-term downtrend",
-                })
+                _emit_sma(
+                    "Below 200d SMA", -5,
+                    f"Price {pct_vs_200:.1f}% below 200d SMA ${sma_200:.2f} — long-term downtrend",
+                )
+
+        score = nonlocal_score[0]
 
         # Multi-day momentum
         momentum_5d = technicals.get("momentum_5d")
@@ -900,6 +1118,25 @@ class RecommendationEngine:
                     "detail": f"Call volume {total_call:,} vs 20d avg {hist_avg_call:,.0f} ({total_call / hist_avg_call:.1f}x)",
                 })
 
+            # Smart-Money Positioning (3-day sustained flow + rising IV rank)
+            rolling_3d_call = await self._rolling_call_volume_3d(ticker)
+            iv_trajectory = await self._iv_rank_trajectory(ticker)
+            if (
+                hist_avg_call > 0
+                and rolling_3d_call >= 2.0 * hist_avg_call
+                and iv_trajectory is not None
+                and iv_trajectory > 10.0
+            ):
+                score += 12
+                signals.append({
+                    "signal": "Smart Money Positioning",
+                    "points": 12,
+                    "detail": (
+                        f"3d avg calls {rolling_3d_call:,.0f} ({rolling_3d_call / hist_avg_call:.1f}x) "
+                        f"+ IV rank rising {iv_trajectory:+.0f}pp — institutional accumulation"
+                    ),
+                })
+
             # Unusual put volume (today vs historical average)
             if hist_avg_put > 0 and total_put > 1.5 * hist_avg_put:
                 score -= 15
@@ -1111,6 +1348,51 @@ class RecommendationEngine:
             return "SELL"
         return "STRONG_SELL"
 
+    # Action tiers ordered toward HOLD for stale-move downgrades.
+    _STALE_MOVE_DOWNGRADE = {
+        "STRONG_BUY": "BUY",
+        "BUY": "HOLD",
+        "SELL": "HOLD",
+        "STRONG_SELL": "SELL",
+    }
+
+    def _apply_stale_move_gate(
+        self,
+        action: str,
+        stock_moved_pct: float,
+        signals: list[dict],
+    ) -> tuple[str, bool]:
+        """Downgrade action and flag entry=WAIT when today's move has
+        already exhausted the edge.
+
+        Direction-matched: only fires when the move agrees with the
+        action's bias. SELL after a sharp drop sells the low; BUY after a
+        sharp rally chases a priced-in move. Counter-move entries
+        (buying the dip, selling the rip) are intentional and not gated.
+        """
+        if abs(stock_moved_pct) <= 5:
+            return action, False
+
+        bullish = action in ("BUY", "STRONG_BUY")
+        bearish = action in ("SELL", "STRONG_SELL")
+        move_agrees = (bullish and stock_moved_pct > 5) or (
+            bearish and stock_moved_pct < -5
+        )
+        if not move_agrees:
+            return action, False
+
+        new_action = self._STALE_MOVE_DOWNGRADE.get(action, action)
+        signals.append({
+            "signal": "Stale Move Gate",
+            "points": 0,
+            "detail": (
+                f"Action downgraded {action} → {new_action} — "
+                f"{stock_moved_pct:+.1f}% move already priced in; "
+                f"entry deferred to WAIT"
+            ),
+        })
+        return new_action, True
+
     # ------------------------------------------------------------------
     # Rationale generation
     # ------------------------------------------------------------------
@@ -1122,6 +1404,7 @@ class RecommendationEngine:
         conviction: float,
         signals: list[dict],
         stock_data: dict,
+        entry_strategy: str | None = None,
     ) -> str:
         """Build a natural-language rationale string."""
         display_action = action.replace("_", " ")
@@ -1158,11 +1441,31 @@ class RecommendationEngine:
             catalyst_window = await self._earnings_service.get_catalyst_window(ticker)
         except Exception:
             pass
-        entry = self._determine_entry_strategy(
-            conviction, catalyst_window, stock_moved_pct
+        entry = entry_strategy or self._determine_entry_strategy(
+            conviction, catalyst_window, stock_moved_pct, signals
         )
+        # Richer reason when PRE_POSITION fires on a leading signal
+        pre_position_reason = "catalyst window active"
+        if entry == "PRE_POSITION":
+            window_active = (
+                catalyst_window
+                and catalyst_window.get("window_status") == "ACTIVE"
+            )
+            if not window_active:
+                leading = next(
+                    (
+                        s for s in signals
+                        if s.get("signal") in self._LEADING_PRE_POSITION_SIGNALS
+                        and s.get("points", 0) > 0
+                    ),
+                    None,
+                )
+                if leading is not None:
+                    pre_position_reason = (
+                        f"{leading['signal'].lower()} ahead of catalyst"
+                    )
         entry_reasons = {
-            "PRE_POSITION": "catalyst window active",
+            "PRE_POSITION": pre_position_reason,
             "REACTIVE": "catalyst already in motion",
             "WAIT": "waiting for confirmation",
             "HOLD": "insufficient conviction",
@@ -1180,19 +1483,44 @@ class RecommendationEngine:
     # Entry strategy
     # ------------------------------------------------------------------
 
+    # Leading signals that justify PRE_POSITION even without an active
+    # earnings catalyst window.
+    _LEADING_PRE_POSITION_SIGNALS = frozenset({
+        "Analyst Revision Cluster",
+        "Smart Money Positioning",
+        "Insider Buy Cluster",
+    })
+
     def _determine_entry_strategy(
         self,
         conviction: float,
         catalyst_window: dict | None,
         stock_moved_pct: float,
+        signals: list[dict] | None = None,
     ) -> str:
-        """Decide entry timing strategy."""
+        """Decide entry timing strategy.
+
+        PRE_POSITION fires when:
+        - Active earnings catalyst window + conviction >= 30, OR
+        - A leading pre-position signal (analyst cluster, smart-money flow,
+          or insider cluster) is present with conviction >= 25 — lets us
+          front-run the earnings window when institutional signals cluster.
+        """
         if (
             catalyst_window
             and catalyst_window.get("window_status") == "ACTIVE"
             and conviction >= 30
         ):
             return "PRE_POSITION"
+
+        if signals and conviction >= 25:
+            for s in signals:
+                if (
+                    s.get("signal") in self._LEADING_PRE_POSITION_SIGNALS
+                    and s.get("points", 0) > 0
+                ):
+                    return "PRE_POSITION"
+
         if conviction >= 30 and abs(stock_moved_pct) > 3:
             return "REACTIVE"
         if conviction >= 15:
@@ -1386,7 +1714,12 @@ class RecommendationEngine:
     async def _check_insider_activity(
         self, ticker: str, signals: list[dict]
     ) -> None:
-        """Check for significant insider buying/selling and append signals."""
+        """Check for significant insider buying/selling and append signals.
+
+        Tracks cluster signal when ≥2 distinct insiders buy in last 30 days
+        with purchases outnumbering sales by count — a stronger pre-position
+        signal than total dollar value alone.
+        """
         try:
             loop = asyncio.get_event_loop()
             trades = await loop.run_in_executor(
@@ -1400,6 +1733,10 @@ class RecommendationEngine:
         )
         buying_value = 0.0
         selling_value = 0.0
+        buyer_names: set[str] = set()
+        seller_names: set[str] = set()
+        buy_count = 0
+        sell_count = 0
 
         for trade in trades:
             trade_date = trade.get("date", "")
@@ -1407,13 +1744,31 @@ class RecommendationEngine:
                 continue
             value = abs(float(trade.get("value") or 0))
             tx_type = (trade.get("transaction_type") or "").upper()
+            name = (trade.get("name") or trade.get("insider_name") or "").strip()
             # P = Purchase, S = Sale
             if tx_type == "P":
                 buying_value += value
+                buy_count += 1
+                if name:
+                    buyer_names.add(name)
             elif tx_type == "S":
                 selling_value += value
+                sell_count += 1
+                if name:
+                    seller_names.add(name)
 
-        if buying_value > 500_000:
+        # Cluster signal (stronger) — ≥2 distinct buyers and buys > sells
+        if len(buyer_names) >= 2 and buy_count > sell_count:
+            pts = 12 if len(buyer_names) >= 3 else 8
+            signals.append({
+                "signal": "Insider Buy Cluster",
+                "points": pts,
+                "detail": (
+                    f"{len(buyer_names)} distinct insiders bought (${buying_value:,.0f}) "
+                    f"vs {sell_count} sales in last 30d — convergent accumulation"
+                ),
+            })
+        elif buying_value > 500_000:
             signals.append({
                 "signal": "Insider Buying",
                 "points": 5,
@@ -1438,6 +1793,58 @@ class RecommendationEngine:
         if price and prev_close and prev_close > 0:
             return ((price - prev_close) / prev_close) * 100.0
         return 0.0
+
+    @staticmethod
+    def _estimated_trade_dte(catalyst_window: dict | None) -> int:
+        """Estimate the suggested-options DTE this rec is being built for.
+
+        Mirrors the logic ``options_analyzer.select_optimal_contracts`` uses
+        to pick a target expiry. Used by the SMA horizon-scaling gate so
+        long-term moving-average signals don't dominate weekly trade scores.
+
+        - Active earnings window (T-14 to T+10) → trade is short-dated
+          (typically 7-14 DTE); return days_to_earnings + 5, clamped ≥ 7.
+        - Earnings 14-30d out → moderate DTE (~21).
+        - No catalyst → default 30 (the strike recommender's mid-range).
+        """
+        if not catalyst_window:
+            return 30
+        from datetime import date as _date, datetime as _datetime
+        earnings_date = catalyst_window.get("earnings_date")
+        window_status = catalyst_window.get("window_status", "NONE")
+        if not earnings_date:
+            return 30
+        try:
+            ed = (
+                earnings_date
+                if isinstance(earnings_date, _date) and not isinstance(earnings_date, _datetime)
+                else _datetime.fromisoformat(str(earnings_date)).date()
+            )
+        except (ValueError, TypeError):
+            return 30
+        days_to = (ed - _date.today()).days
+        if window_status == "ACTIVE" and 0 <= days_to <= 14:
+            return max(7, days_to + 5)
+        if 0 < days_to <= 30:
+            return max(14, days_to)
+        return 30
+
+    @staticmethod
+    def _sma_horizon_multiplier(estimated_dte: int) -> float:
+        """Scale SMA signal weight by trade horizon.
+
+        - DTE ≥ 30: full weight (1.0) — SMAs genuinely matter
+        - DTE 21-29: 0.7 — trend regime still meaningful
+        - DTE 14-20: 0.5 — context only
+        - DTE  < 14: 0.25 — token contribution; weeklies don't trade SMAs
+        """
+        if estimated_dte >= 30:
+            return 1.0
+        if estimated_dte >= 21:
+            return 0.7
+        if estimated_dte >= 14:
+            return 0.5
+        return 0.25
 
     @staticmethod
     def _calc_stop_loss(

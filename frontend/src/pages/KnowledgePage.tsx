@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useMemo, useRef } from 'react';
 
-type Section = 'guide' | 'signals' | 'classification' | 'watchlist' | 'strikes' | 'pipeline';
+type Section = 'guide' | 'signals' | 'classification' | 'watchlist' | 'strikes' | 'optionslab' | 'strategies' | 'pipeline';
 
 const TABS: { key: Section; label: string }[] = [
   { key: 'guide', label: 'Trading Guide' },
@@ -8,6 +8,8 @@ const TABS: { key: Section; label: string }[] = [
   { key: 'classification', label: 'Classification' },
   { key: 'watchlist', label: 'Watchlist Scoring' },
   { key: 'strikes', label: 'Strike Profiles' },
+  { key: 'optionslab', label: 'Options Lab' },
+  { key: 'strategies', label: 'Strategies' },
   { key: 'pipeline', label: 'Pipeline & Data' },
 ];
 
@@ -484,6 +486,578 @@ function StrikeSection() {
             <div className="text-sm font-semibold text-text-primary">premium × 100 ≤ budget</div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Options Lab section ──────────────────────────────────────────────── */
+
+interface LabElement {
+  name: string;
+  definition: string;
+  effect: string;
+  watchOut: string;
+  values?: string;
+}
+
+function LabElementCard({ el }: { el: LabElement }) {
+  return (
+    <div className="bg-card border border-border rounded-lg p-3">
+      <div className="flex items-baseline gap-2 mb-2 flex-wrap">
+        <h4 className="text-sm font-semibold text-text-primary">{el.name}</h4>
+        {el.values && (
+          <span className="text-[10px] font-mono text-purple-300 bg-purple-900/30 px-1.5 py-px rounded">
+            {el.values}
+          </span>
+        )}
+      </div>
+      <div className="space-y-1.5 text-xs leading-snug">
+        <p>
+          <span className="text-text-secondary font-semibold">Definition: </span>
+          <span className="text-text-primary">{el.definition}</span>
+        </p>
+        <p>
+          <span className="text-text-secondary font-semibold">Effect: </span>
+          <span className="text-text-primary">{el.effect}</span>
+        </p>
+        <p>
+          <span className="text-amber-400 font-semibold">Watch out: </span>
+          <span className="text-text-primary">{el.watchOut}</span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function LabSubsection({
+  title,
+  description,
+  elements,
+}: {
+  title: string;
+  description: string;
+  elements: LabElement[];
+}) {
+  return (
+    <div>
+      <h3 className="text-base font-semibold text-text-primary mb-1">{title}</h3>
+      <p className="text-xs text-text-secondary mb-3">{description}</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {elements.map((el) => (
+          <LabElementCard key={el.name} el={el} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const LAB_HEADER_ELEMENTS: LabElement[] = [
+  {
+    name: 'Directional Bias',
+    values: 'BULLISH / BEARISH / NEUTRAL',
+    definition:
+      "The engine's read on which way the stock is likely to move next, derived from the full signal stack (same score used on the Dashboard) mapped into three buckets.",
+    effect:
+      'Drives strategy selection together with IV bucket and earnings proximity. A BULLISH + HIGH IV read produces a BUY_CALL_SPREAD; a NEUTRAL + HIGH IV read produces SELL_IRON_CONDOR, etc.',
+    watchOut:
+      'Bias is not certainty. A BULLISH tag with conviction just above 0 is a weak lean, not a green light. Always cross-check with the Dashboard signal list before trading.',
+  },
+  {
+    name: 'Price',
+    definition: 'Last traded spot from yfinance at the time of analysis.',
+    effect:
+      'Anchors every moneyness calculation — ATM strike, expected move percentage, distance from pin magnets, max pain distance.',
+    watchOut:
+      'yfinance prices are stale on weekends and off-hours. If you re-run an analysis Monday morning the whole report can shift because spot finally repriced — the analysis is a snapshot, not a live feed.',
+  },
+  {
+    name: 'IV Rank',
+    values: '0 – 100',
+    definition:
+      'Where current 30-day ATM implied vol sits between its 52-week high and low, expressed 0–100. 0 = at 52-week low, 100 = at 52-week high.',
+    effect:
+      'Buckets into LOW (<30), MID (30–60), HIGH (>60). Long premium strategies (BUY_CALL, BUY_PUT, BUY_STRADDLE) only fire in LOW/MID; short premium (SELL spreads, SELL_IRON_CONDOR) only fire in HIGH.',
+    watchOut:
+      'IV rank is range-bound — a stock that never moves can sit at rank 80 on tiny absolute vol. Use alongside expected move percentage to gauge real dollar risk.',
+  },
+  {
+    name: 'IV Percentile',
+    values: '0 – 100',
+    definition:
+      'Percentage of trading days over the last year where IV was below the current reading.',
+    effect:
+      "Better than IV rank for distributions with outliers — if one earnings spike sets the 52w high, IV rank understates how elevated today really is. Percentile captures the shape of the distribution.",
+    watchOut:
+      'When rank and percentile diverge sharply (e.g. rank 40, percentile 80), there is a recent outlier distorting rank. Treat percentile as the truer "is vol rich or cheap" read.',
+  },
+];
+
+const LAB_STRATEGY_ELEMENTS: LabElement[] = [
+  {
+    name: 'Verdict',
+    values:
+      'BUY_CALL / BUY_PUT / BUY_CALL_SPREAD / BUY_PUT_SPREAD / SELL_PUT_SPREAD / SELL_CALL_SPREAD / SELL_IRON_CONDOR / BUY_STRADDLE / NO_TRADE',
+    definition:
+      'The single strategy the engine recommends, selected from a lookup of (directional bias) × (IV bucket) × (near-earnings flag).',
+    effect:
+      'Dictates everything downstream: leg structure, target expiry, risk profile. A BUY_* verdict means you pay premium; SELL_* means you collect it; NO_TRADE means no edge was found.',
+    watchOut:
+      'Verdict is the engine\'s single best answer, not the only viable one. BUY_STRADDLE only fires NEUTRAL + HIGH IV + near earnings — a niche setup. NO_TRADE usually means conflicting signals, not "safe to ignore."',
+  },
+  {
+    name: 'Target Expiry / DTE',
+    definition:
+      'The expiration bucket the engine picked for the trade. DTE = days to expiry.',
+    effect:
+      'Maps to the DTE spread: 0–7d (weeklies, pure gamma plays), 7–21d (earnings window), 21–45d (directional swing), 45–90d (positioning), 90–180+d (LEAPS-like). Long premium tilts toward 21–45d to balance theta; short premium toward 14–30d to harvest decay fast.',
+    watchOut:
+      "If target DTE is <10 and verdict is long premium, theta burn is about to eat you — cross-check the THETA_BURN hidden risk. If DTE is >60 on a short-premium trade, you are tying up capital with minimal daily decay.",
+  },
+  {
+    name: 'IV Bucket',
+    values: 'LOW / MID / HIGH',
+    definition: 'Categorical bin of IV rank: LOW <30, MID 30–60, HIGH >60.',
+    effect:
+      'Filters which verdicts are eligible. Long premium gets blocked in HIGH IV (paying rich vol); short premium gets blocked in LOW IV (collecting nothing). MID allows directional singles in both directions.',
+    watchOut:
+      "The bucket edges are sharp — a rank of 59 vs 61 routes you to completely different strategies. When you are near a boundary, read the rationale to see whether the pick is robust or a coin-flip.",
+  },
+  {
+    name: 'Earnings Tag / Earnings DTE',
+    definition:
+      'Flag that fires when earnings are within 14 days, with days-to-earnings count. Shown as a purple "Earnings Nd" pill.',
+    effect:
+      'Forces the strategy selector to prefer spreads over naked long premium (to limit IV crush) and opens up BUY_STRADDLE when bias is NEUTRAL and IV is HIGH. Also triggers the IV_CRUSH hidden risk.',
+    watchOut:
+      'Earnings tag is not "buy the event." Most retail earnings long-premium trades lose to IV crush even when direction is right. If you see this tag, spread structure is nearly always safer than naked calls/puts.',
+  },
+  {
+    name: 'Legs',
+    definition:
+      'The individual contracts that make up the trade. Each row shows action (BUY/SELL), side (C/P), strike, expiry, quantity, and a per-leg rationale.',
+    effect:
+      'Spreads have 2+ legs that must be entered together; singles have 1. BUY legs are debit; SELL legs are credit. Net cost = sum of debits − sum of credits.',
+    watchOut:
+      "When entering a spread manually, always submit as a single spread order — not two market orders — or you'll pay extra slippage and may only get half filled. Check each leg's expiry matches; calendars and diagonals look similar but have different risk.",
+  },
+  {
+    name: 'Notes',
+    definition: 'Free-text caveats the engine attaches: entry guidance, management rules, profit targets, risks.',
+    effect:
+      'Typical notes: "Take profit at 50% max gain," "Close before earnings if IV rank doubles," "Requires $X buying power per spread."',
+    watchOut:
+      "Notes are not scored — they are the engine's qualitative commentary. Don't substitute them for reading the Hidden Risks panel; they can miss edge cases the structured risk checks catch.",
+  },
+];
+
+const LAB_HIDDEN_RISKS: LabElement[] = [
+  {
+    name: 'IV_CRUSH',
+    values: 'HIGH',
+    definition:
+      'Fires when earnings are within 14 days AND IV rank >60 AND the strategy is long-premium (BUY_*).',
+    effect:
+      'Post-event IV typically collapses 30–50% overnight. Long ATM premium can lose 15–30% even if the directional thesis plays out and the stock moves in your favor.',
+    watchOut:
+      'This is the single most common way retail loses money on earnings trades. If you see this, convert to a debit spread (caps cost), close the day before earnings, or sit out.',
+  },
+  {
+    name: 'THETA_BURN',
+    values: 'HIGH if >3%/d, MEDIUM if >2%/d',
+    definition:
+      'Fires when the ATM near-term option is losing more than 2% of its premium per calendar day to time decay, on a long-premium trade.',
+    effect:
+      'You need a fast directional move or a vol expansion just to break even. Holding through a flat weekend can wipe 4–6% before Monday open.',
+    watchOut:
+      "Theta accelerates non-linearly into expiry — the last 7 DTE decay more than the prior 21. If theta_pct is already >3 on day 1, don't plan to \"give it time.\"",
+  },
+  {
+    name: 'VEGA_EXPOSURE',
+    values: 'MEDIUM',
+    definition:
+      'Fires when ATM vega exceeds 10% of premium per 1 IV point, on a long-premium trade.',
+    effect:
+      'A 5-point IV drop would shave ~50% off the premium regardless of direction. Matters most on ATM long options right before a known vol-crush event (earnings, FDA, Fed).',
+    watchOut:
+      "Vega cuts both ways — you benefit from IV expansion, hurt by contraction. If IV rank is already high AND vega is high, you are paying peak price for peak vol sensitivity.",
+  },
+  {
+    name: 'PIN_RISK',
+    values: 'MEDIUM',
+    definition:
+      'Fires when a near-dated strike carries a large share of near-spot open interest, flagging it as a "magnet" price will gravitate toward at expiration.',
+    effect:
+      'Dealers short that strike hedge dynamically, creating mean-reversion to the pin. Your long premium can decay through expiration sitting near the magnet strike.',
+    watchOut:
+      "Pin risk only matters 1–3 days pre-expiration. If your DTE is >7 the magnet has time to dissolve. But for weeklies it's real — don't buy ATM the day before monthly OPEX.",
+  },
+  {
+    name: 'LIQUIDITY',
+    values: 'MEDIUM',
+    definition:
+      'Fires when average bid-ask spread exceeds 15% of premium across expirations (Liquidity rating = WIDE).',
+    effect:
+      'Round-trip slippage eats 5–10% of the trade — you pay the spread going in and coming out. Limit orders may sit unfilled or only get partial fills.',
+    watchOut:
+      "Never market-order in wide-spread names. Use limits at mid, walk the price in small increments. If you can't get a reasonable fill within 10 minutes, the trade isn't meant for you.",
+  },
+  {
+    name: 'NEGATIVE_GEX',
+    values: 'MEDIUM if short-premium, LOW otherwise',
+    definition:
+      'Fires when net dealer gamma exposure is negative, meaning dealers are short gamma and must hedge with-the-trend.',
+    effect:
+      'Dealer hedging amplifies realized vol — up moves get chased higher, down moves get pressed lower. Short premium (selling condors, strangles) faces fatter tails.',
+    watchOut:
+      'A negative GEX regime is fragile. It reverses quickly when dealers buy back hedges, often causing violent mean-reversion — bad for trend-following, dangerous for overnight short vol.',
+  },
+  {
+    name: 'BACKWARDATION',
+    values: 'LOW',
+    definition:
+      'Fires when front-month IV sits above back-month IV (term shape = BACKWARDATION).',
+    effect:
+      'The market is pricing a specific near-term event (earnings, product launch, Fed). Expect front-month IV to normalize sharply after the event — harmful to long front-month premium.',
+    watchOut:
+      'Backwardation is a tell that "something is priced in." If your long-call thesis was "the event will be good," the event being good may not be enough — it has to exceed the priced-in expectation.',
+  },
+  {
+    name: 'PUT_SKEW',
+    values: 'LOW',
+    definition:
+      'Fires when 25-delta put IV exceeds 25-delta call IV by more than 8 IV points (average across expirations).',
+    effect:
+      'Market is paying up for downside hedges. Protective puts are expensive; short puts carry larger-than-usual left-tail risk. Call overwrites harvest less premium than the skew suggests.',
+    watchOut:
+      'Elevated put skew is structural in indexes (SPY) but notable in single names. A sudden skew spike often precedes or accompanies a macro de-risking event — treat as a sentiment gauge, not just a pricing anomaly.',
+  },
+  {
+    name: 'ASSIGNMENT_RISK',
+    values: 'LOW',
+    definition:
+      'Fires whenever the strategy has a short leg (SELL action) — American options can be assigned any time.',
+    effect:
+      'Short ITM calls are most vulnerable before ex-dividend dates. Deep-ITM short puts can be assigned late in life when extrinsic value approaches 0. Early assignment flips your risk profile and ties up buying power.',
+    watchOut:
+      'Monitor intrinsic vs extrinsic on short legs: when extrinsic drops below the next dividend, assignment is likely. Roll or close before extrinsic disappears.',
+  },
+];
+
+const LAB_VOL_ELEMENTS: LabElement[] = [
+  {
+    name: 'Term Shape',
+    values: 'CONTANGO / BACKWARDATION / FLAT / UNKNOWN',
+    definition:
+      'Relationship between front-month and back-month ATM IV. CONTANGO = back > front (normal). BACKWARDATION = front > back (stressed). FLAT = within ~1 pt.',
+    effect:
+      'Contango favors calendar spreads (sell front, buy back — collect front-month theta). Backwardation favors the opposite. Flat is neutral.',
+    watchOut:
+      "Contango is the default state. Backwardation is your flag that something is up — earnings, macro event, or panic. Don't short vol into backwardation unless you know what's driving it.",
+  },
+  {
+    name: 'Front − Back IV (pts)',
+    definition:
+      'Numeric spread between front-month and back-month ATM IV, in IV percentage points.',
+    effect:
+      'Quantifies term-shape intensity. +5 pts backwardation is mild; +15 pts is severe and usually means a specific event is in the front contract.',
+    watchOut:
+      'Large negative values (-8+) = deep contango, signals vol is expected to expand — common in low-vol regimes before a catalyst. Large positive values = event risk loaded into the front contract.',
+  },
+  {
+    name: '25-Δ Skew',
+    definition:
+      'Average (25-delta put IV − 25-delta call IV) across expirations, in IV points. Positive = puts richer than calls.',
+    effect:
+      'Measures demand for crash hedges vs upside bets. In single names, >8 pts is elevated; >15 pts is extreme. Indexes run chronically higher than single names.',
+    watchOut:
+      "Trades against skew (selling expensive puts, buying cheap calls) can print consistently in a range — until they don't. Skew exists because tail events happen; don't harvest skew naked.",
+  },
+  {
+    name: 'Term Structure (per-expiry chips)',
+    definition: 'ATM IV for each expiration bucket (0–7d, 7–21d, 21–45d, 45–90d, 90–180+d).',
+    effect:
+      'Lets you see whether a specific expiry is mispriced relative to its neighbors. A spike in one bucket usually marks a known event landing in that window.',
+    watchOut:
+      'Look for "kinks" — one DTE bucket way above its neighbors. That is the event. Trade calendars around the kink; avoid naked long premium in the kink month.',
+  },
+  {
+    name: 'Expected Moves',
+    definition:
+      'One-standard-deviation expected price range by expiry, derived from ATM straddle price. Shown as ±% and ±$.',
+    effect:
+      'Represents what the options market is pricing as a 68% likely range by that expiry. Useful for strike selection (OTM strikes outside the expected move are low-probability) and for position sizing.',
+    watchOut:
+      'Expected move is not a ceiling — by definition 32% of the time the stock moves further. And it assumes normal distribution; real returns have fat tails. Use as a budget, not a guarantee.',
+  },
+];
+
+const LAB_POSITIONING_ELEMENTS: LabElement[] = [
+  {
+    name: 'Dealer Gamma (GEX)',
+    values: 'POSITIVE / NEGATIVE / NEUTRAL + signed total',
+    definition:
+      'Net signed gamma exposure held by options market makers, aggregated across the chain. POSITIVE = dealers long gamma (hedge against-trend, dampens vol). NEGATIVE = dealers short gamma (hedge with-trend, amplifies vol).',
+    effect:
+      'POSITIVE GEX produces sticky, range-bound action — good for short-premium theta harvesting. NEGATIVE GEX produces trending, violent action — bad for short-premium, okay for directional longs.',
+    watchOut:
+      "GEX is computed from a model (assumed delta/gamma per contract), not observed. It is directionally useful, not precise. Regime flips (positive → negative) matter more than absolute values.",
+  },
+  {
+    name: 'Max Pain (per expiry)',
+    definition:
+      'The strike where total option holder loss would be maximized at expiration — equivalently, where dealers would owe the least. Shown with distance from spot in %.',
+    effect:
+      'Classic "pin" theory says price gravitates toward max pain into expiration as dealers hedge. Useful for strike selection near OPEX.',
+    watchOut:
+      'Max pain is a weak signal on its own — think of it as a magnet, not a destination. Only material within ~3 days of expiration and only when spot is already within ~3%. Ignore for longer-dated trades.',
+  },
+  {
+    name: 'Pin Magnets',
+    definition:
+      'Near-dated strikes holding a high share of near-spot open interest. Each row shows strike, DTE, call OI, put OI, and % share of near-spot OI.',
+    effect:
+      'These strikes act as mean-reversion magnets in the final days of their expiry — options dealers hedging the clustered OI pull spot toward the strike.',
+    watchOut:
+      "If you are long an ATM option and a pin magnet sits at the same strike with 20%+ share, your extrinsic decays while price gets pulled in. Consider rolling out one expiry or switching to a vertical spread.",
+  },
+  {
+    name: 'P/C OI by Expiry',
+    definition:
+      'Put-to-call open interest ratio for each expiration. Values >1.2 lean bearish (more put positioning); <0.8 lean bullish.',
+    effect:
+      "Shows where positioning is concentrated across the term structure. A front-month P/C of 1.8 with back-months near 1.0 tells you there is a short-term hedge stack, not a structural bearish bet.",
+    watchOut:
+      "OI ratio measures accumulated positioning, not today's flow. A stock can have high put OI because of an old protective hedge that is actually bullish (someone buying puts to protect a long equity position). Read alongside unusual options volume.",
+  },
+];
+
+const LAB_LIQUIDITY_ELEMENTS: LabElement[] = [
+  {
+    name: 'Liquidity Rating',
+    values: 'TIGHT / MODERATE / WIDE / UNKNOWN',
+    definition:
+      'Categorical rating based on average bid-ask spread as % of premium across the chain. TIGHT <5%, MODERATE 5–15%, WIDE >15%.',
+    effect:
+      'Drives execution cost. TIGHT names fill at mid easily; WIDE names often need limit-order patience or see 5–10% round-trip slippage.',
+    watchOut:
+      'Weekend data can show spreads wider than real market-hours spreads because quotes are stale. Re-check spreads live before placing an order. If a name rates WIDE even during the day, size smaller or skip.',
+  },
+  {
+    name: 'Average Spread %',
+    definition: 'Mean bid-ask spread as a percentage of option premium, averaged across expirations.',
+    effect:
+      'Your round-trip cost floor. A 10% average spread means 10% of your premium is lost to the spread over one entry + one exit, independent of directional P&L.',
+    watchOut:
+      "Spreads are worse at the open (9:30–9:45 ET) and into the close, and wider on expiring contracts. Factor a 1.5× buffer for execution timing if you don't trade mid-day.",
+  },
+  {
+    name: 'By-Expiry Breakdown',
+    definition:
+      'Per-expiration median spread % and total OI. Thin-OI expiries flagged in amber; wide-spread expiries flagged in red.',
+    effect:
+      'Lets you pick the most liquid expiry even when the overall name is "MODERATE." Often a weekly is tight while a monthly two months out is wide, or vice versa.',
+    watchOut:
+      "If your strategy's target DTE lands on a thin-OI expiry, consider rolling to the next standard expiration (third-Friday monthly) — liquidity concentrates there even if DTE moves by a week.",
+  },
+];
+
+const LAB_GREEKS_ELEMENTS: LabElement[] = [
+  {
+    name: 'Delta (Δ)',
+    values: '-1 to +1',
+    definition:
+      'Rate of change of option price per $1 move in the underlying. Also interpretable as approximate probability of expiring ITM.',
+    effect:
+      '0.50 = ATM; 0.30 = slightly OTM; 0.70 = ITM. Directional exposure scales linearly near ATM. The strike recommender filters by delta for each risk profile.',
+    watchOut:
+      'Delta is dynamic — a 0.30 delta call at entry can become 0.60 if the stock rallies. Position delta + gamma = your real directional exposure. Re-check delta before adding to winners.',
+  },
+  {
+    name: 'Gamma (Γ)',
+    definition:
+      'Rate of change of delta per $1 move in the underlying. Highest ATM and peaks as expiration approaches.',
+    effect:
+      'High gamma = delta accelerates fast. Long gamma benefits from big moves in either direction (curvature pays). Short gamma (selling ATM) exposes you to runaway losses.',
+    watchOut:
+      'Gamma spikes in the last 7 DTE. Short-gamma positions entering that window without hedges can explode — this is why iron condors are closed at ~21 DTE by mechanical sellers.',
+  },
+  {
+    name: 'Theta (Θ/d)',
+    definition:
+      'Dollar decay per calendar day, all else equal. Shown as $/day; also see theta_pct (percentage of premium per day).',
+    effect:
+      'Long options pay theta (negative); short options collect it (positive). ATM theta is highest. The greeks row highlights theta in red when it exceeds ~3% of premium/day.',
+    watchOut:
+      'Theta burns weekends and holidays too. A Friday-bought weekly loses 3 days of decay by Monday even though markets were closed. Factor this into weekend hold decisions.',
+  },
+  {
+    name: 'Vega (V)',
+    definition:
+      'Dollar change in option price per 1-point change in IV (per 1% IV). Higher for longer-dated options and ATM strikes.',
+    effect:
+      'Long options are long vega (benefit from IV rising); short options are short vega. Vega is your IV P&L.',
+    watchOut:
+      'Vega dominates P&L on longer-dated positions — a 20-point IV drop on a 90-DTE long call can wipe the trade even with favorable price action. Match vega to your view on vol.',
+  },
+  {
+    name: 'Rho (ρ)',
+    definition:
+      'Dollar change in option price per 1-point change in risk-free rate. Higher for longer-dated options; calls positive, puts negative.',
+    effect:
+      'In normal-rate regimes, essentially ignorable. Matters on LEAPS (365+ DTE) or when rate expectations shift violently.',
+    watchOut:
+      "Fed pivot days can move rho materially on long-dated positions. If you are holding LEAPS through FOMC, know which direction rho helps you.",
+  },
+  {
+    name: 'Vanna (Vn)',
+    definition: 'Rate of change of delta per 1-point change in IV. Captures cross-sensitivity between direction and vol.',
+    effect:
+      'High positive vanna means rising IV pushes delta up (your call gets more bullish as vol expands). Critical for dealer hedging flows — "vanna rallies" happen when vol drops and dealers buy to rebalance.',
+    watchOut:
+      'Vanna is second-order — small absolute values. Matters most for structurally short-vol books (dealers, vol funds). Retail traders rarely need to trade it directly, but it explains why vol-crush days sometimes see paradoxical rallies.',
+  },
+  {
+    name: 'Charm (Ch)',
+    definition: 'Rate of change of delta per day (delta decay). Shows how your directional exposure drifts as time passes.',
+    effect:
+      'OTM options lose delta over time (charm negative); ITM options gain it. Explains why a 0.25 delta OTM call can still look OTM even after a small rally if time passed too.',
+    watchOut:
+      "Pronounced in the last 2 weeks. A weekly OTM call bought Monday can have materially less delta Friday even if the stock didn't move — you have lost both price and participation rate.",
+  },
+  {
+    name: 'Vomma (Vm)',
+    definition: 'Rate of change of vega per 1-point change in IV. Second derivative of option price with respect to vol.',
+    effect:
+      'Positive vomma means vega expands as IV rises — long premium positions benefit more from each additional IV point in a vol spike. Captures the convexity of vol exposure.',
+    watchOut:
+      'Mostly a vol-trader metric. For single-name directional trading, watch vega first; vomma only bites on large vol moves (>10 IV pts), typically during crashes or earnings.',
+  },
+];
+
+const LAB_GREEKS_COLUMNS: LabElement[] = [
+  {
+    name: 'Exp / DTE',
+    definition: 'Expiration date and days to expiry for each row in the greeks table.',
+    effect:
+      'Each row corresponds to one expiration bucket from the DTE spread (up to 8 expirations: 0–7d, 7–21d, 21–45d, 45–90d, 90–180d, 180+d).',
+    watchOut:
+      "Greeks change dramatically across the term — don't compare a 7-DTE gamma to a 90-DTE gamma directly. Pick the row that matches your target DTE.",
+  },
+  {
+    name: 'ATM Strike / ATM IV',
+    definition:
+      'The at-the-money strike for that expiry and its implied volatility. ATM IV falls back to the median of near-ATM strikes when direct-ATM contract quotes are stale.',
+    effect:
+      'Anchors the greeks row — all greeks are computed at the ATM strike, which represents the most liquid / most-used reference contract.',
+    watchOut:
+      'On weekends or illiquid names, ATM IV can look absurdly low or high if a single stale quote sneaks through the fallback. Compare to IV rank and neighboring expirations to sanity-check.',
+  },
+  {
+    name: 'EM% (Expected Move)',
+    definition: 'One-standard-deviation expected move by this expiry, as a % of spot, derived from the ATM straddle.',
+    effect:
+      'Your probability-weighted price range. OTM strikes outside the EM% are low-probability; ATM straddles are priced for exactly EM% moves to break even.',
+    watchOut:
+      "EM% grows with √time — a 30-DTE EM of 8% doesn't mean the stock moves 8% in 30 days; it means 68% of scenarios end within ±8%. Sizing a trade on EM requires matching your thesis timeframe to the expiry.",
+  },
+];
+
+const LAB_RATIONALE_ELEMENT: LabElement = {
+  name: 'Rationale',
+  definition:
+    'A narrative paragraph generated by the engine that walks through why this verdict was chosen given the bias, IV regime, earnings proximity, and structure of the chain.',
+  effect:
+    "Bridges the numeric dashboards into plain English. Useful for sanity-checking that the verdict matches the raw inputs you would expect.",
+  watchOut:
+    'Rationale is a summary, not an independent signal. If it contradicts what you see in the Hidden Risks panel, trust the structured risks — those are rule-based and exhaustive; rationale is a generated overview.',
+};
+
+function OptionsLabSection() {
+  return (
+    <div className="space-y-8">
+      <div>
+        <p className="text-sm text-text-secondary">
+          The Options Lab runs a per-ticker deep analysis combining greeks, volatility structure,
+          dealer positioning, and liquidity — then picks a single strategy verdict. This reference
+          walks through every element in the detail panel: what it is, how it affects the verdict,
+          and what to watch out for when acting on it.
+        </p>
+      </div>
+
+      <LabSubsection
+        title="Header & Summary Tiles"
+        description="Top of the detail panel: ticker, directional bias, and the three summary tiles (Price / IV Rank / IV %tile) that drive strategy selection."
+        elements={LAB_HEADER_ELEMENTS}
+      />
+
+      <LabSubsection
+        title="Strategy Recommendation"
+        description="The verdict card — the engine's single best strategy, target expiry, IV bucket, earnings tag, legs, and notes."
+        elements={LAB_STRATEGY_ELEMENTS}
+      />
+
+      <div>
+        <h3 className="text-base font-semibold text-text-primary mb-1">Hidden Risks</h3>
+        <p className="text-xs text-text-secondary mb-3">
+          Rule-based structural risks attached to every analysis. Each risk has a severity (HIGH / MEDIUM / LOW),
+          a short code, and a reason. Not every risk fires on every trade — they only appear when their trigger conditions are met.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {LAB_HIDDEN_RISKS.map((r) => (
+            <LabElementCard key={r.name} el={r} />
+          ))}
+        </div>
+      </div>
+
+      <LabSubsection
+        title="Volatility Structure"
+        description="How the options market is pricing forward volatility across the term structure and skew curve."
+        elements={LAB_VOL_ELEMENTS}
+      />
+
+      <LabSubsection
+        title="Positioning"
+        description="Where the open interest sits — dealer gamma exposure, max pain, pin magnets, and put/call OI ratios by expiry."
+        elements={LAB_POSITIONING_ELEMENTS}
+      />
+
+      <LabSubsection
+        title="Liquidity"
+        description="Execution quality metrics. Tells you whether you can actually trade the contracts the engine picked without giving up alpha to spreads."
+        elements={LAB_LIQUIDITY_ELEMENTS}
+      />
+
+      <LabSubsection
+        title="ATM Call Greeks by Expiry — Columns"
+        description="Structure of the table: each row is one expiration; each column is a greek or reference value at the ATM strike."
+        elements={LAB_GREEKS_COLUMNS}
+      />
+
+      <LabSubsection
+        title="ATM Call Greeks by Expiry — Greeks"
+        description="The greeks themselves. First-order (Δ, Γ, Θ, V, ρ) drive most of your P&L; second-order (Vanna, Charm, Vomma) describe how the first-order greeks evolve."
+        elements={LAB_GREEKS_ELEMENTS}
+      />
+
+      <div>
+        <h3 className="text-base font-semibold text-text-primary mb-1">Rationale</h3>
+        <p className="text-xs text-text-secondary mb-3">The narrative block at the bottom of the panel.</p>
+        <LabElementCard el={LAB_RATIONALE_ELEMENT} />
+      </div>
+
+      <div className="bg-card border border-border rounded-lg p-4">
+        <h3 className="text-sm font-semibold text-text-primary mb-2">How to read the panel in order</h3>
+        <ol className="list-decimal pl-5 text-xs text-text-secondary space-y-1.5">
+          <li><strong className="text-text-primary">Start with Bias + IV Rank + IV %tile</strong> — they set the strategy universe.</li>
+          <li><strong className="text-text-primary">Read the Verdict and Target DTE</strong> — that is the engine's pick.</li>
+          <li><strong className="text-text-primary">Scan Hidden Risks</strong> — a single HIGH risk is often reason enough to decline the trade.</li>
+          <li><strong className="text-text-primary">Check Volatility Structure</strong> — is vol priced for an event? Is it contango or backwardation? Does that match the verdict's IV bucket?</li>
+          <li><strong className="text-text-primary">Check Positioning</strong> — negative GEX or nearby pin magnets can invalidate an otherwise-clean setup.</li>
+          <li><strong className="text-text-primary">Verify Liquidity</strong> — if WIDE, shrink your size or skip.</li>
+          <li><strong className="text-text-primary">Only then read the Greeks table</strong> — confirm the target DTE row has tolerable theta, reasonable vega, and a delta that matches your risk profile.</li>
+          <li><strong className="text-text-primary">Rationale last</strong> — as a sanity check, not a decision driver.</li>
+        </ol>
       </div>
     </div>
   );
@@ -1134,6 +1708,758 @@ function TradingGuideSection() {
   );
 }
 
+/* ── Strategies section ─────────────────────────────────────────────────── */
+
+interface Leg {
+  action: 'BUY' | 'SELL';
+  side: 'CALL' | 'PUT';
+  strike: number;
+  premium: number;
+}
+
+interface Strategy {
+  name: string;
+  verdict: string;
+  trigger: string;
+  purpose: string;
+  legs: Leg[];
+  legText: string[];
+  maxProfit: string;
+  maxLoss: string;
+  breakeven: string;
+  priceMin: number;
+  priceMax: number;
+}
+
+function legPnL(leg: Leg, S: number): number {
+  const intrinsic = leg.side === 'CALL' ? Math.max(S - leg.strike, 0) : Math.max(leg.strike - S, 0);
+  return leg.action === 'BUY' ? intrinsic - leg.premium : leg.premium - intrinsic;
+}
+
+interface PayoffMetrics {
+  profitStr: string;
+  lossStr: string;
+  beStr: string;
+  yLo: number;
+  yHi: number;
+}
+
+const isLegActive = (leg: Leg): boolean => leg.strike > 0 && leg.premium > 0;
+
+function computePayoff(
+  legs: Leg[],
+  priceMin: number,
+  priceMax: number,
+  N = 401,
+): { prices: number[]; pnl: number[]; legPnls: number[][]; metrics: PayoffMetrics } {
+  const prices: number[] = new Array(N);
+  const pnl: number[] = new Array(N);
+  const legPnls: number[][] = legs.map(() => new Array(N));
+  for (let i = 0; i < N; i++) {
+    const S = priceMin + ((priceMax - priceMin) * i) / (N - 1);
+    prices[i] = S;
+    let total = 0;
+    for (let l = 0; l < legs.length; l++) {
+      const v = isLegActive(legs[l]) ? legPnL(legs[l], S) : 0;
+      legPnls[l][i] = v;
+      total += v;
+    }
+    pnl[i] = total;
+  }
+  const maxPnl = Math.max(...pnl);
+  const minPnl = Math.min(...pnl);
+  const pad = (maxPnl - minPnl) * 0.15 || 1;
+  const yLo = Math.min(0, minPnl) - pad;
+  const yHi = Math.max(0, maxPnl) + pad;
+
+  // Edge slopes — detect unbounded profit/loss regions.
+  const rSlope = pnl[N - 1] - pnl[N - 2];
+  const lSlope = pnl[0] - pnl[1];
+  const unboundedUp = rSlope > 0.01 || lSlope > 0.01;
+  const unboundedDown = rSlope < -0.01 || lSlope < -0.01;
+  const profitStr = unboundedUp ? 'Unlimited' : `$${maxPnl.toFixed(2)}`;
+  const lossStr = unboundedDown ? 'Unlimited' : `$${(-minPnl).toFixed(2)}`;
+
+  const crossings: number[] = [];
+  for (let i = 1; i < N; i++) {
+    const a = pnl[i - 1];
+    const b = pnl[i];
+    if ((a < 0 && b >= 0) || (a > 0 && b <= 0)) {
+      const t = a / (a - b);
+      crossings.push(prices[i - 1] + t * (prices[i] - prices[i - 1]));
+    }
+  }
+  const beStr =
+    crossings.length === 0
+      ? '—'
+      : crossings.map((x) => `$${x.toFixed(2)}`).join(' / ');
+
+  return { prices, pnl, legPnls, metrics: { profitStr, lossStr, beStr, yLo, yHi } };
+}
+
+const LEG_COLOR = (leg: Leg) => (leg.side === 'CALL' ? '#2dd4bf' : '#f59e0b');
+
+interface DragState {
+  kind: 'strike' | 'premium';
+  legIdx: number;
+  startS: number;
+  startP: number;
+  anchorX: number;
+  anchorY: number;
+  yLo: number;
+  yHi: number;
+}
+
+function InteractivePayoff({
+  legs,
+  priceMin,
+  priceMax,
+  onLegChange,
+  spot = 100,
+}: {
+  legs: Leg[];
+  priceMin: number;
+  priceMax: number;
+  onLegChange: (i: number, patch: Partial<Leg>) => void;
+  spot?: number;
+}) {
+  const W = 380;
+  const H = 210;
+  const M = { l: 38, r: 12, t: 16, b: 30 };
+  const plotW = W - M.l - M.r;
+  const plotH = H - M.t - M.b;
+
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [drag, setDrag] = useState<DragState | null>(null);
+
+  const { pnl, legPnls, metrics } = useMemo(
+    () => computePayoff(legs, priceMin, priceMax),
+    [legs, priceMin, priceMax],
+  );
+  const { yLo, yHi } = metrics;
+
+  const xOf = (S: number) =>
+    M.l + ((S - priceMin) / (priceMax - priceMin)) * plotW;
+  const yOf = (v: number) =>
+    M.t + (1 - (v - yLo) / (yHi - yLo)) * plotH;
+  const zeroY = yOf(0);
+
+  const N = pnl.length;
+  const combinedPath = pnl
+    .map(
+      (v, i) =>
+        `${i === 0 ? 'M' : 'L'} ${xOf(
+          priceMin + ((priceMax - priceMin) * i) / (N - 1),
+        ).toFixed(2)},${yOf(v).toFixed(2)}`,
+    )
+    .join(' ');
+
+  // Fill profit/loss regions (tint between combined curve and y=0)
+  const profitPaths: string[] = [];
+  const lossPaths: string[] = [];
+  {
+    let bucket: 'profit' | 'loss' | null = null;
+    let segStart = 0;
+    const xs: number[] = pnl.map((_, i) =>
+      xOf(priceMin + ((priceMax - priceMin) * i) / (N - 1)),
+    );
+    const ys: number[] = pnl.map((v) => yOf(v));
+    const closeSeg = (endIdx: number, endX: number) => {
+      if (bucket === null) return;
+      let d = `M ${xs[segStart].toFixed(2)},${zeroY.toFixed(2)} `;
+      for (let i = segStart; i <= endIdx; i++)
+        d += `L ${xs[i].toFixed(2)},${ys[i].toFixed(2)} `;
+      d += `L ${endX.toFixed(2)},${zeroY.toFixed(2)} Z`;
+      (bucket === 'profit' ? profitPaths : lossPaths).push(d);
+    };
+    for (let i = 0; i < N; i++) {
+      const side =
+        ys[i] < zeroY - 0.01 ? 'profit' : ys[i] > zeroY + 0.01 ? 'loss' : null;
+      if (side === null) continue;
+      if (bucket === null) {
+        bucket = side;
+        segStart = i;
+        continue;
+      }
+      if (side !== bucket) {
+        const t = (zeroY - ys[i - 1]) / (ys[i] - ys[i - 1]);
+        const crossX = xs[i - 1] + t * (xs[i] - xs[i - 1]);
+        closeSeg(i - 1, crossX);
+        bucket = side;
+        segStart = i;
+      }
+    }
+    if (bucket !== null) closeSeg(N - 1, xs[N - 1]);
+  }
+
+  // Leg curves and handle positions
+  const legCurves = legs.map((leg, li) => {
+    const d = legPnls[li]
+      .map(
+        (v, i) =>
+          `${i === 0 ? 'M' : 'L'} ${xOf(
+            priceMin + ((priceMax - priceMin) * i) / (N - 1),
+          ).toFixed(2)},${yOf(v).toFixed(2)}`,
+      )
+      .join(' ');
+    // Premium handle sits on the OTM flat segment
+    const span = priceMax - priceMin;
+    const handleS =
+      leg.side === 'CALL'
+        ? Math.max(priceMin + span * 0.05, leg.strike - span * 0.15)
+        : Math.min(priceMax - span * 0.05, leg.strike + span * 0.15);
+    const flatPnl = leg.action === 'BUY' ? -leg.premium : leg.premium;
+    return {
+      leg,
+      d,
+      handle: { x: xOf(handleS), y: yOf(flatPnl) },
+    };
+  });
+
+  const viewBoxPoint = (e: React.PointerEvent): { x: number; y: number } => {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const m = svg.getScreenCTM();
+    if (!m) return { x: 0, y: 0 };
+    const r = pt.matrixTransform(m.inverse());
+    return { x: r.x, y: r.y };
+  };
+
+  const beginDrag =
+    (kind: 'strike' | 'premium', legIdx: number) =>
+    (e: React.PointerEvent) => {
+      e.preventDefault();
+      (e.currentTarget as Element).setPointerCapture(e.pointerId);
+      const p = viewBoxPoint(e);
+      setDrag({
+        kind,
+        legIdx,
+        startS: legs[legIdx].strike,
+        startP: legs[legIdx].premium,
+        anchorX: p.x,
+        anchorY: p.y,
+        yLo,
+        yHi,
+      });
+    };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!drag) return;
+    const p = viewBoxPoint(e);
+    const leg = legs[drag.legIdx];
+    if (drag.kind === 'strike') {
+      const dX = p.x - drag.anchorX;
+      const dS = (dX / plotW) * (priceMax - priceMin);
+      const raw = drag.startS + dS;
+      const snapped = Math.round(raw * 2) / 2; // 0.5 increments
+      const clamped = Math.max(priceMin + 0.5, Math.min(priceMax - 0.5, snapped));
+      if (clamped !== leg.strike) onLegChange(drag.legIdx, { strike: clamped });
+    } else {
+      // Premium drag — freeze y-scale at drag start to prevent jitter
+      const dY = p.y - drag.anchorY;
+      const dPnl = -(dY / plotH) * (drag.yHi - drag.yLo);
+      const sign = leg.action === 'BUY' ? -1 : 1;
+      const newP = drag.startP + sign * dPnl;
+      const snapped = Math.round(newP * 20) / 20; // $0.05 increments
+      const clamped = Math.max(0.05, Math.min(99, snapped));
+      if (Math.abs(clamped - leg.premium) > 0.001)
+        onLegChange(drag.legIdx, { premium: clamped });
+    }
+  };
+
+  const endDrag = (e: React.PointerEvent) => {
+    if (!drag) return;
+    (e.currentTarget as Element).releasePointerCapture(e.pointerId);
+    setDrag(null);
+  };
+
+  return (
+    <svg
+      ref={svgRef}
+      viewBox={`0 0 ${W} ${H}`}
+      className="w-full h-auto select-none touch-none"
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+    >
+      <rect
+        x={M.l}
+        y={M.t}
+        width={plotW}
+        height={plotH}
+        fill="#0d1117"
+        stroke="#21262d"
+      />
+      {profitPaths.map((d, i) => (
+        <path key={`p${i}`} d={d} fill="#2ea04322" />
+      ))}
+      {lossPaths.map((d, i) => (
+        <path key={`l${i}`} d={d} fill="#da363322" />
+      ))}
+      <line
+        x1={M.l}
+        y1={zeroY}
+        x2={W - M.r}
+        y2={zeroY}
+        stroke="#4b5563"
+        strokeDasharray="3 3"
+        strokeWidth={1}
+      />
+      <line
+        x1={xOf(spot)}
+        y1={M.t}
+        x2={xOf(spot)}
+        y2={H - M.b}
+        stroke="#58a6ff"
+        strokeDasharray="2 2"
+        strokeWidth={1}
+        opacity={0.7}
+      />
+
+      {/* Leg curves — only for active legs */}
+      {legs.length > 1 &&
+        legCurves.map((lc, i) =>
+          isLegActive(lc.leg) ? (
+            <path
+              key={`leg${i}`}
+              d={lc.d}
+              fill="none"
+              stroke={LEG_COLOR(lc.leg)}
+              strokeWidth={1.2}
+              strokeDasharray={lc.leg.action === 'SELL' ? '4 3' : undefined}
+              opacity={0.85}
+            />
+          ) : null,
+        )}
+
+      {/* Combined P&L */}
+      <path d={combinedPath} fill="none" stroke="#e6edf3" strokeWidth={1.75} />
+
+      {/* Strike lines with drag handles — one per active leg */}
+      {legs.map((leg, i) => {
+        if (!isLegActive(leg)) return null;
+        const x = xOf(leg.strike);
+        const color = LEG_COLOR(leg);
+        const active = drag?.kind === 'strike' && drag.legIdx === i;
+        return (
+          <g key={`strike-${i}`}>
+            <line
+              x1={x}
+              y1={M.t}
+              x2={x}
+              y2={H - M.b}
+              stroke={color}
+              strokeDasharray="2 3"
+              strokeWidth={active ? 1.5 : 0.9}
+              opacity={0.7}
+            />
+            {/* Wide invisible hit area over the line for easy grabbing */}
+            <rect
+              x={x - 5}
+              y={M.t}
+              width={10}
+              height={plotH}
+              fill="transparent"
+              style={{ cursor: 'ew-resize' }}
+              onPointerDown={beginDrag('strike', i)}
+            />
+            {/* Visible handle at top */}
+            <circle
+              cx={x}
+              cy={M.t + 4}
+              r={active ? 4.5 : 3.5}
+              fill={color}
+              stroke="#0d1117"
+              strokeWidth={1}
+              style={{ cursor: 'ew-resize' }}
+              onPointerDown={beginDrag('strike', i)}
+            />
+            <text
+              x={x}
+              y={M.t - 4}
+              textAnchor="middle"
+              fontSize={9}
+              fill={color}
+              fontWeight={active ? 600 : 400}
+            >
+              K{leg.strike}
+            </text>
+          </g>
+        );
+      })}
+
+      {/* Premium drag handles on each active leg's OTM flat segment */}
+      {legCurves.map((lc, i) => {
+        if (!isLegActive(lc.leg)) return null;
+        const active = drag?.kind === 'premium' && drag.legIdx === i;
+        return (
+          <g key={`prem-${i}`}>
+            <circle
+              cx={lc.handle.x}
+              cy={lc.handle.y}
+              r={active ? 5 : 3.5}
+              fill="#0d1117"
+              stroke={LEG_COLOR(lc.leg)}
+              strokeWidth={1.5}
+              style={{ cursor: 'ns-resize' }}
+              onPointerDown={beginDrag('premium', i)}
+            />
+          </g>
+        );
+      })}
+
+      {/* Axes labels */}
+      <text x={M.l - 4} y={zeroY + 3} textAnchor="end" fontSize={9} fill="#8b949e">0</text>
+      <text x={M.l - 4} y={M.t + 8} textAnchor="end" fontSize={9} fill="#8b949e">+${yHi.toFixed(0)}</text>
+      <text x={M.l - 4} y={H - M.b} textAnchor="end" fontSize={9} fill="#8b949e">${yLo.toFixed(0)}</text>
+      <text x={M.l} y={H - M.b + 14} fontSize={9} fill="#8b949e">${priceMin}</text>
+      <text x={xOf(spot)} y={H - M.b + 14} textAnchor="middle" fontSize={9} fill="#58a6ff">spot ${spot}</text>
+      <text x={W - M.r} y={H - M.b + 14} textAnchor="end" fontSize={9} fill="#8b949e">${priceMax}</text>
+    </svg>
+  );
+}
+
+function LegLegend({ legs }: { legs: Leg[] }) {
+  if (legs.length < 2) return null;
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 pt-1.5 text-[10px] text-text-secondary">
+      <span className="flex items-center gap-1">
+        <span className="inline-block w-4 h-0.5 bg-[#e6edf3]" /> combined
+      </span>
+      {legs.map((leg, i) => {
+        const active = isLegActive(leg);
+        return (
+          <span
+            key={i}
+            className={`flex items-center gap-1 ${active ? '' : 'opacity-40 line-through'}`}
+          >
+            <svg width="18" height="4" className="inline-block">
+              <line
+                x1="0" y1="2" x2="18" y2="2"
+                stroke={active ? LEG_COLOR(leg) : '#6b7280'}
+                strokeWidth="1.5"
+                strokeDasharray={leg.action === 'SELL' ? '4 3' : undefined}
+              />
+            </svg>
+            <span>
+              {leg.action === 'BUY' ? '+' : '−'}
+              {leg.strike} {leg.side[0]}{leg.side.slice(1).toLowerCase()} @ ${leg.premium.toFixed(2)}
+              {!active && ' (off)'}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function LegEditor({
+  legs,
+  onChange,
+}: {
+  legs: Leg[];
+  onChange: (i: number, patch: Partial<Leg>) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      {legs.map((leg, i) => {
+        const active = isLegActive(leg);
+        const color = active ? LEG_COLOR(leg) : '#6b7280';
+        return (
+          <div
+            key={i}
+            className={`flex items-center gap-1.5 text-[11px] font-mono bg-page rounded px-1.5 py-1 ${
+              active ? '' : 'opacity-50'
+            }`}
+            title={active ? undefined : 'Disabled — set strike and premium > 0 to re-enable'}
+          >
+            <span
+              className="inline-block w-1.5 h-4 rounded-sm shrink-0"
+              style={{ background: color, opacity: leg.action === 'SELL' ? 0.55 : 1 }}
+            />
+            <select
+              value={leg.action}
+              onChange={(e) =>
+                onChange(i, { action: e.target.value as Leg['action'] })
+              }
+              className="bg-card border border-border rounded px-1 py-0.5 text-text-primary"
+            >
+              <option value="BUY">BUY</option>
+              <option value="SELL">SELL</option>
+            </select>
+            <select
+              value={leg.side}
+              onChange={(e) =>
+                onChange(i, { side: e.target.value as Leg['side'] })
+              }
+              className="bg-card border border-border rounded px-1 py-0.5 text-text-primary"
+            >
+              <option value="CALL">CALL</option>
+              <option value="PUT">PUT</option>
+            </select>
+            <label className="text-text-secondary ml-1">K</label>
+            <input
+              type="number"
+              step={0.5}
+              min={0}
+              value={leg.strike}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v) && v >= 0) onChange(i, { strike: v });
+              }}
+              className="w-16 bg-card border border-border rounded px-1 py-0.5 text-text-primary"
+            />
+            <label className="text-text-secondary ml-1">$</label>
+            <input
+              type="number"
+              step={0.05}
+              min={0}
+              value={leg.premium}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v) && v >= 0) onChange(i, { premium: v });
+              }}
+              className="w-16 bg-card border border-border rounded px-1 py-0.5 text-text-primary"
+            />
+            {!active && (
+              <span className="text-[10px] text-text-secondary uppercase tracking-wider ml-1">
+                off
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const STRATEGIES: Strategy[] = [
+  {
+    name: 'Long Call',
+    verdict: 'BUY_CALL',
+    trigger: 'BULLISH • LOW or MID IV • not near earnings',
+    purpose: 'Cheap premium + directional conviction. Unlimited upside, fixed downside.',
+    legs: [{ action: 'BUY', side: 'CALL', strike: 100, premium: 3 }],
+    legText: ['BUY 1 × 100 call @ $3.00'],
+    maxProfit: 'Unlimited',
+    maxLoss: '$3.00 (debit paid)',
+    breakeven: '$103',
+    priceMin: 85, priceMax: 115,
+  },
+  {
+    name: 'Long Put',
+    verdict: 'BUY_PUT',
+    trigger: 'BEARISH • LOW or MID IV • not near earnings',
+    purpose: 'Cheap premium + directional bearish conviction. Profits on a drop.',
+    legs: [{ action: 'BUY', side: 'PUT', strike: 100, premium: 3 }],
+    legText: ['BUY 1 × 100 put @ $3.00'],
+    maxProfit: '$97 (strike − debit, at $0)',
+    maxLoss: '$3.00 (debit paid)',
+    breakeven: '$97',
+    priceMin: 85, priceMax: 115,
+  },
+  {
+    name: 'Bull Call Spread',
+    verdict: 'BUY_CALL_SPREAD',
+    trigger: 'BULLISH • MID IV • near earnings',
+    purpose: 'Debit spread caps IV-crush exposure into an event while keeping bullish P&L.',
+    legs: [
+      { action: 'BUY', side: 'CALL', strike: 100, premium: 3 },
+      { action: 'SELL', side: 'CALL', strike: 105, premium: 1 },
+    ],
+    legText: ['BUY 1 × 100 call @ $3.00', 'SELL 1 × 105 call @ $1.00'],
+    maxProfit: '$3.00 (width − debit)',
+    maxLoss: '$2.00 (net debit)',
+    breakeven: '$102',
+    priceMin: 90, priceMax: 115,
+  },
+  {
+    name: 'Bear Put Spread',
+    verdict: 'BUY_PUT_SPREAD',
+    trigger: 'BEARISH • MID IV • near earnings',
+    purpose: 'Debit put spread — defined-risk bearish play that blunts IV crush.',
+    legs: [
+      { action: 'BUY', side: 'PUT', strike: 100, premium: 3 },
+      { action: 'SELL', side: 'PUT', strike: 95, premium: 1 },
+    ],
+    legText: ['BUY 1 × 100 put @ $3.00', 'SELL 1 × 95 put @ $1.00'],
+    maxProfit: '$3.00 (width − debit)',
+    maxLoss: '$2.00 (net debit)',
+    breakeven: '$98',
+    priceMin: 85, priceMax: 110,
+  },
+  {
+    name: 'Bull Put Spread',
+    verdict: 'SELL_PUT_SPREAD',
+    trigger: 'BULLISH • HIGH IV • any earnings',
+    purpose: 'Credit spread — sell expensive premium while staying bullish. IV crush helps.',
+    legs: [
+      { action: 'SELL', side: 'PUT', strike: 100, premium: 3 },
+      { action: 'BUY', side: 'PUT', strike: 95, premium: 1 },
+    ],
+    legText: ['SELL 1 × 100 put @ $3.00', 'BUY 1 × 95 put @ $1.00'],
+    maxProfit: '$2.00 (net credit)',
+    maxLoss: '$3.00 (width − credit)',
+    breakeven: '$98',
+    priceMin: 85, priceMax: 115,
+  },
+  {
+    name: 'Bear Call Spread',
+    verdict: 'SELL_CALL_SPREAD',
+    trigger: 'BEARISH • HIGH IV • any earnings',
+    purpose: 'Credit spread — collect rich premium while bearish. Profits from sideways/down.',
+    legs: [
+      { action: 'SELL', side: 'CALL', strike: 100, premium: 3 },
+      { action: 'BUY', side: 'CALL', strike: 105, premium: 1 },
+    ],
+    legText: ['SELL 1 × 100 call @ $3.00', 'BUY 1 × 105 call @ $1.00'],
+    maxProfit: '$2.00 (net credit)',
+    maxLoss: '$3.00 (width − credit)',
+    breakeven: '$102',
+    priceMin: 85, priceMax: 115,
+  },
+  {
+    name: 'Iron Condor',
+    verdict: 'SELL_IRON_CONDOR',
+    trigger: 'NEUTRAL • HIGH IV',
+    purpose: 'No directional edge + rich premium → harvest theta in a range, defined-risk wings.',
+    legs: [
+      { action: 'SELL', side: 'PUT', strike: 95, premium: 1.5 },
+      { action: 'BUY', side: 'PUT', strike: 90, premium: 0.5 },
+      { action: 'SELL', side: 'CALL', strike: 105, premium: 1.5 },
+      { action: 'BUY', side: 'CALL', strike: 110, premium: 0.5 },
+    ],
+    legText: [
+      'SELL 1 × 95 put @ $1.50',
+      'BUY 1 × 90 put @ $0.50',
+      'SELL 1 × 105 call @ $1.50',
+      'BUY 1 × 110 call @ $0.50',
+    ],
+    maxProfit: '$2.00 (net credit)',
+    maxLoss: '$3.00 (wing width − credit)',
+    breakeven: '$93 and $107',
+    priceMin: 80, priceMax: 120,
+  },
+  {
+    name: 'Long Straddle',
+    verdict: 'BUY_STRADDLE',
+    trigger: 'NEUTRAL • LOW IV • near earnings',
+    purpose: 'Bet on volatility expansion into a catalyst. Profits on a big move either direction.',
+    legs: [
+      { action: 'BUY', side: 'CALL', strike: 100, premium: 3 },
+      { action: 'BUY', side: 'PUT', strike: 100, premium: 3 },
+    ],
+    legText: ['BUY 1 × 100 call @ $3.00', 'BUY 1 × 100 put @ $3.00'],
+    maxProfit: 'Unlimited (above); $94 (below, to $0)',
+    maxLoss: '$6.00 (combined debit, at strike)',
+    breakeven: '$94 and $106',
+    priceMin: 80, priceMax: 120,
+  },
+];
+
+function StrategyCard({ strategy }: { strategy: Strategy }) {
+  const [legs, setLegs] = useState<Leg[]>(() =>
+    strategy.legs.map((l) => ({ ...l })),
+  );
+  const [dirty, setDirty] = useState(false);
+
+  const updateLeg = (i: number, patch: Partial<Leg>) => {
+    setLegs((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+    setDirty(true);
+  };
+
+  const reset = () => {
+    setLegs(strategy.legs.map((l) => ({ ...l })));
+    setDirty(false);
+  };
+
+  const { metrics } = useMemo(
+    () => computePayoff(legs, strategy.priceMin, strategy.priceMax),
+    [legs, strategy.priceMin, strategy.priceMax],
+  );
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4">
+      <div className="flex items-baseline justify-between gap-2 mb-1 flex-wrap">
+        <h3 className="text-base font-semibold text-text-primary">{strategy.name}</h3>
+        <span className="text-[10px] font-mono text-purple-300 bg-purple-900/30 px-1.5 py-px rounded">
+          {strategy.verdict}
+        </span>
+      </div>
+      <p className="text-[11px] text-text-secondary mb-2">
+        <span className="font-semibold">Fires when:</span> {strategy.trigger}
+      </p>
+      <p className="text-xs text-text-primary mb-3 leading-snug">{strategy.purpose}</p>
+      <div className="bg-page rounded border border-border mb-3 p-1">
+        <InteractivePayoff
+          legs={legs}
+          priceMin={strategy.priceMin}
+          priceMax={strategy.priceMax}
+          onLegChange={updateLeg}
+        />
+        <LegLegend legs={legs} />
+      </div>
+      <div className="space-y-2 text-xs">
+        <div className="flex items-center justify-between">
+          <div className="text-text-secondary font-semibold">Legs</div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-text-secondary italic">
+              drag handles or edit below
+            </span>
+            {dirty && (
+              <button
+                type="button"
+                onClick={reset}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-border/60 text-text-primary hover:bg-border transition-colors"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+        <LegEditor legs={legs} onChange={updateLeg} />
+        <div className="grid grid-cols-3 gap-2 pt-2 border-t border-border">
+          <div>
+            <div className="text-[10px] text-text-secondary uppercase">Max profit</div>
+            <div className="text-green-400 font-semibold">{metrics.profitStr}</div>
+          </div>
+          <div>
+            <div className="text-[10px] text-text-secondary uppercase">Max loss</div>
+            <div className="text-red-400 font-semibold">{metrics.lossStr}</div>
+          </div>
+          <div>
+            <div className="text-[10px] text-text-secondary uppercase">Breakeven</div>
+            <div className="text-text-primary font-semibold">{metrics.beStr}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StrategiesSection() {
+  return (
+    <div>
+      <p className="text-sm text-text-secondary mb-4">
+        The deep options analyzer picks one of eight strategies using a lookup of{' '}
+        <span className="text-text-primary font-semibold">directional bias</span> ×{' '}
+        <span className="text-text-primary font-semibold">IV bucket</span> ×{' '}
+        <span className="text-text-primary font-semibold">near-earnings flag</span>.
+        Each card below shows the P&amp;L at expiration for a canonical $100 underlying. Strike lines
+        are colored per leg (<span className="text-[#2dd4bf]">calls teal</span>, <span className="text-[#f59e0b]">puts amber</span>); current spot is the blue dashed line.
+        <br />
+        <span className="text-text-primary font-semibold">Interactive:</span> drag a strike handle left/right or a round premium dot up/down, or edit the leg values below each chart — Max P/L and breakeven recompute live.
+      </p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {STRATEGIES.map((s) => <StrategyCard key={s.verdict} strategy={s} />)}
+      </div>
+    </div>
+  );
+}
+
 export default function KnowledgePage() {
   const [activeTab, setActiveTab] = useState<Section>('guide');
 
@@ -1180,6 +2506,8 @@ export default function KnowledgePage() {
         {activeTab === 'classification' && <ClassificationSection />}
         {activeTab === 'watchlist' && <WatchlistSection />}
         {activeTab === 'strikes' && <StrikeSection />}
+        {activeTab === 'optionslab' && <OptionsLabSection />}
+        {activeTab === 'strategies' && <StrategiesSection />}
         {activeTab === 'pipeline' && <PipelineSection />}
       </div>
     </div>

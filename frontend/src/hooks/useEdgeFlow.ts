@@ -102,6 +102,7 @@ export function useNews(filters?: {
   mode?: string;
   category?: string;
   impact_level?: string;
+  industry?: string;
   min_relevance?: number;
   limit?: number;
 }): HookResult<NewsItem[]> {
@@ -120,7 +121,7 @@ export function useNews(filters?: {
     } finally {
       setLoading(false);
     }
-  }, [filters?.ticker, filters?.mode, filters?.category, filters?.impact_level, filters?.min_relevance, filters?.limit]);
+  }, [filters?.ticker, filters?.mode, filters?.category, filters?.impact_level, filters?.industry, filters?.min_relevance, filters?.limit]);
 
   useEffect(() => {
     refetch();

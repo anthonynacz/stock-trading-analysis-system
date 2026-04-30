@@ -4,7 +4,16 @@ from sqlalchemy import select
 
 from config import SECTORS
 from db.connection import engine, async_session
-from db.models import Base, Position, Sector, UniverseStock  # noqa: F401 — Position imported for metadata
+from db.models import (  # noqa: F401 — imported for metadata registration
+    Base,
+    IndustryRecommendation,
+    MultibaggerSnapshot,
+    MultibaggerUniverse,
+    Position,
+    Sector,
+    UniverseStock,
+)
+from services.multibagger_seed import SCANNER_SEED
 
 SEED_SECTORS = [
     "AI/Semiconductors",
@@ -12,6 +21,9 @@ SEED_SECTORS = [
     "Energy/Commodities",
     "Healthcare/Biotech",
     "Consumer/Cloud/Enterprise",
+    "Industrials/Defense",
+    "Power/Utilities/Nuclear",
+    "Communications/Media",
 ]
 
 
@@ -48,6 +60,21 @@ async def init_db():
                     count += 1
             await session.commit()
             print(f"Seeded {count} universe stocks from config")
+
+        # Seed multi-bagger scanner universe if empty
+        mb_result = await session.execute(select(MultibaggerUniverse).limit(1))
+        if not mb_result.scalars().first():
+            for ticker, theme in SCANNER_SEED:
+                session.add(
+                    MultibaggerUniverse(
+                        ticker=ticker,
+                        theme=theme,
+                        source="SEED",
+                        is_active=True,
+                    )
+                )
+            await session.commit()
+            print(f"Seeded {len(SCANNER_SEED)} scanner universe stocks")
 
     print("Database initialized successfully")
 

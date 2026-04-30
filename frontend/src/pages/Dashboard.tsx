@@ -1,5 +1,5 @@
-import { useState, useMemo, useCallback } from 'react';
-import type { Recommendation } from '../types';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import type { Recommendation, IndustryRecommendation } from '../types';
 import {
   useWatchlist,
   useRecommendations,
@@ -9,7 +9,7 @@ import {
   usePipelineDates,
   useWatchlistChanges,
 } from '../hooks/useEdgeFlow';
-import { addToWatchlist, removeFromWatchlist, toggleLockTicker } from '../utils/api';
+import { addToWatchlist, removeFromWatchlist, toggleLockTicker, getIndustries } from '../utils/api';
 import StatusBar from '../components/StatusBar';
 import WatchlistChanges from '../components/WatchlistChanges';
 import WatchlistGrid from '../components/WatchlistGrid';
@@ -19,6 +19,7 @@ import NewsTimeline from '../components/NewsTimeline';
 import NewsModeSelector from '../components/NewsModeSelector';
 import CatalystCalendar from '../components/CatalystCalendar';
 import WatchlistStrikes from '../components/WatchlistStrikes';
+import IndustryCard from '../components/IndustryCard';
 
 function SectionLoading() {
   return (
@@ -47,6 +48,7 @@ export default function Dashboard() {
   const [addError, setAddError] = useState<string | null>(null);
   const [newsMode, setNewsMode] = useState<'general' | 'watchlist' | 'ticker'>('general');
   const [newsTicker, setNewsTicker] = useState('');
+  const [newsIndustry, setNewsIndustry] = useState('');
 
   const pipelineDates = usePipelineDates();
   const watchlist = useWatchlist(undefined, selectedDate);
@@ -55,9 +57,34 @@ export default function Dashboard() {
   const news = useNews({
     mode: newsMode,
     ticker: newsMode === 'ticker' && newsTicker ? newsTicker : undefined,
+    industry: newsIndustry || undefined,
   });
   const catalysts = useCatalysts();
   const status = useStatus();
+
+  const [industries, setIndustries] = useState<IndustryRecommendation[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const d = await getIndustries(
+          selectedDate === new Date().toISOString().slice(0, 10) ? undefined : selectedDate,
+        );
+        if (!cancelled) setIndustries(d);
+      } catch {
+        if (!cancelled) setIndustries([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDate]);
+
+  const industryNames = useMemo(
+    () =>
+      [...new Set(industries.map((i) => i.industry).filter(Boolean) as string[])].sort(),
+    [industries],
+  );
 
   // Find watchlist item for selected ticker
   const selectedItem = selectedTicker
@@ -148,6 +175,30 @@ export default function Dashboard() {
               entrants={watchlistChanges.data.entrants}
               exiters={watchlistChanges.data.exiters}
             />
+          </section>
+        )}
+
+        {/* Industry Recommendations */}
+        {industries.length > 0 && (
+          <section>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-text-primary">Industries</h2>
+              <a
+                href="/industries"
+                className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+              >
+                Detail view →
+              </a>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {industries.map((i) => (
+                <IndustryCard
+                  key={i.id}
+                  item={i}
+                  linkTo={`/industries?industry=${encodeURIComponent(i.industry)}`}
+                />
+              ))}
+            </div>
           </section>
         )}
 
@@ -262,6 +313,9 @@ export default function Dashboard() {
                 <NewsTimeline
                   items={news.data ?? []}
                   showTickers={newsMode !== 'general'}
+                  industries={industryNames}
+                  industry={newsIndustry}
+                  onIndustryChange={setNewsIndustry}
                 />
               )}
             </div>

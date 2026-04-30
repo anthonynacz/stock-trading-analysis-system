@@ -38,11 +38,12 @@ last_refresh: dict[str, datetime | None] = {
     "news": None,
     "options": None,
     "recommendations": None,
+    "industries": None,
 }
 
 EASTERN = pytz.timezone("US/Eastern")
 
-ALL_PHASES = ["discovery", "watchlist", "ratings", "earnings", "news", "options", "recommendations"]
+ALL_PHASES = ["discovery", "watchlist", "ratings", "earnings", "news", "options", "recommendations", "industries"]
 
 # Phases that are safe to run concurrently (independent data-fetchers,
 # separate tables, no cross-reads).
@@ -123,6 +124,12 @@ async def run_pipeline_phase(phase: str) -> None:
             )
             recs = await engine.generate_recommendations(active_tickers)
             logger.info("Recommendations generated: %d", len(recs))
+
+        elif phase == "industries":
+            from services.industry_analyzer import IndustryAnalyzer
+            industry_svc = IndustryAnalyzer(session, data_client)
+            result = await industry_svc.run_and_persist()
+            logger.info("Industry analysis complete: %s", result)
 
         else:
             logger.error("Unknown pipeline phase: %s", phase)

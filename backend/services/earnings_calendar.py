@@ -129,7 +129,7 @@ class EarningsCalendarService:
                     )
                     continue
 
-                catalyst_window_start = earnings_date - timedelta(days=7)
+                catalyst_window_start = earnings_date - timedelta(days=14)
                 catalyst_window_end = earnings_date + timedelta(days=10)
 
                 # Check for existing record (unique on ticker + earnings_date)
@@ -352,10 +352,10 @@ class EarningsCalendarService:
         """
         days_diff = (earnings_date - today).days
 
-        if days_diff > 7:
+        if days_diff > 14:
             return "APPROACHING"
         elif days_diff >= 0:
-            # Within T-7 to T-0 (inclusive of earnings day)
+            # Within T-14 to T-0 (inclusive of earnings day)
             return "ACTIVE"
         elif days_diff >= -10:
             # T+1 to T+10 after earnings

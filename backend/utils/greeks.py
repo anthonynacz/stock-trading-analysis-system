@@ -111,3 +111,87 @@ def compute_greeks(
         }
     except (ValueError, ZeroDivisionError, OverflowError):
         return null
+
+
+def compute_greeks_extended(
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    sigma: float,
+    is_call: bool,
+) -> dict[str, float | None]:
+    """Compute first- and second-order greeks for a European option.
+
+    Returns delta, gamma, theta, vega (same as compute_greeks) plus:
+    - rho: premium change per 1% rate move
+    - vanna: delta change per 1% IV move (= vega change per $1 move in S)
+    - charm: delta change per day (delta decay)
+    - vomma: vega change per 1% IV move (vega convexity)
+
+    Units are chosen for readability in UI:
+    - theta per day, vega per 1% IV, rho per 1% rate
+    - vanna per 1% IV, charm per day, vomma per 1% IV
+    """
+    null = {k: None for k in ("delta", "gamma", "theta", "vega", "rho", "vanna", "charm", "vomma")}
+
+    if S <= 0 or K <= 0 or T <= 0 or sigma <= 0 or sigma > 5.0:
+        return null
+
+    try:
+        sqrt_T = math.sqrt(T)
+        d1 = (math.log(S / K) + (r + sigma * sigma / 2.0) * T) / (sigma * sqrt_T)
+        d2 = d1 - sigma * sqrt_T
+
+        nd1 = _norm_cdf(d1)
+        nd2 = _norm_cdf(d2)
+        n_minus_d2 = _norm_cdf(-d2)
+        pdf_d1 = _norm_pdf(d1)
+        exp_rT = math.exp(-r * T)
+
+        # First-order
+        delta = nd1 if is_call else nd1 - 1.0
+        gamma = pdf_d1 / (S * sigma * sqrt_T)
+        common_theta = -(S * pdf_d1 * sigma) / (2.0 * sqrt_T)
+        if is_call:
+            theta_annual = common_theta - r * K * exp_rT * nd2
+            rho_annual = K * T * exp_rT * nd2
+        else:
+            theta_annual = common_theta + r * K * exp_rT * n_minus_d2
+            rho_annual = -K * T * exp_rT * n_minus_d2
+        theta = theta_annual / 365.0
+        vega = S * pdf_d1 * sqrt_T / 100.0  # per 1% IV
+        rho = rho_annual / 100.0  # per 1% rate move
+
+        # Second-order
+        # Vanna: d(delta)/d(sigma) — per 1% IV => divide by 100.
+        # Same for calls and puts.
+        vanna = -pdf_d1 * d2 / sigma / 100.0
+
+        # Charm: d(delta)/d(t). Using q=0 (no dividend).
+        # Annualized: -pdf_d1 * (r/(sigma*sqrt_T) - d2/(2T))
+        # Per day: divide by 365.
+        # Sign convention: for long calls charm is typically negative (delta decays toward 0 for OTM, toward 1 for ITM).
+        charm_annual = -pdf_d1 * (r / (sigma * sqrt_T) - d2 / (2.0 * T))
+        # Put adjustment: charm_put = charm_call for our simple q=0 model,
+        # but the signed interpretation flips for put delta. Leave value the same; caller
+        # should interpret relative to the option's delta.
+        charm = charm_annual / 365.0
+
+        # Vomma: d(vega)/d(sigma). Vega is already per 1% IV, so vomma is per 1% IV squared.
+        # Formula: vega * d1 * d2 / sigma (when vega is in sigma units).
+        # Our vega is /100, so vomma per 1% IV change in vega: vega_per_1 * d1 * d2 / sigma.
+        vomma = vega * d1 * d2 / sigma
+
+        return {
+            "delta": round(delta, 6),
+            "gamma": round(gamma, 6),
+            "theta": round(theta, 6),
+            "vega": round(vega, 6),
+            "rho": round(rho, 6),
+            "vanna": round(vanna, 6),
+            "charm": round(charm, 6),
+            "vomma": round(vomma, 6),
+        }
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return null

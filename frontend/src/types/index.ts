@@ -77,6 +77,7 @@ export interface Recommendation {
   recommendation_date: string;
   ticker: string;
   action: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
+  sector: string | null;
   conviction_score: number | null;
   signal_count: number | null;
   signals: SignalDetail[] | null;
@@ -88,6 +89,13 @@ export interface Recommendation {
   current_price: number | null;
   target_price: number | null;
   stop_loss_price: number | null;
+  // Revision tracking — revision_number=0 means first run, prior_* will be null.
+  // When >0, this row was overwritten by a later same-day run; UI renders a
+  // "revised" badge with hover tooltip showing prior_action / prior_conviction_score.
+  prior_action: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL' | null;
+  prior_conviction_score: number | null;
+  revision_number: number;
+  revised_at: string | null;
   suggested_options: SuggestedOption[];
 }
 
@@ -200,6 +208,7 @@ export interface ResearchResult {
   id: number;
   ticker: string;
   company_name: string | null;
+  sector: string | null;
   analyzed_at: string;
   action: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
   conviction_score: number | null;
@@ -224,6 +233,175 @@ export interface ResearchResult {
     unusual_activity_detail: string | null;
   } | null;
   suggested_options: SuggestedOption[];
+}
+
+// ── Deep Options Analysis ─────────────────────────────────────────────────
+
+export interface ExtendedGreeks {
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+  rho: number | null;
+  vanna: number | null;
+  charm: number | null;
+  vomma: number | null;
+  premium?: number | null;
+  theta_pct?: number | null;
+  vega_pct?: number | null;
+}
+
+export interface ExpiryGreeksRow {
+  expiry: string;
+  dte: number;
+  atm_strike: number | null;
+  atm_iv: number | null;
+  atm_call: ExtendedGreeks | null;
+  atm_put: ExtendedGreeks | null;
+  straddle_price: number | null;
+  expected_move_pct: number | null;
+}
+
+export interface GreeksDetail {
+  risk_free_rate: number;
+  spot: number;
+  expirations: ExpiryGreeksRow[];
+}
+
+export interface TermStructurePoint {
+  expiry: string;
+  dte: number;
+  atm_iv: number | null;
+}
+
+export interface SkewPoint {
+  expiry: string;
+  dte: number;
+  skew_25d_iv_pts: number | null;
+}
+
+export interface ExpectedMovePoint {
+  expiry: string;
+  dte: number;
+  expected_move_pct: number | null;
+  expected_move_abs: number | null;
+  straddle_price: number | null;
+}
+
+export interface VolStructure {
+  term_structure: TermStructurePoint[];
+  term_shape: 'CONTANGO' | 'BACKWARDATION' | 'FLAT' | 'UNKNOWN';
+  front_minus_back_iv_pts: number | null;
+  skew_25d_by_expiry: SkewPoint[];
+  avg_skew_25d_iv_pts: number | null;
+  expected_moves: ExpectedMovePoint[];
+}
+
+export interface MaxPainEntry {
+  expiry: string;
+  dte: number;
+  max_pain_strike: number | null;
+  max_pain_distance_pct: number | null;
+}
+
+export interface PinMagnet {
+  strike: number;
+  call_oi: number;
+  put_oi: number;
+  oi_share_of_near_spot: number;
+  distance_from_spot_pct: number;
+  expiry: string;
+  dte: number;
+}
+
+export interface PCOIEntry {
+  expiry: string;
+  dte: number;
+  pc_oi_ratio: number | null;
+}
+
+export interface Positioning {
+  gex_total: number;
+  gex_regime: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
+  max_pain_by_expiry: MaxPainEntry[];
+  pin_magnets: PinMagnet[];
+  pc_oi_by_expiry: PCOIEntry[];
+}
+
+export interface LiquidityExpiryRow {
+  expiry: string;
+  dte: number;
+  total_oi: number;
+  median_spread_pct: number | null;
+  thin_oi: boolean;
+  wide_spreads: boolean;
+}
+
+export interface Liquidity {
+  rating: 'TIGHT' | 'MODERATE' | 'WIDE' | 'UNKNOWN';
+  avg_spread_pct: number | null;
+  by_expiry: LiquidityExpiryRow[];
+}
+
+export interface StrategyLeg {
+  action: 'BUY' | 'SELL';
+  side: 'CALL' | 'PUT';
+  strike: number;
+  expiry: string;
+  qty: number;
+  rationale: string;
+}
+
+export type StrategyVerdict =
+  | 'BUY_CALL'
+  | 'BUY_PUT'
+  | 'BUY_CALL_SPREAD'
+  | 'BUY_PUT_SPREAD'
+  | 'SELL_PUT_SPREAD'
+  | 'SELL_CALL_SPREAD'
+  | 'SELL_IRON_CONDOR'
+  | 'BUY_STRADDLE'
+  | 'NO_TRADE';
+
+export interface StrategyRecommendation {
+  verdict: StrategyVerdict | string;
+  strategy: string;
+  target_expiry: string | null;
+  target_dte: number | null;
+  legs: StrategyLeg[];
+  notes: string[];
+  iv_bucket: 'LOW' | 'MID' | 'HIGH';
+  near_earnings: boolean;
+  earnings_dte: number | null;
+}
+
+export type RiskSeverity = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface HiddenRisk {
+  severity: RiskSeverity;
+  code: string;
+  title: string;
+  detail: string;
+}
+
+export interface DeepOptionsAnalysis {
+  id: number;
+  ticker: string;
+  company_name: string | null;
+  analyzed_at: string;
+  stock_price: number | null;
+  iv_rank: number | null;
+  iv_percentile: number | null;
+  directional_bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | null;
+  conviction_score: number | null;
+  verdict: string | null;
+  greeks_detail: GreeksDetail | null;
+  vol_structure: VolStructure | null;
+  positioning: Positioning | null;
+  liquidity: Liquidity | null;
+  strategy: StrategyRecommendation | null;
+  hidden_risks: HiddenRisk[] | null;
+  rationale: string | null;
 }
 
 // ── Universe management ──────────────────────────────────────────────────
@@ -308,4 +486,168 @@ export interface PositionCreateRequest {
   stop_loss?: number;
   target_price?: number;
   notes?: string;
+}
+
+// ── Multi-bagger scanner ────────────────────────────────────────────────
+
+export type ScannerTier = 'HOT' | 'WATCH' | 'MONITOR' | 'IGNORE';
+
+export interface ScannerSignal {
+  signal: string;
+  points: number;
+  detail: string;
+}
+
+export interface ScannerResult {
+  id: number;
+  run_date: string;
+  ticker: string;
+  company_name: string | null;
+  theme: string | null;
+  composite_score: number;
+  tier: ScannerTier;
+  signals_fired: number;
+  price: number | null;
+  market_cap: number | null;
+  stock_age_months: number | null;
+  return_12m: number | null;
+  return_6m: number | null;
+  momentum_percentile: number | null;
+  rev_growth_latest: number | null;
+  rev_growth_prior: number | null;
+  rev_accel_pp: number | null;
+  gross_margin_latest: number | null;
+  gross_margin_prior: number | null;
+  margin_delta_pp: number | null;
+  avg_pt: number | null;
+  pt_chase_ratio: number | null;
+  revisions_90d: number | null;
+  signals: ScannerSignal[] | null;
+  rationale: string | null;
+}
+
+export interface ScannerUniverseItem {
+  id: number;
+  ticker: string;
+  company_name: string | null;
+  theme: string | null;
+  source: string;
+  is_active: boolean;
+  added_at: string;
+}
+
+export interface ScannerDates {
+  dates: string[];
+}
+
+export interface ScannerRunStatus {
+  running: boolean;
+  started_at: string | null;
+  last_result: {
+    status: string;
+    run_date?: string;
+    scored?: number;
+    hot?: number;
+    watch?: number;
+    error?: string;
+  } | null;
+}
+
+// ── Industry recommendations ────────────────────────────────────────────
+
+export interface IndustrySignal {
+  signal: string;
+  points: number;
+  detail: string;
+}
+
+export interface IndustryRepresentativeTicker {
+  ticker: string;
+  action: string;
+  conviction: number;
+}
+
+export interface IndustryRecommendation {
+  id: number;
+  rec_date: string;
+  industry: string;
+  action: string;
+  conviction_score: number;
+  signal_count: number;
+  member_count: number | null;
+  bullish_count: number | null;
+  bearish_count: number | null;
+  breadth_positive_pct: number | null;
+  breadth_above_50d_pct: number | null;
+  cap_weighted_conviction: number | null;
+  etf_symbol: string | null;
+  etf_rsi_14: number | null;
+  etf_momentum_20d: number | null;
+  avg_news_sentiment: number | null;
+  news_article_count: number | null;
+  geopolitical_points: number | null;
+  active_catalyst_count: number | null;
+  representative_tickers: IndustryRepresentativeTicker[] | null;
+  signals: IndustrySignal[] | null;
+  rationale: string | null;
+}
+
+export interface IndustryHistoryPoint {
+  rec_date: string;
+  action: string;
+  conviction_score: number;
+  signal_count: number;
+}
+
+export interface IndustryDetail {
+  industry: string;
+  latest: IndustryRecommendation;
+  history: IndustryHistoryPoint[];
+  members: Recommendation[];
+}
+
+// ── Chart builder ──────────────────────────────────────────────────────
+
+export type ChartDatasetKey = 'ticker_time_series' | 'signal_breakdown' | 'industry_comparison';
+
+export interface ChartSeriesPoint {
+  x: string | number;
+  y: number | null;
+  count?: number | null;
+}
+
+export interface ChartSeries {
+  name: string;
+  data: ChartSeriesPoint[];
+  metric_key?: string;
+}
+
+export interface ChartResponse {
+  dataset: ChartDatasetKey;
+  x_label: string;
+  y_label: string;
+  chart_type: 'line' | 'bar' | 'scatter' | string;
+  series: ChartSeries[];
+  meta: Record<string, unknown>;
+}
+
+export interface ChartMetricOption {
+  key: string;
+  label: string;
+  source?: string;
+}
+
+export interface ChartDatasetInfo {
+  key: ChartDatasetKey;
+  label: string;
+  description: string;
+  chart_type: string;
+  metrics?: ChartMetricOption[];
+  aggregations?: string[];
+  actions?: string[];
+  views?: string[];
+}
+
+export interface ChartDatasetsResponse {
+  datasets: ChartDatasetInfo[];
 }

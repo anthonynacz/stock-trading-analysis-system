@@ -5,6 +5,9 @@ import { SENTIMENT_COLOR, IMPACT_COLORS } from '../utils/theme';
 interface NewsTimelineProps {
   items: NewsItem[];
   showTickers?: boolean;
+  industries?: string[];
+  industry?: string;
+  onIndustryChange?: (industry: string) => void;
 }
 
 function formatTime(dateStr: string | null): string {
@@ -20,7 +23,13 @@ function formatTime(dateStr: string | null): string {
 
 const PAGE_SIZE = 15;
 
-export default function NewsTimeline({ items, showTickers = false }: NewsTimelineProps) {
+export default function NewsTimeline({
+  items,
+  showTickers = false,
+  industries,
+  industry,
+  onIndustryChange,
+}: NewsTimelineProps) {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [impactFilter, setImpactFilter] = useState('');
   const [page, setPage] = useState(0);
@@ -48,6 +57,18 @@ export default function NewsTimeline({ items, showTickers = false }: NewsTimelin
     <div className="space-y-3">
       {/* Filters + Pagination */}
       <div className="flex items-center gap-2 flex-wrap">
+        {industries && onIndustryChange && (
+          <select
+            value={industry ?? ''}
+            onChange={(e) => { onIndustryChange(e.target.value); setPage(0); }}
+            className="bg-card border border-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-text-secondary"
+          >
+            <option value="">All Industries</option>
+            {industries.map((ind) => (
+              <option key={ind} value={ind}>{ind}</option>
+            ))}
+          </select>
+        )}
         <select
           value={categoryFilter}
           onChange={(e) => { setCategoryFilter(e.target.value); setPage(0); }}

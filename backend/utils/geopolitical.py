@@ -97,6 +97,9 @@ _SECTOR_IMPACT: dict[EventType, dict[str, int]] = {
         "Energy/Commodities": +18,
         "Healthcare/Biotech": -10,
         "Consumer/Cloud/Enterprise": -12,
+        "Industrials/Defense": +18,
+        "Power/Utilities/Nuclear": +8,
+        "Communications/Media": -10,
     },
     EventType.TRADE_WAR: {
         "AI/Semiconductors": -18,
@@ -104,6 +107,9 @@ _SECTOR_IMPACT: dict[EventType, dict[str, int]] = {
         "Energy/Commodities": -10,
         "Healthcare/Biotech": -10,
         "Consumer/Cloud/Enterprise": -12,
+        "Industrials/Defense": -12,
+        "Power/Utilities/Nuclear": +10,
+        "Communications/Media": -10,
     },
     EventType.SANCTIONS: {
         "AI/Semiconductors": -15,
@@ -111,6 +117,9 @@ _SECTOR_IMPACT: dict[EventType, dict[str, int]] = {
         "Energy/Commodities": +12,
         "Healthcare/Biotech": -10,
         "Consumer/Cloud/Enterprise": -10,
+        "Industrials/Defense": +12,
+        "Power/Utilities/Nuclear": +12,
+        "Communications/Media": -10,
     },
     EventType.DIPLOMATIC_BREAKTHROUGH: {
         "AI/Semiconductors": +12,
@@ -118,6 +127,9 @@ _SECTOR_IMPACT: dict[EventType, dict[str, int]] = {
         "Energy/Commodities": -10,
         "Healthcare/Biotech": +10,
         "Consumer/Cloud/Enterprise": +12,
+        "Industrials/Defense": -12,
+        "Power/Utilities/Nuclear": -10,
+        "Communications/Media": +12,
     },
     EventType.OIL_DISRUPTION: {
         "AI/Semiconductors": -12,
@@ -125,6 +137,9 @@ _SECTOR_IMPACT: dict[EventType, dict[str, int]] = {
         "Energy/Commodities": +20,
         "Healthcare/Biotech": -10,
         "Consumer/Cloud/Enterprise": -12,
+        "Industrials/Defense": -10,
+        "Power/Utilities/Nuclear": +15,
+        "Communications/Media": -10,
     },
     EventType.REGULATION: {
         "AI/Semiconductors": -15,
@@ -132,6 +147,9 @@ _SECTOR_IMPACT: dict[EventType, dict[str, int]] = {
         "Energy/Commodities": -10,
         "Healthcare/Biotech": -12,
         "Consumer/Cloud/Enterprise": -15,
+        "Industrials/Defense": -10,
+        "Power/Utilities/Nuclear": -15,
+        "Communications/Media": -18,
     },
 }
 

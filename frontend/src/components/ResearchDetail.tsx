@@ -1,7 +1,8 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { ResearchResult, SignalDetail } from '../types';
 import { useTickerTrends } from '../hooks/useEdgeFlow';
-import { ACTION_COLORS, getActionLabel } from '../utils/theme';
+import { ACTION_COLORS, getActionLabel, shortSectorLabel } from '../utils/theme';
 import StrikeRecommender from './StrikeRecommender';
 import TrendChart from './TrendChart';
 import DayComparison from './DayComparison';
@@ -103,6 +104,7 @@ function formatTimestamp(ts: string): string {
 export default function ResearchDetail({ result, onClose, onReanalyze, analyzing }: ResearchDetailProps) {
   const [smaWindow, setSmaWindow] = useState(5);
   const trends = useTickerTrends(result.ticker, 20, smaWindow);
+  const navigate = useNavigate();
 
   const borderColor = ACTION_COLORS[result.action] ?? '#21262d';
 
@@ -112,6 +114,14 @@ export default function ResearchDetail({ result, onClose, onReanalyze, analyzing
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2">
           <span className="text-lg font-bold text-text-primary">{result.ticker}</span>
+          {result.sector && shortSectorLabel(result.sector) && (
+            <span
+              className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-blue-900/40 text-blue-300 border border-blue-500/30"
+              title={result.sector}
+            >
+              {shortSectorLabel(result.sector)}
+            </span>
+          )}
           <span
             className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase"
             style={{ backgroundColor: borderColor + '22', color: borderColor }}
@@ -120,6 +130,16 @@ export default function ResearchDetail({ result, onClose, onReanalyze, analyzing
           </span>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => navigate(`/options-lab?ticker=${encodeURIComponent(result.ticker)}&auto=1`)}
+            title={`Run deep options analysis for ${result.ticker}`}
+            className="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-900/40 text-purple-300 hover:bg-purple-800/60 hover:text-purple-200 transition-colors flex items-center gap-1"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            Options Lab
+          </button>
           <button
             onClick={() => onReanalyze(result.ticker)}
             disabled={analyzing}

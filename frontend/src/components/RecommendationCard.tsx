@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { Recommendation, SignalDetail } from '../types';
-import { ACTION_COLORS, getActionLabel } from '../utils/theme';
+import { ACTION_COLORS, getActionLabel, shortSectorLabel } from '../utils/theme';
 import OptionsTable from './OptionsTable';
 
 interface RecommendationCardProps {
@@ -59,13 +60,80 @@ function RiskBadge({ level }: { level: string }) {
   );
 }
 
+function RevisionBadge({ rec }: { rec: Recommendation }) {
+  if (!rec.revision_number || rec.revision_number === 0) return null;
+  const priorConv = rec.prior_conviction_score;
+  const currConv = rec.conviction_score;
+  const convDelta =
+    priorConv != null && currConv != null ? currConv - priorConv : null;
+  const actionFlipped =
+    rec.prior_action != null && rec.prior_action !== rec.action;
+
+  return (
+    <span className="relative group inline-flex">
+      <span
+        className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-900/50 text-purple-300 border border-purple-500/40 flex items-center gap-1 cursor-help"
+        aria-label="Revised recommendation"
+      >
+        <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        REV{rec.revision_number > 1 ? ` ${rec.revision_number}` : ''}
+      </span>
+      {/* Hover tooltip with diff */}
+      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 hidden group-hover:block z-50 pointer-events-none">
+        <div className="bg-gray-900 border border-purple-500/60 text-white text-[10px] px-2 py-1.5 rounded whitespace-nowrap shadow-lg space-y-0.5">
+          <div className="text-purple-300 font-semibold uppercase tracking-wider text-[9px]">
+            Revision {rec.revision_number}
+          </div>
+          {rec.prior_action != null && (
+            <div>
+              Action:{' '}
+              <span className={actionFlipped ? 'text-amber-300 font-semibold' : 'text-text-secondary'}>
+                {rec.prior_action.replace('_', ' ')} → {rec.action.replace('_', ' ')}
+              </span>
+            </div>
+          )}
+          {priorConv != null && currConv != null && convDelta != null && (
+            <div>
+              Conviction:{' '}
+              <span className="font-mono">
+                {priorConv > 0 ? '+' : ''}{priorConv} → {currConv > 0 ? '+' : ''}{currConv}
+              </span>{' '}
+              <span className={convDelta >= 0 ? 'text-green-400' : 'text-red-400'}>
+                ({convDelta >= 0 ? '+' : ''}{convDelta.toFixed(0)})
+              </span>
+            </div>
+          )}
+          {rec.revised_at && (
+            <div className="text-text-secondary">
+              {new Date(rec.revised_at).toLocaleTimeString()}
+            </div>
+          )}
+        </div>
+      </div>
+    </span>
+  );
+}
+
 export default function RecommendationCard({ recommendation: rec }: RecommendationCardProps) {
   const [expanded, setExpanded] = useState(false);
   const borderColor = ACTION_COLORS[rec.action] ?? '#21262d';
+  const navigate = useNavigate();
+
+  const openOptionsLab = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigate(`/options-lab?ticker=${encodeURIComponent(rec.ticker)}&auto=1`);
+  };
+
+  const isRevised = (rec.revision_number ?? 0) > 0;
+  const sectorShort = shortSectorLabel(rec.sector);
 
   return (
     <div
-      className="bg-card rounded-lg border border-border overflow-hidden cursor-pointer transition-colors hover:border-text-secondary/30"
+      className={`bg-card rounded-lg border overflow-hidden cursor-pointer transition-colors hover:border-text-secondary/30 ${
+        isRevised ? 'border-purple-500/40 ring-1 ring-purple-500/20' : 'border-border'
+      }`}
       style={{ borderLeftWidth: '3px', borderLeftColor: borderColor }}
       onClick={() => setExpanded((v) => !v)}
     >
@@ -78,7 +146,16 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
           >
             {getActionLabel(rec.action)}
           </span>
+          <RevisionBadge rec={rec} />
           <span className="text-sm font-bold text-text-primary">{rec.ticker}</span>
+          {sectorShort && (
+            <span
+              className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-blue-900/40 text-blue-300 border border-blue-500/30"
+              title={rec.sector ?? undefined}
+            >
+              {sectorShort}
+            </span>
+          )}
           {rec.current_price != null && (
             <span className="text-xs font-mono text-text-secondary">
               ${rec.current_price.toFixed(2)}
@@ -89,6 +166,16 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
               {rec.signal_count} sig{rec.signal_count !== 1 ? 's' : ''}
             </span>
           )}
+          <button
+            onClick={openOptionsLab}
+            title={`Run deep options analysis for ${rec.ticker}`}
+            className={`${rec.signal_count != null ? '' : 'ml-auto'} px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-900/40 text-purple-300 hover:bg-purple-800/60 hover:text-purple-200 transition-colors flex items-center gap-1 shrink-0`}
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            Options Lab
+          </button>
           <svg
             className={`w-3.5 h-3.5 text-text-secondary transition-transform shrink-0 ${expanded ? 'rotate-180' : ''}`}
             fill="none"
@@ -105,6 +192,46 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
       {/* Expanded view */}
       {expanded && (
         <div className="px-3 pb-2.5 pt-0 border-t border-border space-y-2" onClick={(e) => e.stopPropagation()}>
+          {/* Revision diff line — when this row was overwritten by a same-day re-run */}
+          {isRevised && (
+            <div className="mt-2 px-2 py-1 rounded bg-purple-900/20 border border-purple-500/30 text-[11px] text-text-primary flex items-center gap-2 flex-wrap">
+              <span className="text-purple-300 font-semibold uppercase tracking-wider text-[9px]">
+                Revised
+              </span>
+              {rec.prior_action != null && rec.prior_action !== rec.action && (
+                <span>
+                  <span className="text-text-secondary">action </span>
+                  <span className="font-mono">{rec.prior_action.replace('_', ' ')}</span>
+                  <span className="text-text-secondary"> → </span>
+                  <span className="font-mono text-amber-300">{rec.action.replace('_', ' ')}</span>
+                </span>
+              )}
+              {rec.prior_conviction_score != null && rec.conviction_score != null && (
+                <span>
+                  <span className="text-text-secondary">conv </span>
+                  <span className="font-mono">{rec.prior_conviction_score > 0 ? '+' : ''}{rec.prior_conviction_score}</span>
+                  <span className="text-text-secondary"> → </span>
+                  <span className="font-mono">{rec.conviction_score > 0 ? '+' : ''}{rec.conviction_score}</span>
+                  <span
+                    className={`font-mono ${
+                      rec.conviction_score - rec.prior_conviction_score >= 0
+                        ? 'text-green-400'
+                        : 'text-red-400'
+                    }`}
+                  >
+                    ({rec.conviction_score - rec.prior_conviction_score >= 0 ? '+' : ''}
+                    {(rec.conviction_score - rec.prior_conviction_score).toFixed(0)})
+                  </span>
+                </span>
+              )}
+              {rec.revised_at && (
+                <span className="text-text-secondary ml-auto">
+                  {new Date(rec.revised_at).toLocaleTimeString()}
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Signals */}
           {rec.signals && rec.signals.length > 0 && (
             <ul className="space-y-0.5 mt-2">

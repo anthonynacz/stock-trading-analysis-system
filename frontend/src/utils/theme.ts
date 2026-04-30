@@ -27,3 +27,22 @@ export const SENTIMENT_COLOR = (score: number): string => {
 export function getActionLabel(action: string): string {
   return action.replace('_', ' ');
 }
+
+const SECTOR_SHORT_LABELS: Record<string, string> = {
+  'AI/Semiconductors': 'AI/SEMI',
+  'Fintech/Payments': 'FINTECH',
+  'Energy/Commodities': 'ENERGY',
+  'Healthcare/Biotech': 'HEALTH',
+  'Consumer/Cloud/Enterprise': 'CLOUD',
+  'Industrials/Defense': 'DEFENSE',
+  'Power/Utilities/Nuclear': 'POWER',
+  'Communications/Media': 'COMMS',
+};
+
+export function shortSectorLabel(sector: string | null | undefined): string | null {
+  if (!sector) return null;
+  if (SECTOR_SHORT_LABELS[sector]) return SECTOR_SHORT_LABELS[sector];
+  // Fallback: take token before the first '/' and uppercase, capped at 8 chars
+  const head = sector.split('/')[0]?.trim() ?? sector;
+  return head.slice(0, 8).toUpperCase();
+}

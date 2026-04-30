@@ -28,9 +28,13 @@ def _jsonable(obj):
         return [_jsonable(v) for v in obj]
     return obj
 from db.models import (
+    DeepOptionsAnalysis,
     DiscoveryCandidate,
     EarningsCalendar,
+    IndustryRecommendation,
     MarketNews,
+    MultibaggerSnapshot,
+    MultibaggerUniverse,
     NewsTickerRelevance,
     OptionsSnapshot,
     Position,
@@ -46,6 +50,7 @@ from utils.data_sources import DataSourceClient
 from utils.schemas import (
     CandidateApproveRequest,
     CatalystResponse,
+    DeepOptionsAnalysisResponse,
     DiscoveryCandidateResponse,
     MarketNewsResponse,
     OptionsSnapshotResponse,
@@ -56,6 +61,16 @@ from utils.schemas import (
     PositionUpdateRequest,
     RecommendationResponse,
     ResearchResultResponse,
+    ChartQueryRequest,
+    ChartResponse,
+    IndustryDetailResponse,
+    IndustryHistoryPoint,
+    IndustryRecommendationResponse,
+    ScannerDatesResponse,
+    ScannerResultResponse,
+    ScannerRunResponse,
+    ScannerUniverseAddRequest,
+    ScannerUniverseItem,
     StrikeSnapshotSaveRequest,
     SuggestedOptionResponse,
     SystemStatusResponse,
@@ -470,6 +485,31 @@ async def get_pipeline_dates(db: AsyncSession = Depends(get_db)):
 # ── Recommendations ─────────────────────────────────────────────────────────
 
 
+async def _ticker_sector_map(
+    db: AsyncSession, tickers: list[str]
+) -> dict[str, str]:
+    """Build ticker → sector name map for the given tickers."""
+    if not tickers:
+        return {}
+    result = await db.execute(
+        select(UniverseStock.ticker, Sector.name)
+        .join(Sector, UniverseStock.sector_id == Sector.id)
+        .where(UniverseStock.ticker.in_(tickers))
+    )
+    return {ticker: sector for ticker, sector in result.all()}
+
+
+def _attach_sectors(
+    recs: list[Recommendation], sector_map: dict[str, str]
+) -> list[RecommendationResponse]:
+    out: list[RecommendationResponse] = []
+    for rec in recs:
+        resp = RecommendationResponse.model_validate(rec)
+        resp.sector = sector_map.get(rec.ticker)
+        out.append(resp)
+    return out
+
+
 @router.get("/recommendations", response_model=list[RecommendationResponse])
 async def get_recommendations(
     action: str | None = Query(None),
@@ -490,7 +530,9 @@ async def get_recommendations(
         stmt = stmt.where(Recommendation.conviction_score >= min_conviction)
 
     result = await db.execute(stmt)
-    return result.scalars().all()
+    recs = result.scalars().all()
+    sector_map = await _ticker_sector_map(db, [r.ticker for r in recs])
+    return _attach_sectors(recs, sector_map)
 
 
 @router.get("/recommendations/{ticker}", response_model=list[RecommendationResponse])
@@ -514,7 +556,8 @@ async def get_recommendations_by_ticker(
     recs = result.scalars().all()
     if not recs:
         raise HTTPException(status_code=404, detail=f"No recommendations found for {ticker.upper()}")
-    return recs
+    sector_map = await _ticker_sector_map(db, [ticker.upper()])
+    return _attach_sectors(recs, sector_map)
 
 
 # ── News ────────────────────────────────────────────────────────────────────
@@ -526,10 +569,23 @@ async def get_news(
     mode: str = Query("general"),
     category: str | None = Query(None),
     impact_level: str | None = Query(None),
+    industry: str | None = Query(None),
     min_relevance: float = Query(0.3, ge=0.0, le=1.0),
     limit: int = Query(50, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
+    # Resolve industry → list of universe tickers in that sector
+    industry_tickers: list[str] | None = None
+    if industry:
+        ind_result = await db.execute(
+            select(UniverseStock.ticker)
+            .join(Sector, UniverseStock.sector_id == Sector.id)
+            .where(Sector.name == industry, UniverseStock.is_active.is_(True))
+        )
+        industry_tickers = [row[0] for row in ind_result.all()]
+        if not industry_tickers:
+            return []
+
     if mode == "ticker" and ticker:
         # Join through relevance table — find all news relevant to this ticker
         stmt = (
@@ -543,6 +599,8 @@ async def get_news(
             .order_by(MarketNews.published_at.desc())
             .limit(limit)
         )
+        if industry_tickers is not None:
+            stmt = stmt.where(NewsTickerRelevance.ticker.in_(industry_tickers))
     elif mode == "watchlist":
         # Find news relevant to any active watchlist ticker
         active_result = await db.execute(
@@ -551,11 +609,16 @@ async def get_news(
         watchlist_tickers = [row[0] for row in active_result.all()]
         if not watchlist_tickers:
             return []
+        scope_tickers = watchlist_tickers
+        if industry_tickers is not None:
+            scope_tickers = [t for t in watchlist_tickers if t in set(industry_tickers)]
+            if not scope_tickers:
+                return []
         stmt = (
             select(MarketNews)
             .join(NewsTickerRelevance)
             .where(
-                NewsTickerRelevance.ticker.in_(watchlist_tickers),
+                NewsTickerRelevance.ticker.in_(scope_tickers),
                 NewsTickerRelevance.relevance_score >= min_relevance,
             )
             .options(selectinload(MarketNews.ticker_relevances))
@@ -563,15 +626,31 @@ async def get_news(
             .limit(limit)
         )
     else:
-        # General mode — original behavior
-        stmt = (
-            select(MarketNews)
-            .options(selectinload(MarketNews.ticker_relevances))
-            .order_by(MarketNews.published_at.desc())
-            .limit(limit)
-        )
-        if ticker:
-            stmt = stmt.where(MarketNews.ticker == ticker.upper())
+        # General mode — original behavior. Industry filter still routes through
+        # the relevance table to scope articles to tickers in that sector.
+        if industry_tickers is not None:
+            stmt = (
+                select(MarketNews)
+                .join(NewsTickerRelevance)
+                .where(
+                    NewsTickerRelevance.ticker.in_(industry_tickers),
+                    NewsTickerRelevance.relevance_score >= min_relevance,
+                )
+                .options(selectinload(MarketNews.ticker_relevances))
+                .order_by(MarketNews.published_at.desc())
+                .limit(limit)
+            )
+            if ticker:
+                stmt = stmt.where(MarketNews.ticker == ticker.upper())
+        else:
+            stmt = (
+                select(MarketNews)
+                .options(selectinload(MarketNews.ticker_relevances))
+                .order_by(MarketNews.published_at.desc())
+                .limit(limit)
+            )
+            if ticker:
+                stmt = stmt.where(MarketNews.ticker == ticker.upper())
 
     if category:
         stmt = stmt.where(MarketNews.category == category.upper())
@@ -798,6 +877,187 @@ async def recommend_strikes_watchlist(
         }
     finally:
         client.close()
+
+
+# ── Deep options analysis — declared BEFORE /options/{ticker} to avoid path shadowing ──
+
+
+def _bias_from_action(action: str | None) -> tuple[str, float]:
+    """Map a recommendation action to (directional_bias, conviction magnitude)."""
+    if not action:
+        return "NEUTRAL", 0.0
+    a = action.upper()
+    if a in ("STRONG_BUY", "BUY"):
+        return "BULLISH", 1.0
+    if a in ("STRONG_SELL", "SELL"):
+        return "BEARISH", 1.0
+    return "NEUTRAL", 0.0
+
+
+@router.post("/options/deep/{ticker}", response_model=DeepOptionsAnalysisResponse)
+async def analyze_options_deep(ticker: str, db: AsyncSession = Depends(get_db)):
+    """Run an expert-level options analysis for a single ticker."""
+    import asyncio
+    import re
+
+    from services.deep_options_analyzer import DeepOptionsAnalyzer
+
+    ticker = ticker.upper().strip()
+    if not re.match(r"^[A-Z]{1,5}$", ticker):
+        raise HTTPException(status_code=400, detail="Invalid ticker format")
+
+    client = DataSourceClient()
+    try:
+        loop = asyncio.get_event_loop()
+        stock_data = await loop.run_in_executor(None, client.get_stock_data, ticker)
+        if not stock_data or not stock_data.get("price"):
+            raise HTTPException(status_code=404, detail=f"No price data for {ticker}")
+        company_name = stock_data.get("company_name")
+
+        # Directional bias: prefer latest Recommendation, else latest ResearchResult.
+        bias = "NEUTRAL"
+        conviction = 0.0
+        rec_stmt = (
+            select(Recommendation)
+            .where(Recommendation.ticker == ticker)
+            .order_by(Recommendation.recommendation_date.desc())
+            .limit(1)
+        )
+        rec = (await db.execute(rec_stmt)).scalar_one_or_none()
+        if rec:
+            bias, _ = _bias_from_action(rec.action)
+            conviction = float(rec.conviction_score) if rec.conviction_score is not None else 0.0
+        else:
+            research_stmt = (
+                select(ResearchResult)
+                .where(ResearchResult.ticker == ticker)
+                .order_by(ResearchResult.analyzed_at.desc())
+                .limit(1)
+            )
+            research = (await db.execute(research_stmt)).scalar_one_or_none()
+            if research:
+                bias, _ = _bias_from_action(research.action)
+                conviction = (
+                    float(research.conviction_score)
+                    if research.conviction_score is not None else 0.0
+                )
+
+        earnings_stmt = (
+            select(EarningsCalendar)
+            .where(
+                EarningsCalendar.ticker == ticker,
+                EarningsCalendar.earnings_date >= date.today(),
+            )
+            .order_by(EarningsCalendar.earnings_date.asc())
+            .limit(1)
+        )
+        ec = (await db.execute(earnings_stmt)).scalar_one_or_none()
+        earnings_date = ec.earnings_date if ec else None
+
+        analyzer = DeepOptionsAnalyzer(db, client)
+        report = await analyzer.analyze(
+            ticker,
+            directional_bias=bias,
+            conviction_score=conviction,
+            earnings_date=earnings_date,
+        )
+
+        row = DeepOptionsAnalysis(
+            ticker=ticker,
+            company_name=company_name,
+            stock_price=(
+                Decimal(str(report["stock_price"]))
+                if report.get("stock_price") is not None else None
+            ),
+            iv_rank=(
+                Decimal(str(report["iv_rank"]))
+                if report.get("iv_rank") is not None else None
+            ),
+            iv_percentile=(
+                Decimal(str(report["iv_percentile"]))
+                if report.get("iv_percentile") is not None else None
+            ),
+            directional_bias=report.get("directional_bias"),
+            conviction_score=(
+                Decimal(str(report["conviction_score"]))
+                if report.get("conviction_score") is not None else None
+            ),
+            verdict=report.get("verdict"),
+            greeks_detail=_jsonable(report.get("greeks_detail")),
+            vol_structure=_jsonable(report.get("vol_structure")),
+            positioning=_jsonable(report.get("positioning")),
+            liquidity=_jsonable(report.get("liquidity")),
+            strategy=_jsonable(report.get("strategy")),
+            hidden_risks=_jsonable(report.get("hidden_risks")),
+            rationale=report.get("rationale"),
+        )
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+
+        # Cap history at 5 runs per ticker — drop the oldest beyond that.
+        keep_stmt = (
+            select(DeepOptionsAnalysis.id)
+            .where(DeepOptionsAnalysis.ticker == ticker)
+            .order_by(DeepOptionsAnalysis.analyzed_at.desc())
+            .limit(5)
+        )
+        keep_ids = [i for (i,) in (await db.execute(keep_stmt)).all()]
+        if keep_ids:
+            stale = (
+                await db.execute(
+                    select(DeepOptionsAnalysis)
+                    .where(DeepOptionsAnalysis.ticker == ticker)
+                    .where(DeepOptionsAnalysis.id.notin_(keep_ids))
+                )
+            ).scalars().all()
+            for old in stale:
+                await db.delete(old)
+            if stale:
+                await db.commit()
+
+        return DeepOptionsAnalysisResponse.model_validate(row)
+    finally:
+        client.close()
+
+
+@router.get("/options/deep", response_model=list[DeepOptionsAnalysisResponse])
+async def list_deep_options(
+    ticker: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    # Order by execution date (newest day first), then ticker alphabetically,
+    # then analyzed_at desc to break ties within the same day + ticker.
+    stmt = select(DeepOptionsAnalysis).order_by(
+        cast(DeepOptionsAnalysis.analyzed_at, Date).desc(),
+        DeepOptionsAnalysis.ticker.asc(),
+        DeepOptionsAnalysis.analyzed_at.desc(),
+    )
+    if ticker:
+        stmt = stmt.where(DeepOptionsAnalysis.ticker == ticker.upper())
+    stmt = stmt.offset(offset).limit(limit)
+    result = await db.execute(stmt)
+    return [DeepOptionsAnalysisResponse.model_validate(r) for r in result.scalars().all()]
+
+
+@router.get("/options/deep/{id_}", response_model=DeepOptionsAnalysisResponse)
+async def get_deep_options(id_: int, db: AsyncSession = Depends(get_db)):
+    row = await db.get(DeepOptionsAnalysis, id_)
+    if not row:
+        raise HTTPException(status_code=404, detail="Deep options analysis not found")
+    return DeepOptionsAnalysisResponse.model_validate(row)
+
+
+@router.delete("/options/deep/{id_}")
+async def delete_deep_options(id_: int, db: AsyncSession = Depends(get_db)):
+    row = await db.get(DeepOptionsAnalysis, id_)
+    if not row:
+        raise HTTPException(status_code=404, detail="Deep options analysis not found")
+    await db.delete(row)
+    await db.commit()
+    return {"status": "deleted"}
 
 
 @router.get("/options/{ticker}", response_model=OptionsSnapshotResponse)
@@ -1285,6 +1545,16 @@ async def get_pipeline_status():
 # ── Research ───────────────────────────────────────────────────────────────
 
 
+async def _research_to_response(
+    db: AsyncSession, research: ResearchResult
+) -> ResearchResultResponse:
+    """Convert a ResearchResult to its response, attaching sector via universe lookup."""
+    sector_map = await _ticker_sector_map(db, [research.ticker])
+    resp = ResearchResultResponse.model_validate(research)
+    resp.sector = sector_map.get(research.ticker)
+    return resp
+
+
 @router.post("/research/{ticker}", response_model=ResearchResultResponse)
 async def analyze_ticker(ticker: str, db: AsyncSession = Depends(get_db)):
     """Run a full on-demand analysis for any ticker."""
@@ -1381,7 +1651,7 @@ async def analyze_ticker(ticker: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(research)
 
-    return ResearchResultResponse.model_validate(research)
+    return await _research_to_response(db, research)
 
 
 @router.get("/research", response_model=list[ResearchResultResponse])
@@ -1397,7 +1667,14 @@ async def list_research(
         stmt = stmt.where(ResearchResult.ticker == ticker.upper())
     stmt = stmt.offset(offset).limit(limit)
     result = await db.execute(stmt)
-    return [ResearchResultResponse.model_validate(r) for r in result.scalars().all()]
+    rows = result.scalars().all()
+    sector_map = await _ticker_sector_map(db, [r.ticker for r in rows])
+    out: list[ResearchResultResponse] = []
+    for r in rows:
+        resp = ResearchResultResponse.model_validate(r)
+        resp.sector = sector_map.get(r.ticker)
+        out.append(resp)
+    return out
 
 
 @router.get("/research/{id_}", response_model=ResearchResultResponse)
@@ -1406,7 +1683,7 @@ async def get_research(id_: int, db: AsyncSession = Depends(get_db)):
     result = await db.get(ResearchResult, id_)
     if not result:
         raise HTTPException(status_code=404, detail="Research result not found")
-    return ResearchResultResponse.model_validate(result)
+    return await _research_to_response(db, result)
 
 
 @router.delete("/research/{id_}")
@@ -1743,3 +2020,291 @@ async def refresh_position_price(id_: int, db: AsyncSession = Depends(get_db)):
 
     watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker})
     return _compute_position_fields(pos, watchlist_tickers, rec_map)
+
+
+# ── Multi-bagger scanner ────────────────────────────────────────────────────
+
+@router.get("/scanner/universe", response_model=list[ScannerUniverseItem])
+async def scanner_universe_list(db: AsyncSession = Depends(get_db)):
+    """List all active tickers in the scanner universe."""
+    result = await db.execute(
+        select(MultibaggerUniverse)
+        .where(MultibaggerUniverse.is_active.is_(True))
+        .order_by(MultibaggerUniverse.theme, MultibaggerUniverse.ticker)
+    )
+    return result.scalars().all()
+
+
+@router.post("/scanner/universe", response_model=ScannerUniverseItem, status_code=201)
+async def scanner_universe_add(
+    payload: ScannerUniverseAddRequest, db: AsyncSession = Depends(get_db)
+):
+    """Add a ticker to the scanner universe."""
+    ticker = payload.ticker.strip().upper()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="Ticker required")
+
+    existing = await db.execute(
+        select(MultibaggerUniverse).where(MultibaggerUniverse.ticker == ticker)
+    )
+    row = existing.scalars().first()
+    if row:
+        if not row.is_active:
+            row.is_active = True
+            row.theme = payload.theme or row.theme
+            await db.commit()
+            await db.refresh(row)
+        return row
+
+    row = MultibaggerUniverse(
+        ticker=ticker,
+        theme=payload.theme,
+        source="MANUAL",
+        is_active=True,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+@router.delete("/scanner/universe/{ticker}")
+async def scanner_universe_remove(ticker: str, db: AsyncSession = Depends(get_db)):
+    """Soft-remove a ticker from the scanner universe (sets is_active=False)."""
+    ticker = ticker.strip().upper()
+    result = await db.execute(
+        select(MultibaggerUniverse).where(MultibaggerUniverse.ticker == ticker)
+    )
+    row = result.scalars().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Ticker not in scanner universe")
+    row.is_active = False
+    await db.commit()
+    return {"status": "removed", "ticker": ticker}
+
+
+@router.get("/scanner/dates", response_model=ScannerDatesResponse)
+async def scanner_dates(db: AsyncSession = Depends(get_db)):
+    """Distinct scanner run dates, most recent first (last 180 days)."""
+    cutoff = date.today() - timedelta(days=180)
+    result = await db.execute(
+        select(func.distinct(MultibaggerSnapshot.run_date))
+        .where(MultibaggerSnapshot.run_date >= cutoff)
+        .order_by(MultibaggerSnapshot.run_date.desc())
+    )
+    return ScannerDatesResponse(dates=[r[0] for r in result.all()])
+
+
+@router.get("/scanner/results", response_model=list[ScannerResultResponse])
+async def scanner_results(
+    target_date: date | None = Query(None, alias="date"),
+    tier: str | None = Query(None),
+    theme: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch scanner results for a date (default: latest available)."""
+    if target_date is None:
+        latest = await db.execute(
+            select(func.max(MultibaggerSnapshot.run_date))
+        )
+        target_date = latest.scalar()
+        if target_date is None:
+            return []
+
+    stmt = (
+        select(MultibaggerSnapshot)
+        .where(MultibaggerSnapshot.run_date == target_date)
+        .order_by(MultibaggerSnapshot.composite_score.desc())
+    )
+    if tier:
+        stmt = stmt.where(MultibaggerSnapshot.tier == tier.upper())
+    if theme:
+        stmt = stmt.where(MultibaggerSnapshot.theme == theme.upper())
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+_scanner_run_state: dict = {"running": False, "started_at": None, "last_result": None}
+
+
+async def _run_scanner_background():
+    """Background worker that runs the scanner and updates shared state."""
+    from services.multibagger_scanner import MultibaggerScanner
+    from db.connection import async_session
+
+    _scanner_run_state["running"] = True
+    _scanner_run_state["started_at"] = datetime.utcnow().isoformat()
+    client = DataSourceClient()
+    try:
+        async with async_session() as session:
+            scanner = MultibaggerScanner(session, client)
+            summary = await scanner.run_and_persist()
+            _scanner_run_state["last_result"] = summary
+    except Exception as e:
+        _scanner_run_state["last_result"] = {"status": "error", "error": str(e)}
+    finally:
+        client.close()
+        _scanner_run_state["running"] = False
+
+
+@router.post("/scanner/run", response_model=ScannerRunResponse)
+async def scanner_run(background_tasks: BackgroundTasks):
+    """Trigger a scanner run. Runs in the background — poll /scanner/status."""
+    if _scanner_run_state["running"]:
+        return ScannerRunResponse(status="already_running")
+    background_tasks.add_task(_run_scanner_background)
+    return ScannerRunResponse(status="started")
+
+
+@router.get("/scanner/status")
+async def scanner_status():
+    """Poll scanner run state."""
+    return {
+        "running": _scanner_run_state["running"],
+        "started_at": _scanner_run_state["started_at"],
+        "last_result": _scanner_run_state["last_result"],
+    }
+
+
+# ── Industry recommendations (sector-level) ────────────────────────────────
+
+@router.get("/industries", response_model=list[IndustryRecommendationResponse])
+async def industries_list(
+    target_date: date | None = Query(None, alias="date"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Latest (or given-date) industry recommendations — one row per industry."""
+    if target_date is None:
+        latest = await db.execute(select(func.max(IndustryRecommendation.rec_date)))
+        target_date = latest.scalar()
+        if target_date is None:
+            return []
+    stmt = (
+        select(IndustryRecommendation)
+        .where(IndustryRecommendation.rec_date == target_date)
+        .order_by(IndustryRecommendation.conviction_score.desc())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+@router.get("/industries/{industry:path}", response_model=IndustryDetailResponse)
+async def industry_detail(industry: str, db: AsyncSession = Depends(get_db)):
+    """Detail for one industry: latest rec, 30d history, and today's member recs.
+
+    Note: ``:path`` converter lets values like "AI/Semiconductors" match.
+    """
+    latest_q = await db.execute(
+        select(IndustryRecommendation)
+        .where(IndustryRecommendation.industry == industry)
+        .order_by(IndustryRecommendation.rec_date.desc())
+        .limit(1)
+    )
+    latest = latest_q.scalars().first()
+    if not latest:
+        raise HTTPException(status_code=404, detail=f"No recommendations for industry '{industry}'")
+
+    # 30-day history
+    cutoff = date.today() - timedelta(days=30)
+    hist_q = await db.execute(
+        select(IndustryRecommendation)
+        .where(
+            IndustryRecommendation.industry == industry,
+            IndustryRecommendation.rec_date >= cutoff,
+        )
+        .order_by(IndustryRecommendation.rec_date.asc())
+    )
+    history_rows = hist_q.scalars().all()
+    history = [
+        IndustryHistoryPoint(
+            rec_date=h.rec_date,
+            action=h.action,
+            conviction_score=h.conviction_score,
+            signal_count=h.signal_count,
+        )
+        for h in history_rows
+    ]
+
+    # Today's member recommendations — eager-load suggested_options to avoid
+    # lazy-load errors when Pydantic serializes the relationship.
+    from config import SECTORS
+    cfg = SECTORS.get(industry)
+    members: list = []
+    if cfg:
+        members_tickers = cfg["universe"]
+        mem_q = await db.execute(
+            select(Recommendation)
+            .where(
+                Recommendation.recommendation_date == latest.rec_date,
+                Recommendation.ticker.in_(members_tickers),
+            )
+            .options(selectinload(Recommendation.suggested_options))
+            .order_by(Recommendation.conviction_score.desc())
+        )
+        members = list(mem_q.scalars().all())
+
+    return IndustryDetailResponse(
+        industry=industry,
+        latest=latest,
+        history=history,
+        members=members,
+    )
+
+
+# ── Chart builder (dynamic visualizations) ─────────────────────────────────
+
+@router.post("/charts/query", response_model=ChartResponse)
+async def charts_query(payload: ChartQueryRequest, db: AsyncSession = Depends(get_db)):
+    """Run a chart query for the given dataset and spec."""
+    from services.chart_builder import ChartBuilder
+
+    builder = ChartBuilder(db)
+    try:
+        result = await builder.query(payload.dataset, payload.spec)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/charts/datasets")
+async def charts_datasets():
+    """List available datasets and their metric/aggregation options.
+
+    Frontend uses this to render the dataset picker + dataset-specific forms
+    without hard-coding the metric keys, so backend additions show up
+    automatically (within the curated dataset shape).
+    """
+    from services.chart_builder import INDUSTRY_METRICS, TICKER_METRICS
+
+    return {
+        "datasets": [
+            {
+                "key": "ticker_time_series",
+                "label": "Ticker Time Series",
+                "description": "One ticker, multiple metrics over time. Line chart.",
+                "chart_type": "line",
+                "metrics": [
+                    {"key": k, "label": v["label"], "source": v["source"]}
+                    for k, v in TICKER_METRICS.items()
+                ],
+            },
+            {
+                "key": "signal_breakdown",
+                "label": "Signal Breakdown",
+                "description": "Recommendation signals grouped by name. Bar chart.",
+                "chart_type": "bar",
+                "aggregations": ["count", "sum", "avg", "min", "max"],
+                "actions": ["STRONG_BUY", "BUY", "HOLD", "SELL", "STRONG_SELL"],
+            },
+            {
+                "key": "industry_comparison",
+                "label": "Industry Comparison",
+                "description": "Industry-level metric across industries (snapshot) or over time (trend).",
+                "chart_type": "line | bar",
+                "views": ["trend", "snapshot"],
+                "metrics": [
+                    {"key": k, "label": v["label"]} for k, v in INDUSTRY_METRICS.items()
+                ],
+            },
+        ],
+    }

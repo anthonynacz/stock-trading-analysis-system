@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EdgeFlow — Database Schema</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: #f5f6f8;
+    font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+    color: #1e293b;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ─────────────────────────────────────── */
+  .page-header {
+    background: #fff;
+    border-bottom: 1px solid #e2e5ea;
+    padding: 28px 40px 24px;
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+  }
+  .page-header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #0f172a;
+    letter-spacing: -0.3px;
+  }
+  .page-header .pipe { color: #cbd5e1; font-weight: 300; font-size: 22px; }
+  .page-header .sub {
+    font-size: 13px;
+    color: #64748b;
+    font-weight: 400;
+  }
+
+  /* ── Legend ──────────────────────────────────────── */
+  .legend-bar {
+    background: #fff;
+    border-bottom: 1px solid #e2e5ea;
+    padding: 12px 40px;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    flex-wrap: wrap;
+  }
+  .legend-bar .group {
+    display: flex; align-items: center; gap: 20px;
+    font-size: 11.5px; color: #64748b;
+  }
+  .legend-bar .group::before {
+    content: '';
+    display: block;
+    width: 1px; height: 18px;
+    background: #e2e5ea;
+    margin-right: -4px;
+  }
+  .legend-bar .group:first-child::before { display: none; }
+  .leg {
+    display: flex; align-items: center; gap: 5px;
+  }
+  .leg-dot {
+    width: 10px; height: 10px; border-radius: 2px;
+  }
+  .badge-legend {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+  }
+  .pk { background: #dbeafe; color: #1d4ed8; }
+  .fk { background: #fce7f3; color: #be185d; }
+  .uq { background: #fef3c7; color: #92400e; }
+
+  /* ── Viewport ────────────────────────────────────── */
+  .viewport {
+    position: relative;
+    overflow: hidden;
+    flex: 1;
+    cursor: grab;
+    user-select: none;
+  }
+  .viewport.grabbing { cursor: grabbing; }
+  .canvas {
+    position: absolute;
+    width: 1720px;
+    height: 1500px;
+    transform-origin: 0 0;
+  }
+
+  /* ── Zoom controls ─────────────────────────────── */
+  .zoom-controls {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 100;
+  }
+  .zoom-controls button {
+    width: 36px;
+    height: 36px;
+    border: 1px solid #e2e5ea;
+    background: #fff;
+    border-radius: 6px;
+    font-size: 18px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 500;
+    color: #475569;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    transition: background 0.1s;
+  }
+  .zoom-controls button:hover { background: #f1f5f9; }
+  .zoom-controls button:active { background: #e2e8f0; }
+  .zoom-level {
+    text-align: center;
+    font-size: 10px;
+    font-weight: 600;
+    color: #64748b;
+    padding: 2px 0;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  svg.lines {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Table cards ────────────────────────────────── */
+  .tbl {
+    position: absolute;
+    border-radius: 6px;
+    overflow: hidden;
+    width: 264px;
+    background: #fff;
+    border: 1px solid #e2e5ea;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03);
+    z-index: 1;
+  }
+  .tbl-hdr {
+    padding: 9px 14px;
+    font-weight: 700;
+    font-size: 12.5px;
+    letter-spacing: 0.2px;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .tbl-hdr .ico {
+    font-size: 11px;
+    opacity: 0.85;
+  }
+  .tbl-body {
+    padding: 4px 0;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    padding: 2.5px 12px;
+    font-size: 11px;
+    gap: 5px;
+    line-height: 1.6;
+  }
+  .row:hover { background: #f8fafc; }
+  .row .name {
+    flex: 1;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 500;
+    color: #334155;
+  }
+  .row .typ {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    color: #94a3b8;
+    text-align: right;
+    min-width: 64px;
+  }
+  .row .spc { width: 26px; flex-shrink: 0; }
+  .bdg {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 8px;
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+    width: 20px;
+    text-align: center;
+  }
+
+  /* Category header colours */
+  .c-core   .tbl-hdr { background: #1e40af; }
+  .c-market .tbl-hdr { background: #166534; }
+  .c-anlys  .tbl-hdr { background: #6d28d9; }
+  .c-trade  .tbl-hdr { background: #b91c1c; }
+  .c-snap   .tbl-hdr { background: #0e7490; }
+  .c-junct  .tbl-hdr { background: #92400e; }
+
+  /* Relationship lines — colored by type */
+  svg.lines path {
+    stroke-width: 1.6;
+    fill: none;
+  }
+  .rel-core   { stroke: #3b82f6; }
+  .rel-anlys  { stroke: #8b5cf6; }
+  .rel-news   { stroke: #10b981; }
+  .rel-ticker { stroke: #f59e0b; stroke-dasharray: 6 4; }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>EdgeFlow</h1>
+  <span class="pipe">|</span>
+  <span class="sub">Entity Relationship Diagram &mdash; PostgreSQL 16 &mdash; 15 tables &mdash; April 2026</span>
+</div>
+
+<div class="legend-bar">
+  <div class="group">
+    <span style="font-weight:600;color:#475569;margin-right:4px">Categories</span>
+    <div class="leg"><div class="leg-dot" style="background:#1e40af"></div>Core</div>
+    <div class="leg"><div class="leg-dot" style="background:#166534"></div>Market Data</div>
+    <div class="leg"><div class="leg-dot" style="background:#6d28d9"></div>Analysis</div>
+    <div class="leg"><div class="leg-dot" style="background:#b91c1c"></div>Trading</div>
+    <div class="leg"><div class="leg-dot" style="background:#0e7490"></div>Snapshots</div>
+    <div class="leg"><div class="leg-dot" style="background:#92400e"></div>Junction</div>
+  </div>
+  <div class="group">
+    <span style="font-weight:600;color:#475569;margin-right:4px">Badges</span>
+    <div class="leg"><span class="badge-legend pk">PK</span> Primary Key</div>
+    <div class="leg"><span class="badge-legend fk">FK</span> Foreign Key</div>
+    <div class="leg"><span class="badge-legend uq">UQ</span> Unique</div>
+  </div>
+  <div class="group">
+    <span style="font-weight:600;color:#475569;margin-right:4px">Relationships</span>
+    <div class="leg"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#3b82f6" stroke-width="1.6"/></svg> Core FK</div>
+    <div class="leg"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#8b5cf6" stroke-width="1.6"/></svg> Analysis FK</div>
+    <div class="leg"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#10b981" stroke-width="1.6"/></svg> News FK</div>
+    <div class="leg"><svg width="28" height="10"><line x1="0" y1="5" x2="28" y2="5" stroke="#f59e0b" stroke-width="1.6" stroke-dasharray="6 4"/></svg> Logical (ticker)</div>
+  </div>
+</div>
+
+<div class="viewport" id="viewport">
+<div class="canvas" id="canvas">
+
+<!-- ═══════════════ SVG relationship lines ═══════════════ -->
+<svg class="lines" viewBox="0 0 1720 1500">
+  <defs>
+    <!-- Blue markers (Core FKs: sectors) -->
+    <marker id="m-one-blue" viewBox="0 0 10 14" refX="10" refY="7" markerWidth="7" markerHeight="10" orient="auto-start-reverse">
+      <line x1="8" y1="1" x2="8" y2="13" stroke="#3b82f6" stroke-width="1.8"/>
+    </marker>
+    <marker id="m-many-blue" viewBox="0 0 14 14" refX="14" refY="7" markerWidth="9" markerHeight="10" orient="auto-start-reverse">
+      <path d="M0,7 L14,1 M0,7 L14,13 M0,7 L14,7" stroke="#3b82f6" stroke-width="1.2" fill="none"/>
+    </marker>
+    <!-- Purple markers (Analysis FKs: recommendations) -->
+    <marker id="m-one-purple" viewBox="0 0 10 14" refX="10" refY="7" markerWidth="7" markerHeight="10" orient="auto-start-reverse">
+      <line x1="8" y1="1" x2="8" y2="13" stroke="#8b5cf6" stroke-width="1.8"/>
+    </marker>
+    <marker id="m-many-purple" viewBox="0 0 14 14" refX="14" refY="7" markerWidth="9" markerHeight="10" orient="auto-start-reverse">
+      <path d="M0,7 L14,1 M0,7 L14,13 M0,7 L14,7" stroke="#8b5cf6" stroke-width="1.2" fill="none"/>
+    </marker>
+    <!-- Green markers (News FKs: market_news) -->
+    <marker id="m-one-green" viewBox="0 0 10 14" refX="10" refY="7" markerWidth="7" markerHeight="10" orient="auto-start-reverse">
+      <line x1="8" y1="1" x2="8" y2="13" stroke="#10b981" stroke-width="1.8"/>
+    </marker>
+    <marker id="m-many-green" viewBox="0 0 14 14" refX="14" refY="7" markerWidth="9" markerHeight="10" orient="auto-start-reverse">
+      <path d="M0,7 L14,1 M0,7 L14,13 M0,7 L14,7" stroke="#10b981" stroke-width="1.2" fill="none"/>
+    </marker>
+  </defs>
+
+  <!-- sectors.id → universe_stocks.sector_id (Core FK, 1:N) -->
+  <path d="M 274,83 L 307,83 L 307,119 L 340,119" class="rel-core" marker-start="url(#m-one-blue)" marker-end="url(#m-many-blue)"/>
+
+  <!-- sectors.id → watchlist.sector_id (Core FK, 1:N) -->
+  <path d="M 274,93 L 295,93 L 295,419 L 340,419" class="rel-core" marker-start="url(#m-one-blue)" marker-end="url(#m-many-blue)"/>
+
+  <!-- recommendations.id → suggested_options.recommendation_id (Analysis FK, 1:N) -->
+  <path d="M 1314,353 L 1357,353 L 1357,375 L 1400,375" class="rel-anlys" marker-start="url(#m-one-purple)" marker-end="url(#m-many-purple)"/>
+
+  <!-- market_news.id → news_ticker_relevance.news_id (News FK, 1:N CASCADE) -->
+  <path d="M 310,1150 L 285,1150 L 285,1340 L 310,1340" class="rel-news" marker-start="url(#m-one-green)" marker-end="url(#m-many-green)"/>
+
+  <!-- watchlist ··· watchlist_daily_snapshot (logical, by ticker) -->
+  <path d="M 340,440 L 307,440 L 307,470 L 274,470" class="rel-ticker"/>
+
+  <!-- recommendations ··· options_snapshots (logical, by ticker) -->
+  <path d="M 1040,530 L 1000,530 L 1000,760 L 954,760" class="rel-ticker"/>
+</svg>
+
+<!-- ═══════════════ TABLE CARDS ═══════════════ -->
+
+<!-- ── ROW 1: Core config ──────────────────── -->
+
+<!-- SECTORS  x:10 y:40 -->
+<div class="tbl c-core" style="left:10px; top:40px; width:264px">
+  <div class="tbl-hdr"><span class="ico">◆</span>sectors</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">name</span><span class="typ">varchar(100)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">max_stocks</span><span class="typ">int</span></div>
+  </div>
+</div>
+
+<!-- UNIVERSE_STOCKS  x:340 y:10 -->
+<div class="tbl c-core" style="left:340px; top:10px">
+  <div class="tbl-hdr"><span class="ico">◆</span>universe_stocks</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">company_name</span><span class="typ">varchar(255)</span></div>
+    <div class="row"><span class="bdg fk">FK</span><span class="name">sector_id</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">source</span><span class="typ">varchar(20)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">is_active</span><span class="typ">boolean</span></div>
+    <div class="row"><span class="spc"></span><span class="name">added_at</span><span class="typ">timestamptz</span></div>
+  </div>
+</div>
+
+<!-- DISCOVERY_CANDIDATES  x:680 y:10 -->
+<div class="tbl c-core" style="left:680px; top:10px; width:280px">
+  <div class="tbl-hdr"><span class="ico">◆</span>discovery_candidates</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="spc"></span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">company_name</span><span class="typ">varchar(255)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">suggested_sector</span><span class="typ">varchar(100)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">discovered_at</span><span class="typ">timestamptz</span></div>
+    <div class="row"><span class="spc"></span><span class="name">source</span><span class="typ">varchar(20)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">score</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">market_cap</span><span class="typ">numeric(20,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">avg_volume</span><span class="typ">numeric(20,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">change_pct</span><span class="typ">numeric(10,4)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">rationale</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">status</span><span class="typ">varchar(20)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">resolved_at</span><span class="typ">timestamptz</span></div>
+  </div>
+</div>
+
+<!-- ── ROW 2: Watchlist ────────────────────── -->
+
+<!-- WATCHLIST  x:340 y:310 -->
+<div class="tbl c-core" style="left:340px; top:310px">
+  <div class="tbl-hdr"><span class="ico">◆</span>watchlist</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">company_name</span><span class="typ">varchar(255)</span></div>
+    <div class="row"><span class="bdg fk">FK</span><span class="name">sector_id</span><span class="typ">int</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">added_date</span><span class="typ">date</span></div>
+    <div class="row"><span class="spc"></span><span class="name">removed_date</span><span class="typ">date</span></div>
+    <div class="row"><span class="spc"></span><span class="name">entry_reason</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">exit_reason</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">is_active</span><span class="typ">boolean</span></div>
+    <div class="row"><span class="spc"></span><span class="name">is_manual</span><span class="typ">boolean</span></div>
+    <div class="row"><span class="spc"></span><span class="name">is_locked</span><span class="typ">boolean</span></div>
+  </div>
+</div>
+
+<!-- WATCHLIST_DAILY_SNAPSHOT  x:10 y:380 -->
+<div class="tbl c-snap" style="left:10px; top:380px">
+  <div class="tbl-hdr"><span class="ico">◆</span>watchlist_daily_snapshot</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">snapshot_date</span><span class="typ">date</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">status</span><span class="typ">varchar(20)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">sector</span><span class="typ">varchar(100)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">created_at</span><span class="typ">timestamptz</span></div>
+  </div>
+</div>
+
+<!-- ── ROW 3: Market data ──────────────────── -->
+
+<!-- ANALYST_RATINGS  x:10 y:640 -->
+<div class="tbl c-market" style="left:10px; top:640px; width:274px">
+  <div class="tbl-hdr"><span class="ico">◆</span>analyst_ratings</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="spc"></span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">analyst_firm</span><span class="typ">varchar(255)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">analyst_name</span><span class="typ">varchar(255)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">rating_type</span><span class="typ">varchar(50)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">previous_rating</span><span class="typ">varchar(50)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">new_rating</span><span class="typ">varchar(50)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">previous_pt</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">new_pt</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">firm_tier</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">published_at</span><span class="typ">timestamptz</span></div>
+    <div class="row"><span class="spc"></span><span class="name">detected_at</span><span class="typ">timestamptz</span></div>
+    <div class="row"><span class="spc"></span><span class="name">impact_score</span><span class="typ">numeric(5,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">source_url</span><span class="typ">text</span></div>
+  </div>
+</div>
+
+<!-- EARNINGS_CALENDAR  x:340 y:640 -->
+<div class="tbl c-market" style="left:340px; top:640px; width:280px">
+  <div class="tbl-hdr"><span class="ico">◆</span>earnings_calendar</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">earnings_date</span><span class="typ">date</span></div>
+    <div class="row"><span class="spc"></span><span class="name">earnings_time</span><span class="typ">varchar(50)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">fiscal_quarter</span><span class="typ">varchar(50)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">consensus_eps</span><span class="typ">numeric(10,4)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">actual_eps</span><span class="typ">numeric(10,4)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">consensus_revenue</span><span class="typ">numeric(15,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">actual_revenue</span><span class="typ">numeric(15,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">surprise_pct</span><span class="typ">numeric(10,4)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">catalyst_window_start</span><span class="typ">date</span></div>
+    <div class="row"><span class="spc"></span><span class="name">catalyst_window_end</span><span class="typ">date</span></div>
+  </div>
+</div>
+
+<!-- OPTIONS_SNAPSHOTS  x:680 y:640 -->
+<div class="tbl c-snap" style="left:680px; top:640px; width:274px">
+  <div class="tbl-hdr"><span class="ico">◆</span>options_snapshots</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="spc"></span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">snapshot_time</span><span class="typ">timestamptz</span></div>
+    <div class="row"><span class="spc"></span><span class="name">stock_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">iv_rank</span><span class="typ">numeric(5,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">iv_percentile</span><span class="typ">numeric(5,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">put_call_ratio</span><span class="typ">numeric(5,3)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">total_call_volume</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">total_put_volume</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">avg_call_volume</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">total_call_oi</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">total_put_oi</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">unusual_activity</span><span class="typ">boolean</span></div>
+    <div class="row"><span class="spc"></span><span class="name">unusual_activity_detail</span><span class="typ">text</span></div>
+  </div>
+</div>
+
+<!-- ── ROW 4: News ─────────────────────────── -->
+
+<!-- MARKET_NEWS  x:310 y:990 -->
+<div class="tbl c-market" style="left:310px; top:990px; width:274px">
+  <div class="tbl-hdr"><span class="ico">◆</span>market_news</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="spc"></span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">headline</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">summary</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">source</span><span class="typ">varchar(100)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">category</span><span class="typ">varchar(50)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">sentiment_score</span><span class="typ">numeric(5,3)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">impact_level</span><span class="typ">varchar(20)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">published_at</span><span class="typ">timestamptz</span></div>
+    <div class="row"><span class="spc"></span><span class="name">detected_at</span><span class="typ">timestamptz</span></div>
+    <div class="row"><span class="spc"></span><span class="name">source_url</span><span class="typ">text</span></div>
+  </div>
+</div>
+
+<!-- NEWS_TICKER_RELEVANCE  x:310 y:1275 -->
+<div class="tbl c-junct" style="left:310px; top:1275px">
+  <div class="tbl-hdr"><span class="ico">◆</span>news_ticker_relevance</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="bdg fk">FK</span><span class="name">news_id</span><span class="typ">int</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">relevance_score</span><span class="typ">numeric(3,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">relevance_source</span><span class="typ">varchar(20)</span></div>
+  </div>
+</div>
+
+<!-- ── ROW 3-4 right: Analysis & Trading ───── -->
+
+<!-- RECOMMENDATIONS  x:1040 y:310 -->
+<div class="tbl c-anlys" style="left:1040px; top:310px; width:274px">
+  <div class="tbl-hdr"><span class="ico">◆</span>recommendations</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">recommendation_date</span><span class="typ">date</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">action</span><span class="typ">varchar(20)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">conviction_score</span><span class="typ">numeric(5,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">signal_count</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">signals</span><span class="typ">json</span></div>
+    <div class="row"><span class="spc"></span><span class="name">rationale</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">catalyst_type</span><span class="typ">varchar(50)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">entry_strategy</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">exit_rules</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">risk_level</span><span class="typ">varchar(20)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">current_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">target_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">stop_loss_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">created_at</span><span class="typ">timestamptz</span></div>
+  </div>
+</div>
+
+<!-- SUGGESTED_OPTIONS  x:1400 y:310 -->
+<div class="tbl c-trade" style="left:1400px; top:310px">
+  <div class="tbl-hdr"><span class="ico">◆</span>suggested_options</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="bdg fk">FK</span><span class="name">recommendation_id</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">contract_type</span><span class="typ">varchar(4)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">strike</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">expiry</span><span class="typ">date</span></div>
+    <div class="row"><span class="spc"></span><span class="name">premium_estimate</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">delta_estimate</span><span class="typ">numeric(5,3)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">strategy</span><span class="typ">varchar(50)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">strategy_rationale</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">days_to_expiry</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">breakeven_price</span><span class="typ">numeric(10,2)</span></div>
+  </div>
+</div>
+
+<!-- RESEARCH_RESULTS  x:1040 y:10 -->
+<div class="tbl c-anlys" style="left:1040px; top:10px; width:274px">
+  <div class="tbl-hdr"><span class="ico">◆</span>research_results</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="spc"></span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">company_name</span><span class="typ">varchar(255)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">analyzed_at</span><span class="typ">timestamptz</span></div>
+    <div class="row"><span class="spc"></span><span class="name">action</span><span class="typ">varchar(20)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">conviction_score</span><span class="typ">numeric(5,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">signal_count</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">signals</span><span class="typ">json</span></div>
+    <div class="row"><span class="spc"></span><span class="name">rationale</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">catalyst_type</span><span class="typ">varchar(50)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">entry_strategy</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">exit_rules</span><span class="typ">text</span></div>
+    <div class="row"><span class="spc"></span><span class="name">risk_level</span><span class="typ">varchar(20)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">current_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">target_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">stop_loss_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">options_data</span><span class="typ">json</span></div>
+    <div class="row"><span class="spc"></span><span class="name">suggested_options</span><span class="typ">json</span></div>
+  </div>
+</div>
+
+<!-- STRIKE_SNAPSHOTS  x:1040 y:750 -->
+<div class="tbl c-snap" style="left:1040px; top:750px">
+  <div class="tbl-hdr"><span class="ico">◆</span>strike_snapshots</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">snapshot_date</span><span class="typ">date</span></div>
+    <div class="row"><span class="bdg uq">UQ</span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">current_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">budget</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">results</span><span class="typ">json</span></div>
+    <div class="row"><span class="spc"></span><span class="name">created_at</span><span class="typ">timestamptz</span></div>
+  </div>
+</div>
+
+<!-- POSITIONS  x:1400 y:700 -->
+<div class="tbl c-trade" style="left:1400px; top:700px; width:274px">
+  <div class="tbl-hdr"><span class="ico">◆</span>positions</div>
+  <div class="tbl-body">
+    <div class="row"><span class="bdg pk">PK</span><span class="name">id</span><span class="typ">serial</span></div>
+    <div class="row"><span class="spc"></span><span class="name">ticker</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">company_name</span><span class="typ">varchar(255)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">position_type</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">quantity</span><span class="typ">int</span></div>
+    <div class="row"><span class="spc"></span><span class="name">entry_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">current_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">strike_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">premium_paid</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">expiry</span><span class="typ">date</span></div>
+    <div class="row"><span class="spc"></span><span class="name">stop_loss</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">target_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">status</span><span class="typ">varchar(10)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">opened_at</span><span class="typ">timestamptz</span></div>
+    <div class="row"><span class="spc"></span><span class="name">closed_at</span><span class="typ">timestamptz</span></div>
+    <div class="row"><span class="spc"></span><span class="name">close_price</span><span class="typ">numeric(10,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">realized_pnl</span><span class="typ">numeric(12,2)</span></div>
+    <div class="row"><span class="spc"></span><span class="name">notes</span><span class="typ">text</span></div>
+  </div>
+</div>
+
+</div><!-- /canvas -->
+</div><!-- /viewport -->
+
+<div class="zoom-controls">
+  <button onclick="zoomIn()" title="Zoom in">+</button>
+  <div class="zoom-level" id="zoom-level">100%</div>
+  <button onclick="zoomOut()" title="Zoom out">&minus;</button>
+  <button onclick="zoomFit()" title="Fit to window" style="font-size:13px;margin-top:4px">Fit</button>
+  <button onclick="zoomReset()" title="Reset to 100%" style="font-size:11px">1:1</button>
+</div>
+
+<script>
+(function() {
+  const vp = document.getElementById('viewport');
+  const cv = document.getElementById('canvas');
+  const label = document.getElementById('zoom-level');
+
+  let scale = 1;
+  let panX = 0, panY = 0;
+  let dragging = false;
+  let startX, startY, startPanX, startPanY;
+
+  const MIN_SCALE = 0.2;
+  const MAX_SCALE = 2.5;
+
+  function apply() {
+    cv.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    label.textContent = Math.round(scale * 100) + '%';
+  }
+
+  // ── Mouse wheel zoom (toward cursor) ──
+  vp.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    const rect = vp.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const prevScale = scale;
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * delta));
+
+    // Adjust pan so zoom centers on cursor
+    panX = mx - (mx - panX) * (scale / prevScale);
+    panY = my - (my - panY) * (scale / prevScale);
+    apply();
+  }, { passive: false });
+
+  // ── Drag to pan ──
+  vp.addEventListener('mousedown', function(e) {
+    if (e.button !== 0) return;
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    startPanX = panX;
+    startPanY = panY;
+    vp.classList.add('grabbing');
+  });
+
+  window.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    panX = startPanX + (e.clientX - startX);
+    panY = startPanY + (e.clientY - startY);
+    apply();
+  });
+
+  window.addEventListener('mouseup', function() {
+    dragging = false;
+    vp.classList.remove('grabbing');
+  });
+
+  // ── Button controls ──
+  window.zoomIn = function() {
+    const rect = vp.getBoundingClientRect();
+    const cx = rect.width / 2, cy = rect.height / 2;
+    const prev = scale;
+    scale = Math.min(MAX_SCALE, scale * 1.2);
+    panX = cx - (cx - panX) * (scale / prev);
+    panY = cy - (cy - panY) * (scale / prev);
+    apply();
+  };
+
+  window.zoomOut = function() {
+    const rect = vp.getBoundingClientRect();
+    const cx = rect.width / 2, cy = rect.height / 2;
+    const prev = scale;
+    scale = Math.max(MIN_SCALE, scale / 1.2);
+    panX = cx - (cx - panX) * (scale / prev);
+    panY = cy - (cy - panY) * (scale / prev);
+    apply();
+  };
+
+  window.zoomReset = function() {
+    scale = 1; panX = 0; panY = 0;
+    apply();
+  };
+
+  window.zoomFit = function() {
+    const rect = vp.getBoundingClientRect();
+    const sx = rect.width / 1720;
+    const sy = rect.height / 1500;
+    scale = Math.min(sx, sy) * 0.95;
+    panX = (rect.width - 1720 * scale) / 2;
+    panY = (rect.height - 1500 * scale) / 2;
+    apply();
+  };
+
+  // ── Start fitted ──
+  zoomFit();
+})();
+</script>
+</body>
+</html>

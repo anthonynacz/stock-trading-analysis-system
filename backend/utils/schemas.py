@@ -158,6 +158,7 @@ class RecommendationResponse(BaseModel):
     recommendation_date: date
     ticker: str
     action: str
+    sector: Optional[str] = None
     conviction_score: Optional[Decimal] = None
     signal_count: Optional[int] = None
     signals: Optional[list[dict[str, Any]]] = None
@@ -169,6 +170,12 @@ class RecommendationResponse(BaseModel):
     current_price: Optional[Decimal] = None
     target_price: Optional[Decimal] = None
     stop_loss_price: Optional[Decimal] = None
+    # Revision tracking — populated when this row was overwritten by a later
+    # same-day run. revision_number=0 means first run (prior_* will be null).
+    prior_action: Optional[str] = None
+    prior_conviction_score: Optional[Decimal] = None
+    revision_number: int = 0
+    revised_at: Optional[datetime] = None
     suggested_options: list[SuggestedOptionResponse] = []
 
 
@@ -255,6 +262,7 @@ class ResearchResultResponse(BaseModel):
     id: int
     ticker: str
     company_name: Optional[str] = None
+    sector: Optional[str] = None
     analyzed_at: datetime
     action: str
     conviction_score: Optional[Decimal] = None
@@ -270,6 +278,31 @@ class ResearchResultResponse(BaseModel):
     stop_loss_price: Optional[Decimal] = None
     options_data: Optional[dict[str, Any]] = None
     suggested_options: Optional[list[dict[str, Any]]] = None
+
+
+# ── Deep options analysis ──────────────────────────────────────────────────
+
+
+class DeepOptionsAnalysisResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ticker: str
+    company_name: Optional[str] = None
+    analyzed_at: datetime
+    stock_price: Optional[Decimal] = None
+    iv_rank: Optional[Decimal] = None
+    iv_percentile: Optional[Decimal] = None
+    directional_bias: Optional[str] = None
+    conviction_score: Optional[Decimal] = None
+    verdict: Optional[str] = None
+    greeks_detail: Optional[dict[str, Any]] = None
+    vol_structure: Optional[dict[str, Any]] = None
+    positioning: Optional[dict[str, Any]] = None
+    liquidity: Optional[dict[str, Any]] = None
+    strategy: Optional[dict[str, Any]] = None
+    hidden_risks: Optional[list[dict[str, Any]]] = None
+    rationale: Optional[str] = None
 
 
 # ── Universe management ──────────────────────────────────────────────────
@@ -381,3 +414,143 @@ class PositionResponse(BaseModel):
     days_to_expiry: Optional[int] = None
     is_on_watchlist: bool = False
     recommendation: Optional[RecommendationResponse] = None
+
+
+# ── Multi-bagger scanner ────────────────────────────────────────────────────
+
+class ScannerUniverseItem(BaseModel):
+    id: int
+    ticker: str
+    company_name: Optional[str] = None
+    theme: Optional[str] = None
+    source: str
+    is_active: bool
+    added_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ScannerUniverseAddRequest(BaseModel):
+    ticker: str
+    theme: Optional[str] = None
+
+
+class ScannerResultResponse(BaseModel):
+    id: int
+    run_date: date
+    ticker: str
+    company_name: Optional[str] = None
+    theme: Optional[str] = None
+    composite_score: Decimal
+    tier: str
+    signals_fired: int
+    price: Optional[Decimal] = None
+    market_cap: Optional[Decimal] = None
+    stock_age_months: Optional[Decimal] = None
+    return_12m: Optional[Decimal] = None
+    return_6m: Optional[Decimal] = None
+    momentum_percentile: Optional[Decimal] = None
+    rev_growth_latest: Optional[Decimal] = None
+    rev_growth_prior: Optional[Decimal] = None
+    rev_accel_pp: Optional[Decimal] = None
+    gross_margin_latest: Optional[Decimal] = None
+    gross_margin_prior: Optional[Decimal] = None
+    margin_delta_pp: Optional[Decimal] = None
+    avg_pt: Optional[Decimal] = None
+    pt_chase_ratio: Optional[Decimal] = None
+    revisions_90d: Optional[int] = None
+    signals: Optional[list[dict]] = None
+    rationale: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class ScannerDatesResponse(BaseModel):
+    dates: list[date]
+
+
+class ScannerRunResponse(BaseModel):
+    status: str
+    run_date: Optional[str] = None
+    scored: Optional[int] = None
+    hot: Optional[int] = None
+    watch: Optional[int] = None
+
+
+# ── Industry recommendations ────────────────────────────────────────────────
+
+class IndustryRepresentativeTicker(BaseModel):
+    ticker: str
+    action: str
+    conviction: float
+
+
+class IndustryRecommendationResponse(BaseModel):
+    id: int
+    rec_date: date
+    industry: str
+    action: str
+    conviction_score: Decimal
+    signal_count: int
+    member_count: Optional[int] = None
+    bullish_count: Optional[int] = None
+    bearish_count: Optional[int] = None
+    breadth_positive_pct: Optional[Decimal] = None
+    breadth_above_50d_pct: Optional[Decimal] = None
+    cap_weighted_conviction: Optional[Decimal] = None
+    etf_symbol: Optional[str] = None
+    etf_rsi_14: Optional[Decimal] = None
+    etf_momentum_20d: Optional[Decimal] = None
+    avg_news_sentiment: Optional[Decimal] = None
+    news_article_count: Optional[int] = None
+    geopolitical_points: Optional[Decimal] = None
+    active_catalyst_count: Optional[int] = None
+    representative_tickers: Optional[list[dict]] = None
+    signals: Optional[list[dict]] = None
+    rationale: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class IndustryHistoryPoint(BaseModel):
+    rec_date: date
+    action: str
+    conviction_score: Decimal
+    signal_count: int
+
+
+class IndustryDetailResponse(BaseModel):
+    industry: str
+    latest: IndustryRecommendationResponse
+    history: list[IndustryHistoryPoint]
+    members: list[RecommendationResponse]  # today's recs for sector members
+
+
+# ── Charts (dynamic visualization builder) ─────────────────────────────────
+
+class ChartQueryRequest(BaseModel):
+    """Untyped spec — each dataset handler validates its own keys."""
+
+    dataset: str  # ticker_time_series | signal_breakdown | industry_comparison
+    spec: dict[str, Any]
+
+
+class ChartSeriesPoint(BaseModel):
+    x: Any  # str (date / category) or number
+    y: Optional[float] = None
+    count: Optional[int] = None
+
+
+class ChartSeries(BaseModel):
+    name: str
+    data: list[ChartSeriesPoint]
+    metric_key: Optional[str] = None
+
+
+class ChartResponse(BaseModel):
+    dataset: str
+    x_label: str
+    y_label: str
+    chart_type: str  # line | bar | scatter
+    series: list[ChartSeries]
+    meta: dict[str, Any] = {}

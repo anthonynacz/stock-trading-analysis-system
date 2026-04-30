@@ -32,24 +32,58 @@ SECTORS: dict[str, dict] = {
     "Energy/Commodities": {
         "universe": [
             "XOM", "CVX", "COP", "SLB", "OXY", "EOG", "MPC", "VLO",
-            "PSX", "HAL", "FSLR", "ENPH", "NEE",
+            "PSX", "HAL", "FSLR", "ENPH",
         ],
         "max_stocks": 6,
     },
     "Healthcare/Biotech": {
         "universe": [
             "LLY", "NVO", "ABBV", "JNJ", "PFE", "MRNA", "BMY", "AMGN",
-            "GILD", "REGN", "VRTX", "ISRG",
+            "GILD", "REGN", "VRTX",
         ],
         "max_stocks": 6,
     },
     "Consumer/Cloud/Enterprise": {
         "universe": [
-            "AMZN", "MSFT", "GOOGL", "META", "AAPL", "CRM", "SNOW",
-            "PLTR", "NET", "SHOP", "UBER", "ABNB", "NFLX",
+            "AMZN", "MSFT", "GOOGL", "AAPL", "CRM", "SNOW",
+            "PLTR", "NET", "SHOP", "UBER", "ABNB",
         ],
         "max_stocks": 6,
     },
+    "Industrials/Defense": {
+        "universe": [
+            "LMT", "RTX", "NOC", "GD", "BA", "KTOS", "AVAV", "PWR",
+            "CAT", "DE", "ETN", "HON",
+        ],
+        "max_stocks": 6,
+    },
+    "Power/Utilities/Nuclear": {
+        "universe": [
+            "VST", "CEG", "TLN", "NEE", "SO", "DUK", "AEP", "SRE",
+            "GEV", "SMR", "OKLO", "CCJ",
+        ],
+        "max_stocks": 6,
+    },
+    "Communications/Media": {
+        "universe": [
+            "NFLX", "DIS", "META", "GOOG", "CMCSA", "VZ", "T",
+            "TMUS", "SPOT", "TTD", "ROKU",
+        ],
+        "max_stocks": 6,
+    },
+}
+
+# Representative sector ETFs — primary tape for industry-level technicals.
+# Used by industry_analyzer for RSI / momentum computation.
+SECTOR_ETFS: dict[str, str] = {
+    "AI/Semiconductors": "SOXX",
+    "Fintech/Payments": "XLF",
+    "Energy/Commodities": "XLE",
+    "Healthcare/Biotech": "XLV",
+    "Consumer/Cloud/Enterprise": "XLK",
+    "Industrials/Defense": "ITA",
+    "Power/Utilities/Nuclear": "XLU",
+    "Communications/Media": "XLC",
 }
 
 # ── Constants ────────────────────────────────────────────────────────────────

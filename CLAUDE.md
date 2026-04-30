@@ -57,26 +57,33 @@ The daily workflow runs as a phased pipeline orchestrated by APScheduler in `sch
 2. **analyst_tracker.py** — Detects rating changes since prior close, classifies as TIER_CHANGE/PT_CHANGE/INITIATION/REITERATION, scores by firm tier (T1=bulge bracket, T2=mid-tier, T3=boutique)
 3. **earnings_calendar.py** — Tracks earnings dates, manages catalyst windows (T-7 to T+10). Sanitizes yfinance garbage in `earnings_time` (float values → null) and `fiscal_quarter` (revenue estimates → null).
 4. **news_scanner.py** — Fetches/categorizes news into 7 categories (EARNINGS, ANALYST, MACRO, SECTOR, INSIDER, PRODUCT, GEOPOLITICAL), scores sentiment via **FinBERT** (ProsusAI/finbert) using batch inference. FinBERT returns continuous scores in [-1.0, 1.0] with financial domain understanding. Model loads once (singleton in `utils/finbert.py`) and persists in memory. Tracks per-ticker relevance via `news_ticker_relevance` junction table (many-to-many). Relevance scored by text matching: HEADLINE=1.0, SUMMARY=0.7, API_RELATED=0.5, SEARCHED=0.3. Duplicate articles (same URL) skip MarketNews creation but backfill relevance rows for newly-relevant tickers.
-5. **options_analyzer.py** — Pulls chains via yfinance, calculates IV rank, detects unusual activity (>1.5x avg volume). Includes **strike recommender** (`recommend_strikes` / `recommend_strikes_all`) with three risk profiles (conservative/moderate/aggressive) and budget-filtered contract selection.
+5. **options_analyzer.py** — Pulls chains via yfinance, persists `atm_iv` and computes IV rank via `utils/iv_history.compute_iv_rank_and_percentile` (historical rank over last ~year of snapshots when ≥20 data points, stabilized cross-sectional fallback otherwise — never raw chain min/max, which is unstable). Detects unusual activity (>1.5x avg volume). Includes **strike recommender** (`recommend_strikes` / `recommend_strikes_all`) with three risk profiles (conservative/moderate/aggressive) and budget-filtered contract selection.
+5a. **deep_options_analyzer.py** — Expert-level single-ticker options report. Consumes a DTE-spread chain (`DataSourceClient.get_options_chain(ticker, mode="spread")` returns up to 8 expirations bucketed 0-7/7-21/21-45/45-90/90-180/180+d). Computes: ATM greeks table with Rho/Vanna/Charm/Vomma, IV rank + percentile, vol term structure (contango/backwardation), 25-delta skew, expected moves, max pain per expiry, signed gamma exposure (GEX), pin magnets, P/C OI by expiry, liquidity rating. Outputs a strategy verdict (LONG_CALL / LONG_PUT / BULL_CALL_SPREAD / BEAR_PUT_SPREAD / BULL_PUT_SPREAD / BEAR_CALL_SPREAD / IRON_CONDOR / LONG_STRADDLE / NO_TRADE) selected by bias × IV bucket × earnings proximity, plus a `hidden_risks` list (IV_CRUSH, THETA_BURN, VEGA_EXPOSURE, PIN_RISK, LIQUIDITY, NEGATIVE_GEX, BACKWARDATION, PUT_SKEW, ASSIGNMENT_RISK). ATM IV falls back to median of valid near-ATM strikes when direct-ATM contract has stale weekend quotes.
 6. **recommendation_engine.py** — Stacks signals into conviction scores (-100 to +100), generates rationale text, selects optimal options contracts, classifies STRONG_BUY through STRONG_SELL. Each day's recommendation is stored independently (`uq_rec_date_ticker` constraint). `analyze_single()` runs the same pipeline but returns a data dict without persisting to `recommendations` — used by the Research feature.
 
 ### Signal Stacking (conviction scoring)
 
 Signals are stacked across eight categories. Classification thresholds: ≥60 STRONG_BUY, 30-59 BUY, -15 to 29 HOLD, -30 to -16 SELL, ≤-31 STRONG_SELL.
 
-**Analyst signals**: T1/T2/T3 upgrades (+15 to +40) / downgrades (-15 to -40), PT raises (+10/+15) / cuts (-10/-15).
-**Earnings signals**: Beat (+20), Beat+Raised (+30), Miss (-20), Miss+Lowered (-30), Active Catalyst Window (+5).
+**Analyst signals**: T1/T2/T3 upgrades (+15 to +40) / downgrades (-15 to -40), PT raises (+10/+15) / cuts (-10/-15). **Analyst Revision Cluster** (+10/+15 or -10/-15): ≥2 distinct T1/T2 firms acting bullish (or bearish) within the last 14 days — captures sustained positioning shifts rather than single-firm reactions.
+**Earnings signals**: Beat (+20), Beat+Raised (+30), Miss (-20), Miss+Lowered (-30), Active Catalyst Window (+5). Window spans **T-14 to T+10** (ACTIVE) — extended from T-7 to get ahead of IV expansion / institutional positioning typically seen 10-14 days pre-earnings.
 **Technical signals**: RSI oversold/overbought (±10/±15), price vs 50d SMA (±10), price vs 200d SMA (±5), 5d/20d momentum (±10), volume-confirmed moves (±10), short squeeze setup (+15), high short interest (-5).
 **Drawdown signals**: Sharp 1d drop >5% (-15), rapid 2d drawdown >7% (-20), rapid 3d drawdown >10% (-15), distribution/heavy selling volume (-10). These fire independently and stack.
 **Reversal signals**: Oversold Bounce Setup (+15/+20) and Strong Reversal Setup (+20/+25) fire only when drawdown is active AND RSI <30 AND price near support (200d SMA or 52w low). Selling exhaustion (low down-day volume) adds confidence.
 **52-week & value signals (context-gated)**: Near 52w high (+5), deep pullback (+10 normally, +5 if actively declining). Below consensus PT (+10 normally, +5 if actively declining). Gating prevents value traps during falling-knife scenarios.
 **Relative strength**: Stock vs SPY 5d momentum comparison. Outperforming (+10), underperforming (-10). SPY data fetched once per pipeline via `get_market_benchmark()`.
 **OHLC candlestick signals**: Gap-Down After Up Day (-12), Upper Wick Rejection (-8), Close Near Low (-5), Close Near High (+5). Derived from Open/High/Low in yfinance 2-month history. Silently skip when OHLC unavailable — all close-only signals unaffected.
-**Options signals**: Unusual call volume (+15) / put volume (-15) vs 20-day historical avg, put/call OI skew (±10), high IV rank (-10).
+**Options signals**: Unusual call volume (+15) / put volume (-15) vs 20-day historical avg, put/call OI skew (±10), high IV rank (-10). **Smart Money Positioning** (+12): fires when 3-day trailing avg call volume ≥2x 20d baseline AND IV rank has risen >10pp over last ~5 days — institutional accumulation ahead of a catalyst.
 **Greek signals**: Computed from Black-Scholes (`utils/greeks.py`) using yfinance IV per contract. Heavy Theta Decay (-8 if ATM theta >3% premium/day, -5 if >2%). IV Crush Risk (-12 if earnings within 7 days AND vega >8% premium per 1% IV). Favorable Theta (+5 if theta <1%, near-term DTE ≤14, and score >30). Greeks replace the crude moneyness-based delta estimate with proper BS delta. Gamma, theta, vega are computed on-the-fly (not persisted — too ephemeral).
 **News signals**: FinBERT sentiment scaled by magnitude and article count (±5 to ±15), sector tailwind/headwind (±10). **When geopolitical signals fire, news sentiment points are halved** to reduce double-counting (same articles drive both signals).
 **Geopolitical signals**: Keyword-detected events (MILITARY_CONFLICT, TRADE_WAR, SANCTIONS, DIPLOMATIC_BREAKTHROUGH, OIL_DISRUPTION, REGULATION) from MACRO/SECTOR/GEOPOLITICAL news. Sector-specific impact mapping — same event has different points per EdgeFlow sector (e.g., military conflict: Energy +18, Semis -12). Points scaled by FinBERT sentiment magnitude (0.6x–1.0x of base), clamped ±20 per signal. One signal per event type (deduplicated). **Total geopolitical contribution capped at ±20** to prevent correlated events (e.g., MILITARY_CONFLICT + OIL_DISRUPTION) from stacking beyond a single event's impact. Detection in `utils/geopolitical.py`.
-**Other**: Insider buying (+5) / selling (-5), stock already moved (-5).
+**Other**: Insider buying (+5) / selling (-5), stock already moved (-5). **Insider Buy Cluster** (+8/+12) supersedes the generic "Insider Buying" signal when ≥2 distinct insiders bought in the last 30 days AND buy count > sell count — convergent accumulation is a stronger pre-position trigger than raw dollar value.
+
+### Entry strategy (PRE_POSITION) triggers
+
+`_determine_entry_strategy()` marks a rec as `PRE_POSITION` when EITHER:
+- Catalyst window is ACTIVE (T-14 to T-0) AND conviction ≥ 30, OR
+- A leading pre-position signal is present AND conviction ≥ 25. Leading signals: **Analyst Revision Cluster**, **Smart Money Positioning**, **Insider Buy Cluster**. This lets PRE_POSITION fire weeks before an earnings catalyst when institutional positioning clusters. Rationale text names the leading signal instead of "catalyst window active" when it triggers this branch.
 
 Technical indicators (RSI-14, 5d/20d momentum, volume ratio, drawdown metrics, consecutive down days, down-day volume ratio, OHLC candlestick metrics) are computed from yfinance 2-month price history via `DataSourceClient.get_technical_indicators()`. Moving averages (50d, 200d), short interest, and 52-week range come from yfinance `.info` via `get_stock_data()`. SPY benchmark comes from `get_market_benchmark()`.
 
@@ -157,7 +164,7 @@ asyncio.run(rescore())
 
 ## Database
 
-PostgreSQL 16. Key tables: `sectors`, `universe_stocks`, `discovery_candidates`, `watchlist`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `news_ticker_relevance`, `options_snapshots`, `suggested_options`, `recommendations`, `strike_snapshots`, `research_results`, `positions`. Schema created via `db/init_db.py` using SQLAlchemy models from `db/models.py`. The `recommendations` table must be created before `suggested_options` (FK dependency). `universe_stocks` is seeded from `config.SECTORS` on first init.
+PostgreSQL 16. Key tables: `sectors`, `universe_stocks`, `discovery_candidates`, `watchlist`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `news_ticker_relevance`, `options_snapshots`, `suggested_options`, `recommendations`, `strike_snapshots`, `research_results`, `deep_options_analyses`, `positions`, `multibagger_universe`, `multibagger_snapshot`, `industry_recommendations`. Schema created via `db/init_db.py` using SQLAlchemy models from `db/models.py`. The `recommendations` table must be created before `suggested_options` (FK dependency). `universe_stocks` is seeded from `config.SECTORS` on first init. `multibagger_universe` is seeded from `services/multibagger_seed.py` (~95 growth-candidate tickers across 11 themes).
 
 All `DateTime` columns use `DateTime(timezone=True)` (maps to PostgreSQL `TIMESTAMPTZ`). This is required because asyncpg strictly rejects tz-aware Python datetimes for `TIMESTAMP WITHOUT TIME ZONE` columns. Schema changes require dropping and recreating tables (no Alembic migrations yet).
 
@@ -167,6 +174,11 @@ These columns were added via `ALTER TABLE` and may need to be re-added if the da
 - `watchlist.is_manual` — `BOOLEAN NOT NULL DEFAULT FALSE` — marks manually-added tickers
 - `watchlist.is_locked` — `BOOLEAN NOT NULL DEFAULT FALSE` — locks tickers from auto-rotation
 - `watchlist_daily_snapshot` — `UNIQUE(snapshot_date, ticker)` constraint (`uq_snapshot_date_ticker`)
+- `options_snapshots.atm_iv` — `NUMERIC(6,4)` — persisted near-ATM implied vol used to compute historical IV rank across ≥20 snapshots. See `utils/iv_history.py`.
+- `recommendations.prior_action` — `VARCHAR(20)` — captures action of overwritten same-day rec (revision diff)
+- `recommendations.prior_conviction_score` — `NUMERIC(5,2)` — captures conviction of overwritten same-day rec
+- `recommendations.revision_number` — `INTEGER NOT NULL DEFAULT 0` — 0 = first run, increments on each same-day overwrite
+- `recommendations.revised_at` — `TIMESTAMPTZ` — timestamp of most recent overwrite (null on first run)
 
 ## Async SQLAlchemy Gotchas
 
@@ -201,6 +213,10 @@ GET  /api/options/watchlist/strikes     # Strike recs for all watchlist tickers;
 GET  /api/options/{ticker}             # Latest options snapshot
 GET  /api/options/{ticker}/strikes     # Strike rec for one risk level; ?risk=&budget=
 GET  /api/options/{ticker}/strikes/all # Strike recs for all 3 risk levels; ?budget=
+POST /api/options/deep/{ticker}        # Run expert-level options analysis (greeks, vol structure, strategy, hidden risks)
+GET  /api/options/deep                 # List deep analyses; ?ticker=&limit=&offset=
+GET  /api/options/deep/{id}            # Single deep analysis
+DELETE /api/options/deep/{id}          # Delete a deep analysis
 POST /api/strikes/snapshots            # Save strike scan results { budget, results }
 GET  /api/strikes/snapshots            # Load saved snapshot; ?date=
 GET  /api/strikes/snapshots/dates      # List dates with saved snapshots
@@ -227,6 +243,17 @@ PUT  /api/positions/{id}               # Update mutable fields (stop_loss, targe
 POST /api/positions/{id}/close         # Close position { close_price, notes? }
 DELETE /api/positions/{id}             # Hard delete position
 POST /api/positions/{id}/refresh-price # Refresh stock price via yfinance
+GET  /api/scanner/universe             # List scanner universe (active tickers, grouped by theme)
+POST /api/scanner/universe             # Add ticker { ticker, theme? }
+DELETE /api/scanner/universe/{ticker}  # Soft-remove ticker
+GET  /api/scanner/dates                # Distinct scanner run dates (180 day window)
+GET  /api/scanner/results              # Scanner rows; ?date=&tier=&theme=
+POST /api/scanner/run                  # Trigger scanner run (background; poll /scanner/status)
+GET  /api/scanner/status               # Poll run state (running, started_at, last_result)
+GET  /api/industries                   # Latest industry recommendations (one row per sector); ?date=
+GET  /api/industries/{name}            # Industry detail: latest + 30d history + today's member recs (uses :path so AI/Semiconductors works)
+GET  /api/charts/datasets              # List available chart datasets + their metric/aggregation options (drives form rendering)
+POST /api/charts/query                 # Run chart query — { dataset, spec } → { series, x_label, y_label, chart_type, meta }
 ```
 
 ## Frontend
@@ -322,11 +349,44 @@ For local dev, `.env` at project root with `DATABASE_URL` pointing to `localhost
 
 ## Sector Universe
 
-5 sectors with ~13 stocks each (~68 total universe, stored in `universe_stocks` table). Seeded from `config.SECTORS` on first init; expandable via Universe page (manual add or discovery approval). Active watchlist is max 60 (12 per sector). Sectors: AI/Semiconductors, Fintech/Payments, Energy/Commodities, Healthcare/Biotech, Consumer/Cloud/Enterprise.
+8 sectors with ~10-17 stocks each (~100 total universe, stored in `universe_stocks` table). Seeded from `config.SECTORS` on first init; expandable via Universe page (manual add or discovery approval). Active watchlist is max 60 (12 per sector). Sectors: AI/Semiconductors, Fintech/Payments, Energy/Commodities, Healthcare/Biotech, Consumer/Cloud/Enterprise, Industrials/Defense, Power/Utilities/Nuclear, Communications/Media.
+
+## Industry (Sector-level) Recommendations
+
+Separate analyzer in `services/industry_analyzer.py` produces one BUY/HOLD/SELL recommendation per industry as its own unit — not an aggregation of ticker convictions. Runs as final pipeline phase `industries` after ticker-level `recommendations`. UI: card grid on Dashboard + full detail view at `/industries` with 30d conviction sparkline.
+
+- **Signals** (7): Breadth (% bullish members, % above 50d SMA), Cap-Weighted Conviction (large caps matter more), Sector ETF technicals (RSI-14 + 20d momentum of SOXX/XLF/XLE/XLV/XLK/ITA/XLU/XLC per `config.SECTOR_ETFS`), Aggregated News Sentiment (FinBERT avg across sector-relevant articles), Geopolitical Impact (via `utils/geopolitical.py` — sector map extended to 8 sectors), Catalyst Density (sector earnings in next 14d).
+- **Scoring**: composite clamped [-100, +100]. Same classification bands as ticker recs: ≥60 STRONG_BUY, ≥30 BUY, ≥-15 HOLD, ≥-30 SELL, ≤-31 STRONG_SELL.
+- **Table**: `industry_recommendations` with `uq_ind_rec_date_industry`. Re-runs same-day replace via delete-before-insert. Stores raw observations + JSON signals array + top-3 representative tickers.
+- **ETF RSI/momentum**: fetched via yfinance `history(period="3mo")`; RSI computed with Wilder's method inline.
+- **Geopolitical sector impact map**: `_SECTOR_IMPACT` in `utils/geopolitical.py` now covers all 8 sectors across 6 event types. Net geopolitical contribution is capped at ±25 per industry per run to prevent correlated events from dominating.
+
+## Charts (dynamic visualization builder)
+
+Dataset-first BI in `services/chart_builder.py`, UI at `/charts`. Three curated datasets — picked over universal pivot to avoid nonsensical column combinations on a heterogeneous schema:
+
+- **ticker_time_series**: one ticker, multi-metric line chart over date range. Metrics span recommendations (price, conviction, signal_count, target/stop), options snapshots (iv_rank, iv_percentile, put_call_ratio, atm_iv, volumes), and aggregated news (avg sentiment, article count). Optional SMA smoothing window.
+- **signal_breakdown**: bar chart of recommendation signal occurrences. Aggregations: count / sum / avg / min / max over signal points. Filters: tickers, actions, date range. Top-N limit.
+- **industry_comparison**: industry-level metric across industries. Two views — `trend` (line per industry over date range) or `snapshot` (bar at latest date). Metrics from `industry_recommendations` columns (conviction, breadth %, ETF RSI/momentum, news sentiment, geopolitical, catalysts).
+
+Each dataset has its own handler that builds parametrized SQL (no string concat). Standardized response: `{dataset, x_label, y_label, chart_type, series: [{name, data: [{x, y}], ...}], meta}`. Frontend uses Recharts (`LineChart` / `BarChart`) with `unifyRows` to merge multi-series across a shared X axis. Form state syncs to URL params (`useSearchParams`) so charts are shareable / bookmarkable.
+
+To add a new dataset: define a handler method in `ChartBuilder.query()` dispatch and add the dataset entry to `/api/charts/datasets`. Frontend form picks up new metric keys automatically; new dataset shapes need a new form component in `ChartsPage.tsx`.
+
+## Multi-bagger Scanner (positional, separate from tactical engine)
+
+Separate universe + separate signal stack in `services/multibagger_scanner.py`, UI at `/scanner`. Targets 3–12 month horizon "shooting stars" (SNDK/NVDA/SMCI-type multi-baggers) rather than tactical 2-week setups. Do **not** mix this into the recommendation engine — the horizons are incompatible.
+
+- **Universe**: `multibagger_universe` table, ~95 growth candidates seeded from `services/multibagger_seed.py` grouped by theme (AI_MEMORY, AI_COMPUTE, AI_APPS, POWER_NUCLEAR, ROBOTICS_SPACE, AUTONOMY_MOBILITY, FINTECH_CRYPTO, BIOTECH_GLP1, QUANTUM, SAAS_GROWTH, RECENT_IPO_SPINOFF). Extendable via `POST /api/scanner/universe` or the page UI.
+- **Signals** (6): Revenue Growth Accelerating (YoY Q-latest vs Q-prior in pp, up to +25), Margin Expansion (gross margin YoY Δ in pp, up to +20), Top-Decile 12m Momentum (percentile rank of 12m return vs scanner universe, up to +25), Analysts Chasing (price ≥ avg PT, up to +15), Recent IPO/Spinoff (stock age ≤24mo via `firstTradeDateEpochUtc`, up to +15), Revision Cluster (90d count of bullish actions from `analyst_ratings`, up to +20).
+- **Scoring / tier**: composite clamped [0, 120]. Tier: HOT (≥4 signals fired AND composite ≥60), WATCH (≥3 signals OR composite ≥40), MONITOR (≥2 signals), IGNORE otherwise.
+- **Data sources** (added in `utils/data_sources.py`): `get_income_statement_quarterly` (FMP quarterly income statements, 5 periods), `get_long_horizon_returns` (yfinance 1y history → 3m/6m/12m returns), `get_stock_age_months` (yfinance `firstTradeDateEpochUtc`).
+- **Run cadence**: Manual via `POST /api/scanner/run` (background task; ~3–5 min for 95 tickers on cold cache). Not yet wired to APScheduler — eventually runs weekly. Each run replaces same-date rows via delete-before-insert; `uq_mbs_date_ticker` prevents duplicates.
+- **Numeric column widths**: Ratios (`rev_growth_*`, `pt_chase_ratio`, margins) use `Numeric(10–12, 4)` to accommodate small-denominator blowups (a company going from $1M → $500M revenue produces a 500.0 YoY ratio that overflows narrower types).
 
 ## Pipeline Idempotency
 
-Pipeline re-runs on the same day are safe. `watchlist_manager.rotate_watchlist()` deletes existing snapshots for the date before inserting new ones. The `uq_snapshot_date_ticker` constraint prevents duplicates. Recommendations use `uq_rec_date_ticker` — re-runs update existing rows.
+Pipeline re-runs on the same day are safe. `watchlist_manager.rotate_watchlist()` deletes existing snapshots for the date before inserting new ones. The `uq_snapshot_date_ticker` constraint prevents duplicates. Recommendations use `uq_rec_date_ticker` — re-runs update existing rows. Scanner runs use `uq_mbs_date_ticker` with delete-before-insert on `run_date`.
 
 
 ## Maintaining this file

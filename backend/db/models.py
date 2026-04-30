@@ -229,6 +229,7 @@ class OptionsSnapshot(Base):
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
     snapshot_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     stock_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    atm_iv: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 4))
     iv_rank: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     iv_percentile: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     put_call_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 3))
@@ -265,6 +266,15 @@ class Recommendation(Base):
     current_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     target_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     stop_loss_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+
+    # Revision tracking — preserves the prior values on overwrite so the UI can
+    # render a "revised" badge with hover diff. Single row per (date, ticker)
+    # invariant is preserved; only the most recent prior is retained.
+    prior_action: Mapped[Optional[str]] = mapped_column(String(20))
+    prior_conviction_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    revised_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     suggested_options: Mapped[list["SuggestedOption"]] = relationship(back_populates="recommendation")
@@ -338,6 +348,39 @@ class ResearchResult(Base):
     suggested_options: Mapped[Optional[list]] = mapped_column(JSON)
 
 
+# ── Deep options analyses (expert-level single-ticker options report) ──────
+
+
+class DeepOptionsAnalysis(Base):
+    __tablename__ = "deep_options_analyses"
+    __table_args__ = (
+        Index("ix_deep_opt_ticker", "ticker"),
+        Index("ix_deep_opt_analyzed", "analyzed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255))
+    analyzed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Headline
+    stock_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    iv_rank: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    iv_percentile: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    directional_bias: Mapped[Optional[str]] = mapped_column(String(20))  # BULLISH, BEARISH, NEUTRAL
+    conviction_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    verdict: Mapped[Optional[str]] = mapped_column(String(50))  # BUY_CALL, SELL_CALL, BUY_PUT, SELL_PUT, etc.
+
+    # Structured analysis blobs
+    greeks_detail: Mapped[Optional[dict]] = mapped_column(JSON)  # per-expiry ATM greek table
+    vol_structure: Mapped[Optional[dict]] = mapped_column(JSON)  # term structure, skew, expected move
+    positioning: Mapped[Optional[dict]] = mapped_column(JSON)  # max pain, GEX, pin risk, P/C OI by exp
+    liquidity: Mapped[Optional[dict]] = mapped_column(JSON)  # spread distribution, thin OI flags
+    strategy: Mapped[Optional[dict]] = mapped_column(JSON)  # recommended strategy with legs
+    hidden_risks: Mapped[Optional[list]] = mapped_column(JSON)  # list of risk dicts w/ severity
+    rationale: Mapped[Optional[str]] = mapped_column(Text)
+
+
 # ── Positions (user portfolio tracking) ────────────────────────────────────
 
 class Position(Base):
@@ -366,3 +409,117 @@ class Position(Base):
     close_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     realized_pnl: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
     notes: Mapped[Optional[str]] = mapped_column(Text)
+
+
+# ── Multi-bagger scanner (positional, 3-12mo horizon) ──────────────────────
+
+class MultibaggerUniverse(Base):
+    __tablename__ = "multibagger_universe"
+    __table_args__ = (
+        UniqueConstraint("ticker", name="uq_mbu_ticker"),
+        Index("ix_mbu_active", "is_active"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255))
+    theme: Mapped[Optional[str]] = mapped_column(String(80))  # e.g. AI_MEMORY, ROBOTICS, NUCLEAR, GLP1
+    source: Mapped[str] = mapped_column(String(20), default="SEED")  # SEED, MANUAL
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MultibaggerSnapshot(Base):
+    """One row per (run_date, ticker) — weekly positional signal snapshot."""
+
+    __tablename__ = "multibagger_snapshot"
+    __table_args__ = (
+        UniqueConstraint("run_date", "ticker", name="uq_mbs_date_ticker"),
+        Index("ix_mbs_run_date", "run_date"),
+        Index("ix_mbs_tier", "tier"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_date: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255))
+    theme: Mapped[Optional[str]] = mapped_column(String(80))
+
+    # Composite + classification
+    composite_score: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False)
+    tier: Mapped[str] = mapped_column(String(12), nullable=False)  # HOT, WATCH, MONITOR, IGNORE
+    signals_fired: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Raw observations (nullable — some data sources may be unavailable)
+    price: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
+    market_cap: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    stock_age_months: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 1))
+    return_12m: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 4))  # decimal (e.g. 3.5 = +350%)
+    return_6m: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 4))
+    momentum_percentile: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    # Ratios intentionally wide — small-denominator inputs can produce very
+    # large quotients (e.g. a company going from $1M to $500M revenue = 500x).
+    rev_growth_latest: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))  # YoY latest Q
+    rev_growth_prior: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))  # YoY prior Q
+    rev_accel_pp: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))  # stored as decimal (pp/100)
+    gross_margin_latest: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
+    gross_margin_prior: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
+    margin_delta_pp: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
+    avg_pt: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    pt_chase_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))  # price / avg_pt
+    revisions_90d: Mapped[Optional[int]] = mapped_column(Integer)
+
+    # Per-signal details (JSON: [{signal, points, detail}, ...])
+    signals: Mapped[Optional[list]] = mapped_column(JSON)
+    rationale: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ── Industry recommendations (sector-level BUY/HOLD/SELL) ──────────────────
+
+class IndustryRecommendation(Base):
+    """One row per (rec_date, industry) — industry-level signal stack.
+
+    The industry is the unit, not a ticker. Signals are industry-native
+    (breadth, cap-weighted conviction, sector ETF technicals, aggregated
+    news sentiment, geopolitical impact, catalyst density) — not just an
+    average of ticker convictions.
+    """
+
+    __tablename__ = "industry_recommendations"
+    __table_args__ = (
+        UniqueConstraint("rec_date", "industry", name="uq_ind_rec_date_industry"),
+        Index("ix_ind_rec_date", "rec_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rec_date: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
+    industry: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    # Classification
+    action: Mapped[str] = mapped_column(String(20), nullable=False)  # BUY, HOLD, SELL, STRONG_BUY, STRONG_SELL
+    conviction_score: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False)
+    signal_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Raw observations
+    member_count: Mapped[Optional[int]] = mapped_column(Integer)
+    bullish_count: Mapped[Optional[int]] = mapped_column(Integer)  # conviction >= 30
+    bearish_count: Mapped[Optional[int]] = mapped_column(Integer)  # conviction <= -16
+    breadth_positive_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    breadth_above_50d_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    cap_weighted_conviction: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2))
+    etf_symbol: Mapped[Optional[str]] = mapped_column(String(10))
+    etf_rsi_14: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    etf_momentum_20d: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 4))
+    avg_news_sentiment: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 4))
+    news_article_count: Mapped[Optional[int]] = mapped_column(Integer)
+    geopolitical_points: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2))
+    active_catalyst_count: Mapped[Optional[int]] = mapped_column(Integer)
+
+    # Representative tickers (top 3 by market cap or conviction magnitude)
+    representative_tickers: Mapped[Optional[list]] = mapped_column(JSON)
+
+    # Per-signal details: [{signal, points, detail}, ...]
+    signals: Mapped[Optional[list]] = mapped_column(JSON)
+    rationale: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

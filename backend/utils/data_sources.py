@@ -184,6 +184,120 @@ class DataSourceClient:
 
     # ------------------------------------------------------------------ #
 
+    def get_stock_age_months(self, ticker: str) -> float | None:
+        """Return months since the ticker's first trade date.
+
+        Primary source: yfinance monthly history over max period — the
+        first bar's date is the listing date. Fallback:
+        ``firstTradeDateEpochUtc`` from ``.info`` (missing for most large
+        tickers). Used by the multi-bagger scanner to flag recent IPOs /
+        spinoffs (< 24 months = structural-event signal). Cached 24h.
+        """
+        cache_key = f"stock_age:{ticker}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            self._wait_for_rate_limit("yfinance")
+            hist = yf.Ticker(ticker).history(period="max", interval="1mo", auto_adjust=True)
+            first_ts = None
+            if hist is not None and len(hist) > 0:
+                first_ts = hist.index[0].to_pydatetime()
+                if first_ts.tzinfo is None:
+                    first_ts = first_ts.replace(tzinfo=timezone.utc)
+            if first_ts is None:
+                # Fallback: firstTradeDateEpochUtc from .info (rarely populated)
+                self._wait_for_rate_limit("yfinance")
+                info = yf.Ticker(ticker).info or {}
+                epoch = info.get("firstTradeDateEpochUtc")
+                if not epoch:
+                    return None
+                first_ts = datetime.fromtimestamp(float(epoch), tz=timezone.utc)
+            months = (datetime.now(tz=timezone.utc) - first_ts).days / 30.4375
+            self._set_cached(cache_key, months, 24 * 60 * 60)
+            return months
+        except Exception:
+            logger.debug("get_stock_age_months failed for %s", ticker, exc_info=True)
+            return None
+
+    # ------------------------------------------------------------------ #
+
+    def get_long_horizon_returns(self, ticker: str) -> dict:
+        """Compute 3m / 6m / 12m total returns from yfinance price history.
+
+        Returns a dict ``{return_3m, return_6m, return_12m}`` in decimal
+        (e.g. 0.25 = +25%). Uses 14 months of data so the 12m lookback
+        doesn't fall off the edge of a 1-year history (which averages
+        ~251 trading days vs. the 252 we want to step back). Newly-listed
+        tickers with < 12m of history return None for the longer windows.
+        """
+        cache_key = f"long_returns:{ticker}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+        out: dict[str, float | None] = {
+            "return_3m": None, "return_6m": None, "return_12m": None,
+        }
+        try:
+            self._wait_for_rate_limit("yfinance")
+            hist = yf.Ticker(ticker).history(period="14mo", auto_adjust=True)
+            if hist is None or len(hist) < 10:
+                return out
+            closes = hist["Close"].dropna()
+            if len(closes) < 10:
+                return out
+            latest = float(closes.iloc[-1])
+            for key, approx_days in (("return_3m", 63), ("return_6m", 126), ("return_12m", 252)):
+                # Need at least (approx_days + 1) bars to reach back that far;
+                # for shorter histories, fall back to the earliest available bar
+                # when the lookback exceeds ~80% of the window (IPOs with <1y data).
+                if len(closes) > approx_days:
+                    prior = float(closes.iloc[-(approx_days + 1)])
+                elif key == "return_12m" and len(closes) >= int(approx_days * 0.8):
+                    prior = float(closes.iloc[0])
+                else:
+                    continue
+                if prior > 0:
+                    out[key] = (latest - prior) / prior
+            self._set_cached(cache_key, out, 6 * 60 * 60)
+            return out
+        except Exception:
+            logger.debug("get_long_horizon_returns failed for %s", ticker, exc_info=True)
+            return out
+
+    # ------------------------------------------------------------------ #
+
+    def get_income_statement_quarterly(
+        self, ticker: str, limit: int = 5,
+    ) -> list[dict]:
+        """Fetch last N quarterly income statements from FMP.
+
+        Returns a list sorted most-recent-first with keys at minimum:
+        ``date``, ``revenue``, ``grossProfit``, ``operatingIncome``,
+        ``netIncome``. Empty list on failure. Used for YoY growth and
+        margin-expansion signals in the multi-bagger scanner.
+        """
+        if not settings.FMP_API_KEY:
+            return []
+        cache_key = f"income_q:{ticker}:{limit}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            data = self._fmp_get(
+                f"/api/v3/income-statement/{ticker}",
+                params={"period": "quarter", "limit": limit},
+            )
+            if not isinstance(data, list):
+                return []
+            self._set_cached(cache_key, data, 6 * 60 * 60)
+            return data
+        except Exception:
+            logger.debug("get_income_statement_quarterly failed for %s", ticker, exc_info=True)
+            return []
+
+    # ------------------------------------------------------------------ #
+
     def get_technical_indicators(self, ticker: str) -> dict:
         """Compute technical indicators from yfinance price history.
 
@@ -488,9 +602,18 @@ class DataSourceClient:
 
     # ------------------------------------------------------------------ #
 
-    def get_options_chain(self, ticker: str) -> dict:
-        """Fetch options chain for the next 4 expirations via yfinance."""
-        cache_key = f"options_chain:{ticker}"
+    def get_options_chain(
+        self, ticker: str, *, mode: str = "default"
+    ) -> dict:
+        """Fetch options chain expirations via yfinance.
+
+        Modes:
+        - "default": next 4 expirations (cached short-dated view)
+        - "spread": up to 8 expirations sampled across DTE buckets (0-7, 7-21,
+          21-60, 60-180) — used by the deep-options analyzer for term structure
+          and LEAPS-aware strategy selection.
+        """
+        cache_key = f"options_chain:{ticker}:{mode}"
         cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
@@ -503,7 +626,10 @@ class DataSourceClient:
                 yticker.info or {}
             ).get("regularMarketPrice")
 
-            selected = list(expirations[:4])
+            if mode == "spread":
+                selected = self._spread_expirations(expirations)
+            else:
+                selected = list(expirations[:4])
             chains: dict[str, dict[str, list[dict]]] = {}
 
             for exp in selected:
@@ -545,6 +671,47 @@ class DataSourceClient:
         except Exception:
             logger.exception("get_options_chain failed for %s", ticker)
             return {"ticker": ticker, "expirations": [], "chains": {}}
+
+    @staticmethod
+    def _spread_expirations(expirations: tuple[str, ...]) -> list[str]:
+        """Pick up to 8 expirations spread across DTE buckets.
+
+        Buckets (days-to-expiry): 0-7, 7-21, 21-45, 45-90, 90-180, 180+.
+        For each bucket, take the first available expiration. Falls back to
+        filling from the front if a bucket is empty.
+        """
+        today = datetime.now(timezone.utc).date()
+        dated = []
+        for exp in expirations:
+            try:
+                d = datetime.strptime(exp, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            dte = (d - today).days
+            if dte < 0:
+                continue
+            dated.append((exp, dte))
+
+        buckets = [(0, 7), (7, 21), (21, 45), (45, 90), (90, 180), (180, 10_000)]
+        picked: list[str] = []
+        used = set()
+        for lo, hi in buckets:
+            for exp, dte in dated:
+                if exp in used:
+                    continue
+                if lo <= dte < hi:
+                    picked.append(exp)
+                    used.add(exp)
+                    break
+        # If fewer than 6, pad with the next nearest unused
+        for exp, _ in dated:
+            if len(picked) >= 8:
+                break
+            if exp not in used:
+                picked.append(exp)
+                used.add(exp)
+        picked.sort()
+        return picked[:8]
 
     # ------------------------------------------------------------------ #
 

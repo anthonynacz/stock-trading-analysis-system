@@ -3,7 +3,11 @@ import { NavLink } from 'react-router-dom';
 const links = [
   { to: '/', label: 'Dashboard' },
   { to: '/universe', label: 'Universe' },
+  { to: '/industries', label: 'Industries' },
   { to: '/research', label: 'Research' },
+  { to: '/options-lab', label: 'Options Lab' },
+  { to: '/scanner', label: 'Scanner' },
+  { to: '/charts', label: 'Charts' },
   { to: '/positions', label: 'Positions' },
   { to: '/knowledge', label: 'Knowledge' },
 ] as const;

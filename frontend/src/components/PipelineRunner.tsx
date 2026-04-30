@@ -10,6 +10,43 @@ const ALL_PHASES = [
   { key: 'news', label: 'News' },
   { key: 'options', label: 'Options' },
   { key: 'recommendations', label: 'Recs' },
+  { key: 'industries', label: 'Industries' },
+];
+
+// Curated quick-run presets — selective phase sets for common workflows.
+// Full Pipeline is the morning-run preset: every phase, fresh universe
+// rotation, full data refresh. Intraday Update is the same-day re-run
+// preset: skips slow / once-a-day phases (discovery, watchlist rotation,
+// earnings calendar, analyst ratings) and re-runs only price-sensitive
+// ones — uses ~half the API quota and populates the REV badge / prior
+// values on each existing same-day row.
+const PRESETS: {
+  key: string;
+  label: string;
+  description: string;
+  phases: string[];
+  iconPath: string;
+  iconColor: string;
+}[] = [
+  {
+    key: 'full',
+    label: 'Full Pipeline',
+    description: 'All 8 phases — fresh universe + full refresh',
+    phases: [
+      'discovery', 'watchlist', 'ratings', 'earnings',
+      'news', 'options', 'recommendations', 'industries',
+    ],
+    iconPath: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
+    iconColor: 'text-green-400',
+  },
+  {
+    key: 'intraday',
+    label: 'Intraday Update',
+    description: 'News + Options + Recs + Industries (skip slow phases)',
+    phases: ['news', 'options', 'recommendations', 'industries'],
+    iconPath: 'M13 10V3L4 14h7v7l9-11h-7z',
+    iconColor: 'text-purple-400',
+  },
 ];
 
 const PHASE_COLORS: Record<string, string> = {
@@ -45,6 +82,26 @@ export default function PipelineRunner({ onComplete }: Props) {
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  // Rehydrate on mount — if the backend has a pipeline running (e.g. user
+  // triggered it, navigated to another page, then came back), pick up the
+  // in-flight state so the progress indicator reappears.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await getPipelineStatus();
+        if (!cancelled && status.status === 'running') {
+          setRun(status);
+        }
+      } catch {
+        // ignore — no backend means no rehydration
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Poll pipeline status while running
@@ -250,7 +307,34 @@ export default function PipelineRunner({ onComplete }: Props) {
 
       {/* Phase picker dropdown */}
       {showMenu && (
-        <div className="absolute right-0 top-full mt-1 bg-card border border-border rounded-lg shadow-lg z-50 py-1 min-w-[180px]">
+        <div className="absolute right-0 top-full mt-1 bg-card border border-border rounded-lg shadow-lg z-50 py-1 min-w-[230px]">
+          {/* Quick presets */}
+          <div className="px-3 pt-1 pb-1 text-[9px] uppercase tracking-wider text-text-secondary">
+            Quick run
+          </div>
+          {PRESETS.map((preset) => (
+            <button
+              key={preset.key}
+              onClick={() => handleStart(preset.phases)}
+              className="w-full text-left px-3 py-1.5 hover:bg-border/40 transition-colors group"
+              title={preset.description}
+            >
+              <div className="flex items-center gap-2 text-xs text-text-primary">
+                <svg className={`w-3 h-3 ${preset.iconColor}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d={preset.iconPath} />
+                </svg>
+                <span className="font-medium">{preset.label}</span>
+              </div>
+              <div className="text-[10px] text-text-secondary pl-5 mt-0.5">
+                {preset.description}
+              </div>
+            </button>
+          ))}
+
+          {/* Individual phases */}
+          <div className="border-t border-border mt-1 px-3 pt-1 pb-1 text-[9px] uppercase tracking-wider text-text-secondary">
+            Custom phases
+          </div>
           {ALL_PHASES.map((phase) => (
             <label
               key={phase.key}

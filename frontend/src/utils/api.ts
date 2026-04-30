@@ -19,6 +19,18 @@ import type {
   DiscoveryCandidate,
   Position,
   PositionCreateRequest,
+  DeepOptionsAnalysis,
+  ScannerResult,
+  ScannerUniverseItem,
+  ScannerDates,
+  ScannerRunStatus,
+  ScannerTier,
+  IndustryRecommendation,
+  IndustryDetail,
+  IndustryHistoryPoint,
+  ChartResponse,
+  ChartDatasetsResponse,
+  ChartDatasetKey,
 } from '../types';
 
 const api = axios.create({ baseURL: '/api' });
@@ -42,7 +54,8 @@ export const getWatchlist = (sector?: string, date?: string) =>
     .then((r) => r.data);
 
 const REC_NUMERIC = [
-  'conviction_score', 'current_price', 'target_price', 'stop_loss_price',
+  'conviction_score', 'prior_conviction_score',
+  'current_price', 'target_price', 'stop_loss_price',
 ];
 const OPT_NUMERIC = [
   'strike', 'premium_estimate', 'delta_estimate', 'breakeven_price',
@@ -81,6 +94,7 @@ export const getNews = (params?: {
   mode?: string;
   category?: string;
   impact_level?: string;
+  industry?: string;
   min_relevance?: number;
   limit?: number;
 }) =>
@@ -208,6 +222,34 @@ export const getResearchResult = (id: number) =>
 export const deleteResearchResult = (id: number) =>
   api.delete(`/research/${id}`);
 
+// ── Deep Options Analysis ────────────────────────────────────────────────
+
+const DEEP_OPT_NUMERIC = [
+  'stock_price', 'iv_rank', 'iv_percentile', 'conviction_score',
+];
+
+function parseDeepOptions(d: DeepOptionsAnalysis): DeepOptionsAnalysis {
+  return parseNumericFields(d, DEEP_OPT_NUMERIC);
+}
+
+export const analyzeDeepOptions = (ticker: string) =>
+  api
+    .post<DeepOptionsAnalysis>(`/options/deep/${ticker}`)
+    .then((r) => parseDeepOptions(r.data));
+
+export const getDeepOptionsResults = (ticker?: string, limit = 50, offset = 0) =>
+  api
+    .get<DeepOptionsAnalysis[]>('/options/deep', {
+      params: { ticker, limit, offset },
+    })
+    .then((r) => r.data.map(parseDeepOptions));
+
+export const getDeepOptionsResult = (id: number) =>
+  api.get<DeepOptionsAnalysis>(`/options/deep/${id}`).then((r) => parseDeepOptions(r.data));
+
+export const deleteDeepOptionsResult = (id: number) =>
+  api.delete(`/options/deep/${id}`);
+
 // ── Universe ────────────────────────────────────────────────────────────────
 
 export const getUniverse = () =>
@@ -272,6 +314,101 @@ export const deletePosition = (id: number) =>
 
 export const refreshPositionPrice = (id: number) =>
   api.post<Position>(`/positions/${id}/refresh-price`).then((r) => parsePosition(r.data));
+
+// ── Multi-bagger scanner ────────────────────────────────────────────────
+
+const SCANNER_NUMERIC = [
+  'composite_score',
+  'price',
+  'market_cap',
+  'stock_age_months',
+  'return_12m',
+  'return_6m',
+  'momentum_percentile',
+  'rev_growth_latest',
+  'rev_growth_prior',
+  'rev_accel_pp',
+  'gross_margin_latest',
+  'gross_margin_prior',
+  'margin_delta_pp',
+  'avg_pt',
+  'pt_chase_ratio',
+];
+
+export const getScannerUniverse = () =>
+  api.get<ScannerUniverseItem[]>('/scanner/universe').then((r) => r.data);
+
+export const addScannerUniverse = (ticker: string, theme?: string) =>
+  api
+    .post<ScannerUniverseItem>('/scanner/universe', { ticker, theme })
+    .then((r) => r.data);
+
+export const removeScannerUniverse = (ticker: string) =>
+  api.delete(`/scanner/universe/${ticker}`);
+
+export const getScannerDates = () =>
+  api.get<ScannerDates>('/scanner/dates').then((r) => r.data);
+
+export const getScannerResults = (params?: {
+  date?: string;
+  tier?: ScannerTier;
+  theme?: string;
+}) =>
+  api
+    .get<ScannerResult[]>('/scanner/results', { params })
+    .then((r) => r.data.map((x) => parseNumericFields(x, SCANNER_NUMERIC)));
+
+export const runScanner = () =>
+  api.post<{ status: string }>('/scanner/run').then((r) => r.data);
+
+export const getScannerStatus = () =>
+  api.get<ScannerRunStatus>('/scanner/status').then((r) => r.data);
+
+
+// ── Industries (sector-level) ──────────────────────────────────────────
+
+const INDUSTRY_NUMERIC = [
+  'conviction_score',
+  'breadth_positive_pct',
+  'breadth_above_50d_pct',
+  'cap_weighted_conviction',
+  'etf_rsi_14',
+  'etf_momentum_20d',
+  'avg_news_sentiment',
+  'geopolitical_points',
+];
+
+export const getIndustries = (date?: string) =>
+  api
+    .get<IndustryRecommendation[]>('/industries', { params: { date } })
+    .then((r) => r.data.map((x) => parseNumericFields(x, INDUSTRY_NUMERIC)));
+
+export const getIndustryDetail = (industry: string) =>
+  api
+    .get<IndustryDetail>(`/industries/${encodeURIComponent(industry)}`)
+    .then((r) => {
+      const d = r.data;
+      return {
+        ...d,
+        latest: parseNumericFields(d.latest, INDUSTRY_NUMERIC),
+        history: d.history.map((h) =>
+          parseNumericFields<IndustryHistoryPoint>(h, ['conviction_score']),
+        ),
+        members: d.members,
+      };
+    });
+
+
+// ── Charts (dynamic visualization builder) ──────────────────────────────
+
+export const getChartDatasets = () =>
+  api.get<ChartDatasetsResponse>('/charts/datasets').then((r) => r.data);
+
+export const runChartQuery = (dataset: ChartDatasetKey, spec: Record<string, unknown>) =>
+  api
+    .post<ChartResponse>('/charts/query', { dataset, spec })
+    .then((r) => r.data);
+
 
 // ── Reports ──────────────────────────────────────────────────────────────
 

@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import OptionsSnapshot, SuggestedOption
 from utils.data_sources import DataSourceClient
 from utils.greeks import RISK_FREE_RATE, compute_greeks
-from utils.scoring import calculate_iv_rank
+from utils.iv_history import compute_iv_rank_and_percentile
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +85,7 @@ class OptionsAnalyzer:
             expirations = list(chains.keys())
             num_expirations = len(expirations)
 
-            # Collect IV values, volumes, and open interest across all contracts
-            all_ivs: list[float] = []
+            # Collect volumes and open interest across all contracts
             total_call_volume = 0
             total_put_volume = 0
             total_call_oi = 0
@@ -95,9 +94,6 @@ class OptionsAnalyzer:
 
             for exp, sides in chains.items():
                 for contract in sides.get("calls", []):
-                    iv = contract.get("impliedVolatility")
-                    if iv is not None and not (isinstance(iv, float) and math.isnan(iv)) and iv > 0:
-                        all_ivs.append(iv)
                     vol = _safe_int(contract.get("volume"))
                     oi = _safe_int(contract.get("openInterest"))
                     total_call_volume += vol
@@ -113,9 +109,6 @@ class OptionsAnalyzer:
                         })
 
                 for contract in sides.get("puts", []):
-                    iv = contract.get("impliedVolatility")
-                    if iv is not None and not (isinstance(iv, float) and math.isnan(iv)) and iv > 0:
-                        all_ivs.append(iv)
                     vol = _safe_int(contract.get("volume"))
                     oi = _safe_int(contract.get("openInterest"))
                     total_put_volume += vol
@@ -130,14 +123,21 @@ class OptionsAnalyzer:
                             "ratio": round(vol / oi, 2),
                         })
 
-            # IV rank: use ATM IV as current, max/min across all contracts as proxy
+            # IV rank: prefer historical ATM IV over last year of snapshots;
+            # fall back to a stabilized cross-sectional proxy when history is thin.
             iv_rank_value: float | None = None
-            if all_ivs and stock_price:
-                atm_iv = self._find_atm_iv(chains, stock_price)
-                if atm_iv is not None:
-                    iv_high = max(all_ivs)
-                    iv_low = min(all_ivs)
-                    iv_rank_value = calculate_iv_rank(atm_iv, iv_high, iv_low)
+            iv_pct_value: float | None = None
+            atm_iv_value: float | None = None
+            if stock_price:
+                atm_iv_value = self._find_atm_iv(chains, stock_price)
+                if atm_iv_value is not None:
+                    iv_rank_value, iv_pct_value, _src = await compute_iv_rank_and_percentile(
+                        self._session,
+                        ticker,
+                        atm_iv_value,
+                        chains=chains,
+                        spot=stock_price,
+                    )
 
             # Put/call ratio
             put_call_ratio: float | None = None
@@ -174,8 +174,9 @@ class OptionsAnalyzer:
             snapshot = OptionsSnapshot(
                 ticker=ticker,
                 stock_price=_safe_decimal(stock_price),
+                atm_iv=_safe_decimal(round(atm_iv_value, 4)) if atm_iv_value is not None else None,
                 iv_rank=_safe_decimal(round(iv_rank_value, 2)) if iv_rank_value is not None else None,
-                iv_percentile=None,
+                iv_percentile=_safe_decimal(round(iv_pct_value, 2)) if iv_pct_value is not None else None,
                 put_call_ratio=(
                     _safe_decimal(round(put_call_ratio, 3))
                     if put_call_ratio is not None
