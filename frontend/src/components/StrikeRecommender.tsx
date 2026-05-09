@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 import type { StrikeAllResult, StrikeRecommendation } from '../types';
 import { getStrikeRecommendationsAll } from '../utils/api';
 
@@ -70,7 +71,10 @@ function StrikeCard({
 }
 
 export default function StrikeRecommender({ ticker }: StrikeRecommenderProps) {
-  const [activeTab, setActiveTab] = useState<RiskLevel>('moderate');
+  const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState<RiskLevel>(
+    (user?.risk_profile as RiskLevel) ?? 'moderate',
+  );
   const [budget, setBudget] = useState(2000);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<StrikeAllResult | null>(null);

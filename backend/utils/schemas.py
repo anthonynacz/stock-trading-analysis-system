@@ -160,6 +160,10 @@ class RecommendationResponse(BaseModel):
     action: str
     sector: Optional[str] = None
     conviction_score: Optional[Decimal] = None
+    # User-personalized read-time fields. When the user's signal_group_weights
+    # are all 1.0 (or the user has none), these mirror the raw values.
+    weighted_conviction_score: Optional[Decimal] = None
+    weighted_action: Optional[str] = None
     signal_count: Optional[int] = None
     signals: Optional[list[dict[str, Any]]] = None
     rationale: Optional[str] = None
@@ -414,6 +418,11 @@ class PositionResponse(BaseModel):
     days_to_expiry: Optional[int] = None
     is_on_watchlist: bool = False
     recommendation: Optional[RecommendationResponse] = None
+    # Position-aware overlay flags. Each entry is a dict with:
+    #   { code, severity (info|warn|critical), message }
+    # Codes: SIGNAL_CONFLICT, DTE_WARNING, CONVICTION_DROP, STOP_BREACH,
+    #        TARGET_HIT, EXPIRED.
+    health_flags: list[dict] = []
 
 
 # ── Multi-bagger scanner ────────────────────────────────────────────────────
@@ -491,6 +500,10 @@ class IndustryRecommendationResponse(BaseModel):
     industry: str
     action: str
     conviction_score: Decimal
+    # User-personalized: raw conviction × industry_weight from prefs.
+    # Equals conviction_score when no weighting is applied.
+    weighted_conviction_score: Optional[Decimal] = None
+    industry_weight: Optional[Decimal] = None
     signal_count: int
     member_count: Optional[int] = None
     bullish_count: Optional[int] = None
@@ -519,11 +532,37 @@ class IndustryHistoryPoint(BaseModel):
     signal_count: int
 
 
+class IndustryForwardPoint(BaseModel):
+    """One day of the 5-day forward conviction projection."""
+
+    forecast_date: date
+    day_offset: int  # +1..+5, calendar days from today
+    conviction_score: Decimal
+    action: str  # mapped from band same as live recs
+
+
+class IndustryTopComponent(BaseModel):
+    """Snapshot of a top member ticker's recommendation + financials."""
+
+    ticker: str
+    company_name: Optional[str] = None
+    action: str
+    conviction: Decimal
+    price: Optional[Decimal] = None
+    market_cap: Optional[Decimal] = None
+    pe_ratio: Optional[Decimal] = None
+    pct_from_52w_high: Optional[Decimal] = None
+    sector_industry: Optional[str] = None  # yfinance fine-grained industry
+
+
 class IndustryDetailResponse(BaseModel):
     industry: str
     latest: IndustryRecommendationResponse
     history: list[IndustryHistoryPoint]
     members: list[RecommendationResponse]  # today's recs for sector members
+    executive_summary: Optional[str] = None
+    top_components: list[IndustryTopComponent] = []
+    forward_outlook: list[IndustryForwardPoint] = []
 
 
 # ── Charts (dynamic visualization builder) ─────────────────────────────────

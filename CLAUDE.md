@@ -6,15 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 EdgeFlow is an automated daily analyst-rating-to-options-trade recommendation engine. It monitors analyst upgrades/downgrades, earnings catalysts, market news, and options flow data to generate actionable trade recommendations with strike-level options suggestions. Full-stack app: FastAPI backend, React/TypeScript frontend, PostgreSQL database, all containerized with Docker Compose.
 
+**Branding:** the codebase, container names, DB user, and FastAPI title are all "EdgeFlow" internally. The hosted SaaS product brand is **Vela** (see `vela-strategy.html` at the project root). User-facing UI strings (AppNav title) say "Vela"; everything else stays EdgeFlow until a full rebrand pass is justified.
+
 ## Architecture
 
 ```
 edgeflow/
 ├── backend/         # Python 3.12, FastAPI, SQLAlchemy, APScheduler
 │   ├── main.py      # FastAPI entrypoint
-│   ├── config.py    # Env vars, API keys, sector universe, constants
+│   ├── config.py    # Env vars, API keys, sector universe, constants, auth/JWT settings
+│   ├── auth/        # JWT verifier, get_current_user dependency, dev-token mint
 │   ├── db/          # PostgreSQL schema (init_db.py), SQLAlchemy models, connection pool
-│   ├── services/    # Core business logic (see Service Layer below)
+│   ├── services/    # Core business logic — pipeline phases + entitlements.py (tier+credits)
 │   ├── api/         # REST routes (routes.py)
 │   └── utils/
 │       ├── data_sources.py   # API clients (FMP, yfinance, Finnhub, NewsAPI)
@@ -22,30 +25,24 @@ edgeflow/
 │       └── finbert.py        # FinBERT sentiment model (ProsusAI/finbert)
 ├── frontend/        # React 18 + TypeScript, Vite, Tailwind CSS
 │   └── src/
-│       ├── App.tsx                     # BrowserRouter with all routes
+│       ├── App.tsx                     # BrowserRouter; AuthProvider + EntitlementsProvider; RequireAuth on every protected route
+│       ├── contexts/
+│       │   ├── AuthContext.tsx         # Fetches /api/me, holds token in localStorage, axios interceptor
+│       │   ├── EntitlementsContext.tsx # Fetches /api/me/entitlements, exposes tier/credits/isAdmin
+│       │   └── ResearchContext.tsx, OptionsLabContext.tsx
 │       ├── pages/
-│       │   ├── Dashboard.tsx           # Main dashboard with date stepper
-│       │   ├── ResearchPage.tsx        # On-demand single-ticker analysis page
-│       │   ├── PositionsPage.tsx       # Portfolio tracking with P&L and rec overlay
-│       │   └── KnowledgePage.tsx       # Signal docs, trading guide, classification
+│       │   ├── LoginPage.tsx           # Dev-token mint fallback (real auth provider TBD)
+│       │   ├── Dashboard.tsx, ResearchPage.tsx, PositionsPage.tsx, KnowledgePage.tsx, ...
 │       ├── components/
-│       │   ├── AppNav.tsx              # Top navigation (all pages)
-│       │   ├── WatchlistGrid.tsx       # Sector-grouped stock cards with lock/manual badges
-│       │   ├── WatchlistChanges.tsx    # Entrants/exiters bar
-│       │   ├── TickerDetail.tsx        # Right panel: price, signals, options flow, strike recommender
-│       │   ├── ResearchDetail.tsx      # Research result detail panel
-│       │   ├── StrikeRecommender.tsx   # Risk-profiled options strike recommendations
-│       │   ├── RecommendationCard.tsx  # Expandable rec cards with signal bullets
-│       │   ├── StatusBar.tsx           # Date stepper, refresh, system status
-│       │   ├── CatalystCalendar.tsx    # Upcoming earnings with countdown
-│       │   ├── NewsTimeline.tsx        # Scrollable news feed with ticker badges
-│       │   ├── NewsModeSelector.tsx    # News mode toggle (All/Watchlist/Ticker)
-│       │   └── TrendChart.tsx          # Recharts dual line charts with SMA overlays
+│       │   ├── AppNav.tsx              # Top nav: tier badge, credit widget, LEGACY chip, sign-out
+│       │   ├── RequireAuth.tsx         # Redirects to /login when user is null
+│       │   └── ... (TickerDetail, RecommendationCard, StrikeRecommender, etc.)
 │       ├── hooks/useEdgeFlow.ts        # Data fetching hooks with polling
 │       ├── types/index.ts              # TypeScript interfaces
-│       └── utils/api.ts                # Axios API client
-├── docker-compose.yml   # postgres:16 + backend + frontend
-└── .env                 # API keys (FMP, Finnhub, NewsAPI, DATABASE_URL)
+│       └── utils/api.ts                # Axios client; interceptor attaches Bearer <token>
+├── docker-compose.yml             # postgres:16 + backend + frontend
+├── docker-compose.auth-test.yml   # Override layering JWT mode env vars for smoke tests
+└── .env                           # API keys (FMP, Finnhub, NewsAPI, DATABASE_URL, JWT_*, LEGACY_*)
 ```
 
 ### Service Layer (backend/services/)
@@ -164,21 +161,79 @@ asyncio.run(rescore())
 
 ## Database
 
-PostgreSQL 16. Key tables: `sectors`, `universe_stocks`, `discovery_candidates`, `watchlist`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `news_ticker_relevance`, `options_snapshots`, `suggested_options`, `recommendations`, `strike_snapshots`, `research_results`, `deep_options_analyses`, `positions`, `multibagger_universe`, `multibagger_snapshot`, `industry_recommendations`. Schema created via `db/init_db.py` using SQLAlchemy models from `db/models.py`. The `recommendations` table must be created before `suggested_options` (FK dependency). `universe_stocks` is seeded from `config.SECTORS` on first init. `multibagger_universe` is seeded from `services/multibagger_seed.py` (~95 growth-candidate tickers across 11 themes).
+PostgreSQL 16. Tables fall into three groups:
 
-All `DateTime` columns use `DateTime(timezone=True)` (maps to PostgreSQL `TIMESTAMPTZ`). This is required because asyncpg strictly rejects tz-aware Python datetimes for `TIMESTAMP WITHOUT TIME ZONE` columns. Schema changes require dropping and recreating tables (no Alembic migrations yet).
+**Shared / pipeline-owned** (no `user_id`): `sectors`, `universe_stocks`, `discovery_candidates`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `news_ticker_relevance`, `options_snapshots`, `suggested_options`, `recommendations`, `multibagger_snapshot`, `industry_recommendations`. Written by the daily APScheduler pipeline; read by every user.
+
+**User-owned** (have `user_id` FK to `users`): `watchlist`, `positions`, `strike_snapshots`, `research_results`, `deep_options_analyses`, `multibagger_universe`, `chart_configs`. Routes scope reads/writes by `current_user.id`. **Note:** `watchlist` and `multibagger_universe` carry the column but per-user route scoping is deferred to the Custom Universe Slots feature — the daily pipeline still writes them globally.
+
+**SaaS / auth** (multi-tenancy): `users`, `subscriptions`, `credit_balances`, `credit_ledger`, `chart_configs`. See "Multi-tenancy & Auth" and "Entitlements & Credits" below.
+
+**Schema is owned by Alembic** (`backend/alembic/`). The container's `entrypoint.sh` runs `alembic upgrade head` before uvicorn starts, so the DB is always at the latest revision when the app boots. Migrations live in `backend/alembic/versions/`. The baseline (`5de04647a468_baseline_schema.py`) delegates to `Base.metadata.create_all` — `db/models.py` is the source of truth for schema; subsequent migrations are autogen diffs against that.
+
+`db/init_db.py` is **seed-only** post-Alembic adoption — it inserts data (legacy admin user, sectors, multibagger universe, dev test user) but never alters tables. Idempotent and safe to run on every startup.
+
+Workflow for a schema change:
+```
+# 1. Edit db/models.py
+# 2. Generate migration
+docker compose exec backend alembic revision --autogenerate -m "your_change"
+# 3. Review the generated file in backend/alembic/versions/
+# 4. Apply locally
+docker compose exec backend alembic upgrade head
+# 5. Commit + deploy — entrypoint.sh runs `alembic upgrade head` on prod startup
+```
+
+All `DateTime` columns use `DateTime(timezone=True)` (maps to PostgreSQL `TIMESTAMPTZ`). This is required because asyncpg strictly rejects tz-aware Python datetimes for `TIMESTAMP WITHOUT TIME ZONE` columns.
 
 ### Key Columns Added After Initial Schema
 
 These columns were added via `ALTER TABLE` and may need to be re-added if the database is recreated from models alone:
-- `watchlist.is_manual` — `BOOLEAN NOT NULL DEFAULT FALSE` — marks manually-added tickers
-- `watchlist.is_locked` — `BOOLEAN NOT NULL DEFAULT FALSE` — locks tickers from auto-rotation
-- `watchlist_daily_snapshot` — `UNIQUE(snapshot_date, ticker)` constraint (`uq_snapshot_date_ticker`)
-- `options_snapshots.atm_iv` — `NUMERIC(6,4)` — persisted near-ATM implied vol used to compute historical IV rank across ≥20 snapshots. See `utils/iv_history.py`.
-- `recommendations.prior_action` — `VARCHAR(20)` — captures action of overwritten same-day rec (revision diff)
-- `recommendations.prior_conviction_score` — `NUMERIC(5,2)` — captures conviction of overwritten same-day rec
-- `recommendations.revision_number` — `INTEGER NOT NULL DEFAULT 0` — 0 = first run, increments on each same-day overwrite
-- `recommendations.revised_at` — `TIMESTAMPTZ` — timestamp of most recent overwrite (null on first run)
+- `watchlist.is_manual`, `watchlist.is_locked` — `BOOLEAN NOT NULL DEFAULT FALSE`
+- `watchlist_daily_snapshot` — `UNIQUE(snapshot_date, ticker)` (`uq_snapshot_date_ticker`)
+- `options_snapshots.atm_iv` — `NUMERIC(6,4)` — persisted near-ATM IV for historical IV rank (`utils/iv_history.py`)
+- `recommendations.prior_action / prior_conviction_score / revision_number / revised_at` — same-day revision tracking
+- **All user-owned tables** — `user_id INTEGER REFERENCES users(id)` added by `_ensure_user_id_columns()` in `init_db.py` on first startup after the retrofit. Idempotent.
+
+## Multi-tenancy & Auth
+
+**`LEGACY_MODE` (default `True`).** Bypasses all JWT verification; every authenticated route receives the legacy admin user (`role=ADMIN`, email from `LEGACY_USER_EMAIL`). Frontend works without a login screen. **This is the current default** — flip to `False` only when frontend auth integration is wired to a real provider.
+
+**Provider-agnostic JWT verifier** (`backend/auth/middleware.py`). Configure ONE of:
+- `JWT_JWKS_URL` — for OIDC providers (Supabase Auth / Clerk / Auth0). Verifier fetches the JWKS, validates signature + issuer + audience.
+- `JWT_HS256_SECRET` — for HS256-signed tokens (dev / simple flows).
+
+**`get_current_user` FastAPI dependency.** Either returns the legacy admin (LEGACY_MODE) or validates `Authorization: Bearer <jwt>` and upserts a `User` row keyed by `(provider=iss, provider_user_id=sub)`. Email-based linking only happens for users with no `provider_user_id` (i.e., the legacy admin first time it logs in via real auth). **Cross-tenant access returns 404, not 403** — it doesn't leak the existence of other users' rows. Every authenticated request idempotently calls `ensure_subscription` (cheap SELECT when row exists) so pre-retrofit users self-heal.
+
+**Dev-token endpoint.** `POST /api/dev/token { email }` mints a short-lived HS256 JWT for local testing. Gated by `DEV_TOKEN_ENABLED=true` AND a `JWT_HS256_SECRET`. **Never enable in production** — it lets anyone mint a token for any email.
+
+**Smoke-testing JWT mode.** Use the override file:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.auth-test.yml up -d backend
+# revert: docker compose up -d backend
+```
+
+## Entitlements & Credits
+
+Service: `backend/services/entitlements.py`. The SaaS gatekeeper. Every gated route calls `check_and_consume(db, user, "research")` (or `"deep_options"`, `"scanner"`) before doing expensive work.
+
+**Tier registry** (`ENTITLEMENTS` dict): FREE / STARTER / PRO / PREMIUM / ADMIN. Each tier defines monthly credit quotas, feature flags (`alerts_enabled`, `custom_signal_weights`, `position_aware_recs`, `api_access`, `real_time_data`), and numeric caps (`max_watchlist_tickers`, `max_open_positions`, `max_universe_slots`, `research_retention_days`). The `UNLIMITED = 1_000_000` sentinel represents "no cap"; frontend renders as `∞` via `fmtCount(n, sentinel)`.
+
+**Tier resolution.** `get_tier_for(user, sub)`:
+1. `user.role == "ADMIN"` → ADMIN tier (overrides any subscription, no DB writes during consume)
+2. No subscription OR sub.status not in (ACTIVE, TRIAL) → FREE
+3. Otherwise → `sub.tier`
+
+**Credit lifecycle.** Three tables:
+- `subscriptions` — one per user; `tier`, `status`, `current_period_end`, `external_provider`, `external_subscription_id`. Stripe webhook target.
+- `credit_balances` — `(user_id, feature)` → live `balance` + `last_grant_at`.
+- `credit_ledger` — append-only audit (`delta`, `balance_after`, `reason`, `ref_id`).
+
+**Lazy monthly grants.** `check_and_consume` rolls a 30-day window keyed off `last_grant_at`: if elapsed, balance is RESET (not added) to the tier's monthly quota and a `monthly_grant` ledger row is written before the consume. Replaced by Stripe `invoice.payment_succeeded` webhook handling once billing ships. Monthly grants are "use it or lose it"; **purchased credit packs go through `grant_credits` with `reason="credit_pack"` and ARE additive — they never expire.**
+
+**Errors.** `QuotaExceeded` raises 402 with `{"error": "quota_exceeded", ...}`. `FeatureLocked` raises 402 with `{"error": "feature_locked", ...}` when the user's tier has zero monthly quota AND no purchased packs (different upgrade message).
+
+**Currently gated:** `POST /research/{ticker}` consumes `research`. `POST /options/deep/{ticker}` and `POST /scanner/run` are NOT gated yet — wire them similarly when needed.
 
 ## Async SQLAlchemy Gotchas
 
@@ -196,7 +251,12 @@ yfinance returns inconsistent types that cause asyncpg crashes if not sanitized:
 
 ## API Endpoints
 
+User-owned endpoints (positions, research, deep-options, strikes/snapshots) are **scoped by `current_user.id`**: reads filter, writes set, cross-tenant id access returns 404. ADMIN role (legacy user) bypasses entitlement gating.
+
 ```
+GET  /api/me                           # Current user (id, email, role, provider, legacy_mode)
+GET  /api/me/entitlements              # Tier + feature flags + monthly quotas + credit balances
+POST /api/dev/token                    # Mint dev HS256 JWT { email } (gated by DEV_TOKEN_ENABLED)
 GET  /api/watchlist                    # Active watchlist with status tags; ?date= for historical
 GET  /api/watchlist/history            # Historical snapshots; ?ticker=&days=
 GET  /api/watchlist/changes            # Entrants/exiters for a date; ?date=
@@ -258,9 +318,18 @@ POST /api/charts/query                 # Run chart query — { dataset, spec } �
 
 ## Frontend
 
+### Auth + Provider Hierarchy
+
+`App.tsx` wraps every route in `AuthProvider` → `EntitlementsProvider` → (other context providers). Every protected page is wrapped in `<RequireAuth>` which redirects to `/login` when `user` is null (won't happen in LEGACY_MODE; the legacy admin always resolves). `/login` is the only public route.
+
+- `AuthContext` — fetches `/api/me` on mount + on token change; persists token in `localStorage["vela.access_token"]`. Axios `request` interceptor in `utils/api.ts` attaches `Authorization: Bearer <token>` automatically (no-op when no token).
+- `EntitlementsContext` — fetches `/api/me/entitlements`; exposes `data / isAdmin / isUnlimited(n) / refresh`. `fmtCount(n, sentinel)` renders `∞` when `n >= sentinel`.
+- `LoginPage` — email-only form that calls `POST /api/dev/token`. **Real auth provider integration is deferred** — when adopted (Supabase / Clerk / Auth0), replace this page's body but keep the `setToken` → `refresh()` → navigate flow intact.
+- `AppNav` — top nav rebranded **Vela**. Right side: 🔬 credit balance widget (research credits this period / monthly quota), tier chip (FREE/STARTER/PRO/PREMIUM/ADMIN, color-coded), `LEGACY` chip when backend is in legacy mode, user initials avatar, sign-out (only when an explicit token is held).
+
 ### Dashboard Layout
 
-The app uses react-router-dom with routes: `/` (Dashboard), `/universe` (Universe), `/research` (Research), `/positions` (Positions), `/knowledge` (Knowledge). A top nav bar (`AppNav`) links all pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
+The app uses react-router-dom with routes: `/` (Dashboard), `/universe` (Universe), `/research` (Research), `/options-lab` (Options Lab), `/scanner` (Scanner), `/industries` (Industries), `/charts` (Charts), `/positions` (Positions), `/knowledge` (Knowledge), `/login` (public). A top nav bar (`AppNav`) links all protected pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
 
 The Dashboard has the following sections:
 1. **StatusBar** — Date stepper (left/right arrows to navigate pipeline days), refresh button, system status
@@ -331,10 +400,21 @@ docker compose up --build -d
 ## Environment Variables
 
 ```
+# Data sources
 FINNHUB_API_KEY=     # Finnhub (60 calls/min free) — used for news; ratings fallback only
 NEWSAPI_KEY=         # NewsAPI.org (100 calls/day free) — news fallback
 FMP_API_KEY=         # Financial Modeling Prep (Starter $22/mo, 300 req/min) — primary for ratings, earnings, insider trades, news
 DATABASE_URL=postgresql+asyncpg://edgeflow:<password>@db:5432/edgeflow  # Docker internal
+
+# Auth / multi-tenancy
+LEGACY_MODE=true                      # default; bypasses JWT, returns legacy admin user
+LEGACY_USER_EMAIL=anthonynacouzy@gmail.com  # owner of all pre-retrofit rows
+JWT_JWKS_URL=                         # OIDC JWKS endpoint (Supabase / Clerk / Auth0)
+JWT_HS256_SECRET=                     # HS256 shared secret (dev / simple flows)
+JWT_ALGORITHMS=RS256,HS256            # comma-separated; matches the verifier's path
+JWT_AUDIENCE=                         # optional aud claim check
+JWT_ISSUER=                           # optional iss claim check
+DEV_TOKEN_ENABLED=false               # enables POST /api/dev/token — DEV ONLY
 ```
 
 For local dev, `.env` at project root with `DATABASE_URL` pointing to `localhost:<port>`. If local PostgreSQL occupies port 5432, map Docker db to another port (e.g., `5433:5432` in docker-compose.yml).
@@ -343,7 +423,10 @@ For local dev, `.env` at project root with `DATABASE_URL` pointing to `localhost
 
 - **Finnhub free tier**: The `/api/v1/stock/upgrade-downgrade` endpoint returns 403. Analyst ratings and insider trades use FMP as primary source; Finnhub serves as fallback only.
 - **FMP API key**: Required (Starter plan, $22/mo). Covers analyst ratings, earnings (with EPS estimates), insider trades, and stock news. Without it, all FMP methods gracefully fall back to Finnhub/yfinance. Rate limit: 300 requests/min, 20GB bandwidth/30 days (no daily call cap).
-- **No Alembic migrations**: Schema changes require dropping and recreating tables. On production, this means `docker compose down -v` to reset the pgdata volume. Manual columns (`is_manual`, `is_locked`) must be re-added via ALTER TABLE.
+- **Alembic adopted (May 2026).** Schema migrations live in `backend/alembic/versions/`. Container entrypoint runs `alembic upgrade head` before uvicorn. `db/models.py` is the source of truth — generate diffs via `alembic revision --autogenerate -m "..."` and review before applying.
+- **`strike_snapshots` unique constraint**: Currently `UNIQUE(snapshot_date, ticker)` — global, not per-user. In LEGACY_MODE this is fine (one user); in JWT mode two different users saving the same `(date, ticker)` will collide. Fix when adopting Alembic: change to `UNIQUE(snapshot_date, ticker, user_id)`.
+- **Watchlist + multibagger universe per-user scoping**: Tables have `user_id` columns (backfilled to legacy admin), but routes don't filter by user yet — the daily pipeline writes them globally. Per-user scoping is deferred to the Custom Universe Slots feature (see `vela-strategy.html` §2).
+- **Container timezone is UTC**: `date.today()` returns the UTC date, not US Eastern. CLAUDE.md says "All times US Eastern" for the scheduler, but that's intent — the container has no `TZ` env set. Mismatches happen in the 00:00–04:00 UTC window (= 8 PM–midnight EDT). Fix by adding `TZ: America/New_York` to the backend service in `docker-compose.yml` if it bites.
 - **FinBERT first load**: Model downloads ~500MB from HuggingFace on first pipeline run. Subsequent runs use cached model. Container restarts re-download unless a volume is mounted for the HF cache.
 - **yfinance weekend data**: Prices and volumes are stale on weekends/off-hours. Pipeline runs on non-trading days will produce similar recommendations.
 

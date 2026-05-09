@@ -1,0 +1,999 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Vela — SaaS Monetization Strategy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:ital,wght@0,500;0,600;1,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --navy: #0a2540;
+      --navy-soft: #14365a;
+      --teal: #06b6d4;
+      --teal-soft: #67e8f9;
+      --gold: #d4af37;
+      --bg: #fafbfc;
+      --bg-card: #ffffff;
+      --bg-quote: #f4f6fb;
+      --text: #1a1f36;
+      --text-muted: #5a6b85;
+      --rule: #e5e9f0;
+      --rule-strong: #c9d2e0;
+      --good: #16a34a;
+      --warn: #d97706;
+      --bad:  #dc2626;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      line-height: 1.6;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .page {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 0 28px 80px;
+    }
+
+    /* ───── Hero ───── */
+    .hero {
+      background: linear-gradient(135deg, #0a2540 0%, #14365a 60%, #1f4d7a 100%);
+      color: #f8fafc;
+      padding: 72px 28px 64px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 85% 30%, rgba(103, 232, 249, 0.18), transparent 35%),
+        radial-gradient(circle at 15% 80%, rgba(212, 175, 55, 0.10), transparent 30%);
+      pointer-events: none;
+    }
+    .hero-inner {
+      max-width: 920px;
+      margin: 0 auto;
+      position: relative;
+    }
+    .hero-mark {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .hero-mark svg { width: 38px; height: 38px; }
+    .hero-name {
+      font-family: 'Lora', Georgia, serif;
+      font-size: 38px;
+      font-weight: 600;
+      letter-spacing: -0.5px;
+      line-height: 1;
+    }
+    .hero-tagline {
+      font-size: 13px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--teal-soft);
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .hero h1 {
+      font-family: 'Lora', Georgia, serif;
+      font-size: 44px;
+      font-weight: 600;
+      line-height: 1.15;
+      letter-spacing: -0.5px;
+      margin: 4px 0 12px;
+      max-width: 760px;
+    }
+    .hero .lede {
+      font-size: 17px;
+      color: rgba(248, 250, 252, 0.86);
+      max-width: 700px;
+      line-height: 1.55;
+    }
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 24px;
+      margin-top: 28px;
+      font-size: 12px;
+      color: rgba(248, 250, 252, 0.7);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-weight: 500;
+    }
+    .meta-row b { color: rgba(255, 255, 255, 0.95); font-weight: 600; }
+
+    /* ───── TOC ───── */
+    .toc {
+      background: var(--bg-card);
+      border: 1px solid var(--rule);
+      border-radius: 12px;
+      padding: 22px 26px;
+      margin: 36px 0 40px;
+      box-shadow: 0 1px 2px rgba(10, 37, 64, 0.04);
+    }
+    .toc h3 {
+      margin: 0 0 12px;
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+    .toc ol {
+      column-count: 2;
+      column-gap: 32px;
+      padding-left: 22px;
+      margin: 0;
+      font-size: 14px;
+    }
+    .toc li {
+      padding: 3px 0;
+      break-inside: avoid;
+    }
+    .toc a {
+      color: var(--navy);
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 120ms;
+    }
+    .toc a:hover { border-bottom-color: var(--teal); }
+
+    /* ───── Sections ───── */
+    section {
+      margin: 56px 0;
+      scroll-margin-top: 24px;
+    }
+    h2 {
+      font-family: 'Lora', Georgia, serif;
+      font-size: 28px;
+      font-weight: 600;
+      line-height: 1.2;
+      letter-spacing: -0.3px;
+      color: var(--navy);
+      margin: 0 0 8px;
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+    }
+    h2 .num {
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      letter-spacing: 0.16em;
+      font-weight: 700;
+      color: var(--teal);
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+    h2 + .subhead {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin: 0 0 22px;
+      max-width: 720px;
+      font-style: italic;
+    }
+    h3 {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: -0.1px;
+      color: var(--navy);
+      margin: 28px 0 8px;
+    }
+    p { margin: 0 0 14px; }
+    ul, ol { padding-left: 22px; margin: 0 0 18px; }
+    ul li, ol li { margin: 6px 0; }
+    strong { color: var(--navy); font-weight: 600; }
+    em { color: var(--text-muted); }
+    a { color: var(--teal); }
+
+    /* ───── Pull-quote / callout ───── */
+    .callout {
+      border-left: 3px solid var(--teal);
+      background: var(--bg-quote);
+      padding: 16px 20px;
+      margin: 18px 0;
+      border-radius: 0 8px 8px 0;
+      font-size: 14.5px;
+    }
+    .callout.warn { border-left-color: var(--warn); background: #fef9f1; }
+    .callout.bad { border-left-color: var(--bad); background: #fef2f2; }
+    .callout.good { border-left-color: var(--good); background: #f0fdf4; }
+    .callout-label {
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--teal);
+      margin-bottom: 4px;
+    }
+    .callout.warn .callout-label { color: var(--warn); }
+    .callout.bad .callout-label { color: var(--bad); }
+    .callout.good .callout-label { color: var(--good); }
+
+    /* ───── Tables ───── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 18px 0;
+      font-size: 14px;
+      background: var(--bg-card);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 1px 2px rgba(10, 37, 64, 0.05);
+    }
+    th {
+      text-align: left;
+      padding: 10px 14px;
+      background: var(--navy);
+      color: #fff;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      font-size: 12.5px;
+    }
+    td {
+      padding: 10px 14px;
+      border-top: 1px solid var(--rule);
+      vertical-align: top;
+    }
+    tr:hover td { background: var(--bg-quote); }
+    td .price {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      color: var(--navy);
+    }
+    .featured { background: linear-gradient(90deg, #fffce8 0%, #fff 100%); }
+    .featured td:first-child::before {
+      content: '★';
+      color: var(--gold);
+      margin-right: 6px;
+    }
+
+    /* ───── Tier cards ───── */
+    .tiers {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 14px;
+      margin: 18px 0;
+    }
+    .tier {
+      background: var(--bg-card);
+      border: 1px solid var(--rule);
+      border-radius: 12px;
+      padding: 18px 16px;
+      transition: transform 150ms, box-shadow 150ms;
+    }
+    .tier:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(10, 37, 64, 0.08); }
+    .tier.flagship {
+      border-color: var(--teal);
+      background: linear-gradient(180deg, #f0fbfd 0%, #fff 60%);
+      position: relative;
+    }
+    .tier.flagship::before {
+      content: 'FLAGSHIP';
+      position: absolute;
+      top: -10px;
+      right: 14px;
+      background: var(--teal);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      padding: 3px 8px;
+      border-radius: 4px;
+    }
+    .tier-name {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+    .tier-name b { color: var(--navy); }
+    .tier-price {
+      font-family: 'Lora', Georgia, serif;
+      font-size: 26px;
+      font-weight: 600;
+      color: var(--navy);
+      margin: 0 0 12px;
+      line-height: 1.1;
+    }
+    .tier-price small {
+      font-family: 'Inter', sans-serif;
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+    .tier ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      font-size: 13px;
+    }
+    .tier li {
+      padding: 4px 0;
+      padding-left: 18px;
+      position: relative;
+      color: var(--text);
+    }
+    .tier li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 11px;
+      width: 8px;
+      height: 8px;
+      border: 1.5px solid var(--teal);
+      border-bottom: none;
+      border-right: none;
+      transform: rotate(135deg);
+    }
+
+    /* ───── Roadmap timeline ───── */
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin: 18px 0;
+    }
+    @media (max-width: 720px) {
+      .timeline { grid-template-columns: 1fr; }
+    }
+    .phase {
+      background: var(--bg-card);
+      border: 1px solid var(--rule);
+      border-radius: 12px;
+      padding: 18px;
+      position: relative;
+    }
+    .phase-when {
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--teal);
+      margin-bottom: 4px;
+    }
+    .phase-name {
+      font-family: 'Lora', Georgia, serif;
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--navy);
+      margin-bottom: 10px;
+    }
+    .phase ul { font-size: 13px; padding-left: 18px; margin: 0; }
+    .phase .target {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px dashed var(--rule-strong);
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--navy);
+    }
+
+    /* ───── Personalization grid ───── */
+    .pgrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }
+    .pcard {
+      background: var(--bg-card);
+      border: 1px solid var(--rule);
+      border-left: 3px solid var(--teal);
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-size: 13.5px;
+    }
+    .pcard h4 {
+      margin: 0 0 4px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--navy);
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .pcard h4 .effort {
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      padding: 2px 7px;
+      border-radius: 10px;
+      font-weight: 700;
+      background: var(--bg-quote);
+      color: var(--text-muted);
+    }
+    .pcard .effort.s { background: #ecfdf5; color: var(--good); }
+    .pcard .effort.m { background: #fef9f1; color: var(--warn); }
+    .pcard .effort.l { background: #fef2f2; color: var(--bad); }
+    .pcard .why { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+
+    /* ───── KPIs ───── */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      margin: 14px 0 24px;
+    }
+    .kpi {
+      background: var(--bg-card);
+      border: 1px solid var(--rule);
+      border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .kpi h4 {
+      margin: 0 0 8px;
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--teal);
+    }
+    .kpi ul { font-size: 13px; padding-left: 18px; margin: 0; }
+
+    /* ───── Verification list ───── */
+    .check-list { list-style: none; padding: 0; }
+    .check-list li {
+      padding-left: 28px;
+      position: relative;
+      margin: 8px 0;
+    }
+    .check-list li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 8px;
+      width: 16px;
+      height: 16px;
+      border: 1.5px solid var(--teal);
+      border-radius: 4px;
+    }
+
+    /* ───── Footer ───── */
+    .footer {
+      margin-top: 80px;
+      padding-top: 24px;
+      border-top: 1px solid var(--rule);
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    code {
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--bg-quote);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 0.9em;
+      color: var(--navy);
+    }
+
+    /* ───── Print ───── */
+    @media print {
+      body { font-size: 11pt; }
+      .hero { background: #0a2540; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .toc { break-inside: avoid; }
+      section { break-inside: avoid-page; }
+      .tier, .phase, .pcard { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HERO -->
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="hero-mark">
+        <svg viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" fill="none" aria-hidden="true">
+          <path d="M30 4 L52 50 L30 38 L8 50 Z" fill="#67e8f9" opacity="0.95" />
+          <path d="M30 4 L52 50 L30 38 Z" fill="#06b6d4" />
+          <line x1="30" y1="38" x2="30" y2="56" stroke="#67e8f9" stroke-width="2" stroke-linecap="round" />
+        </svg>
+        <span class="hero-name">Vela</span>
+      </div>
+      <div class="hero-tagline">SaaS Monetization Strategy</div>
+      <h1>Turning a curated options-research engine into a paid product.</h1>
+      <p class="lede">A grounded plan to evolve Vela from a single-tenant analyst-rating-to-options-trade engine into a multi-tenant SaaS — with personalization that justifies the subscription, pricing that respects unit economics, and a roadmap that ships in months, not quarters.</p>
+      <div class="meta-row">
+        <span><b>Stage</b> &nbsp;Pre-revenue</span>
+        <span><b>Build status</b> &nbsp;Single-tenant prototype, deployed</span>
+        <span><b>Target launch</b> &nbsp;90 days from kickoff</span>
+        <span><b>Revenue target (12mo)</b> &nbsp;$50k MRR</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="page">
+
+    <nav class="toc" aria-label="Table of contents">
+      <h3>Contents</h3>
+      <ol>
+        <li><a href="#context">Context</a></li>
+        <li><a href="#positioning">Positioning &amp; ICP</a></li>
+        <li><a href="#personalization">Personalization Targets</a></li>
+        <li><a href="#monetization">Monetization Streams</a></li>
+        <li><a href="#pricing">Pricing Strawman</a></li>
+        <li><a href="#architecture">Architectural Roadmap</a></li>
+        <li><a href="#economics">Unit Economics</a></li>
+        <li><a href="#kpis">KPIs to Watch</a></li>
+        <li><a href="#risks">Risks &amp; Mitigations</a></li>
+        <li><a href="#roadmap">12-Month Roadmap</a></li>
+        <li><a href="#files">Critical Files &amp; Reuse</a></li>
+        <li><a href="#verification">Verification</a></li>
+      </ol>
+    </nav>
+
+    <!-- 0. CONTEXT -->
+    <section id="context">
+      <h2><span class="num">00</span> Context</h2>
+      <p>Vela is currently a single-tenant analyst-rating-to-options-trade recommendation engine running locally and on a Hetzner VPS. It already has substantial product surface — daily recommendations with stacked conviction scores, on-demand Research, Options Lab (deep greeks), Industries view, Multibagger Scanner, Charts, Positions tracker, Knowledge page — but <strong>zero multi-tenancy</strong>. There is no users table, no auth, no per-user data scoping. All tables are globally shared.</p>
+      <p>This document defines the strategy: who it's for, what gets personalized, how to package and price it, what minimum technical work is needed, the unit economics, the KPIs, the risks, and the 90-day / 6-month / 12-month roadmap. It is grounded in a factual inventory of the current codebase so the plan is buildable rather than aspirational.</p>
+      <div class="callout">
+        <div class="callout-label">North Star</div>
+        Convert Vela from a single-tenant prototype into a paying SaaS by shipping the minimum viable multi-tenant retrofit, the highest-leverage personalization wedges, and a credible accuracy story — within 90 days of kickoff.
+      </div>
+    </section>
+
+    <!-- 1. POSITIONING & ICP -->
+    <section id="positioning">
+      <h2><span class="num">01</span> Positioning &amp; ICP</h2>
+      <p class="subhead">Who pays for this, and why they pay <em>us</em> rather than the four tools they already have open.</p>
+
+      <h3>Primary ICP — the "serious-but-self-directed" retail options trader</h3>
+      <p>$25k–$250k brokerage account, 2–10 options positions per week, already pays for one tool in the $30–$150/mo bracket (Barchart Premier, Trendspider, Optionstrat Pro, Market Chameleon). Comfortable with greeks and conviction scores. They have a broker, charts, and a screener — they're buying <em>signal synthesis</em>, not raw data.</p>
+
+      <h3>Secondary ICP — the "informed swing-trader / part-time investor"</h3>
+      <p>Wants a curated daily watchlist with a clear BUY/HOLD/SELL verdict; doesn't want to babysit twelve dashboards. Lower ARPU, higher volume; matches the multibagger scanner persona.</p>
+
+      <h3>Tertiary (B2B)</h3>
+      <p>Independent RIAs, family-office juniors, finance newsletter operators. Want white-label or syndication.</p>
+
+      <div class="callout bad">
+        <div class="callout-label">Explicitly NOT for</div>
+        Day-traders/scalpers (latency wrong) — pure passive ETF investors (wrong instrument) — prop desks (wrong data tier).
+      </div>
+
+      <h3>Competitor landscape</h3>
+      <table>
+        <thead><tr><th>Competitor</th><th>Strength</th><th>Gap Vela exploits</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Trade Ideas</strong></td><td>Strong screener / AI</td><td>Day-trade focused, $120+/mo, not options-strategy-aware</td></tr>
+          <tr><td><strong>Benzinga Pro</strong></td><td>Newsfeed + squawk</td><td>Weak on quantitative, stacked recs</td></tr>
+          <tr><td><strong>Unusual Whales</strong></td><td>Flow data + community</td><td>You assemble your own thesis from raw flow</td></tr>
+          <tr><td><strong>Seeking Alpha Premium</strong></td><td>Analyst takes + Quant Rating</td><td>No options layer, no daily action list</td></tr>
+          <tr><td><strong>Optionstrat / Market Chameleon</strong></td><td>Options analytics</td><td>Weak on cross-signal stacking</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout good">
+        <div class="callout-label">The Wedge</div>
+        A <strong>single conviction score per ticker per day</strong> fusing 12 signal classes (analyst, earnings, technical, drawdown, reversal, flow, greeks, FinBERT news, geopolitical, insider, OHLC patterns, RS) — tied to a <strong>concrete options strike recommendation</strong>. Nobody listed ships the full chain "here's why we like NVDA today AND here is the 30-delta call." The Industries module and Multibagger Scanner are adjacent surfaces no single competitor bundles. The bundling + the cross-signal model are the moat.
+      </div>
+
+      <p><em>Honest caveat:</em> the 100-ticker universe is small relative to Trade Ideas / Unusual Whales. Pitch is <strong>quality over breadth, opinionated over neutral</strong>. This must be reinforced in marketing.</p>
+    </section>
+
+    <!-- 2. PERSONALIZATION -->
+    <section id="personalization">
+      <h2><span class="num">02</span> Personalization Targets</h2>
+      <p class="subhead">Each: what gets personalized · why a user pays · shipping effort.</p>
+
+      <div class="pgrid">
+        <div class="pcard">
+          <h4>Watchlist &amp; Universe <span class="effort s">EFFORT · S</span></h4>
+          <p>User adds/removes tickers; dashboard, recs, alerts filter to their list.</p>
+          <p class="why"><strong>Why pay:</strong> nobody scrolls past 92 irrelevant names.</p>
+        </div>
+        <div class="pcard">
+          <h4>Risk Profile <span class="effort m">EFFORT · M</span></h4>
+          <p>Conservative / Balanced / Aggressive (or fine-tuned weights), adjusts conviction stack and strike recommender.</p>
+          <p class="why"><strong>Why pay:</strong> turns one engine into "my engine."</p>
+        </div>
+        <div class="pcard">
+          <h4>Notifications &amp; Alerts <span class="effort m">EFFORT · M-L</span></h4>
+          <p>Email + in-app + (later) SMS/Discord/webhook for rec changes, conviction breaches, earnings T-N, unusual flow, news/FinBERT spikes, insider filings.</p>
+          <p class="why"><strong>Why pay:</strong> THE retention loop — pulls users back daily.</p>
+        </div>
+        <div class="pcard">
+          <h4>Custom Signal Stacks <span class="effort m">EFFORT · M</span></h4>
+          <p>Toggle/weight individual signals per user; weight vector consumed by stacker.</p>
+          <p class="why"><strong>Why pay:</strong> power users want to express a thesis; differentiator vs. black-box competitors.</p>
+        </div>
+        <div class="pcard">
+          <h4>Saved Scans / Charts / Research <span class="effort s">EFFORT · S-M</span></h4>
+          <p>Persist Research, Deep Options, Scanner snapshots, chart configs with tier-based retention.</p>
+          <p class="why"><strong>Why pay:</strong> research is expensive to recompute; saved state is sticky.</p>
+        </div>
+        <div class="pcard">
+          <h4>Industry Weighting <span class="effort s">EFFORT · S</span></h4>
+          <p>Boost/mute sectors in dashboard ranking. Per-user sector multiplier at view time.</p>
+          <p class="why"><strong>Why pay:</strong> small but reduces friction.</p>
+        </div>
+        <div class="pcard">
+          <h4>Position-Aware Recs <span class="effort m">EFFORT · M</span></h4>
+          <p>Recs that <em>know your book</em>: flag conflicting signals on held names, suggest hedges when conviction inverts, propose roll/close strikes when DTE/delta cross thresholds.</p>
+          <p class="why"><strong>Why pay:</strong> highest-leverage differentiator nobody else does well.</p>
+        </div>
+        <div class="pcard">
+          <h4>Custom Universe Slots <span class="effort m">EFFORT · M</span></h4>
+          <p>Inject N tickers into the shared pipeline (tier-gated, globally deduped).</p>
+          <p class="why"><strong>Why pay:</strong> high-intent traders want their names covered.</p>
+        </div>
+        <div class="pcard">
+          <h4>Personalized AM Digest <span class="effort m">EFFORT · M</span></h4>
+          <p>7am email/push: "Today on YOUR watchlist: 2 upgrades, 1 conviction breach, 1 earnings tomorrow, 1 unusual flow, here's the suggested strike."</p>
+          <p class="why"><strong>Why pay:</strong> this IS the product for the secondary ICP.</p>
+        </div>
+        <div class="pcard">
+          <h4>★ Personalized Backtest <span class="effort l">EFFORT · L</span></h4>
+          <p>Replay user's position history vs. what the rec said at the time.</p>
+          <p class="why"><strong>Why pay:</strong> killer retention story for power users at the high tier.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. MONETIZATION -->
+    <section id="monetization">
+      <h2><span class="num">03</span> Monetization Streams (Tiering)</h2>
+      <p class="subhead">Four-tier ladder. Quotas illustrative; tune after telemetry.</p>
+
+      <div class="tiers">
+        <div class="tier">
+          <div class="tier-name"><b>Free</b> · Trial</div>
+          <div class="tier-price">$0 <small>/mo</small></div>
+          <ul>
+            <li>Read-only dashboard</li>
+            <li>24h-delayed feed</li>
+            <li>25 of 100 universe tickers</li>
+            <li>14-day full-Pro trial</li>
+            <li>No alerts / Research / Deep Options</li>
+          </ul>
+        </div>
+        <div class="tier">
+          <div class="tier-name"><b>Starter</b> · Watcher</div>
+          <div class="tier-price">$19 <small>/mo</small></div>
+          <ul>
+            <li>Live dashboard, full universe view</li>
+            <li>Watchlist ≤ 25 tickers</li>
+            <li>5 saved positions</li>
+            <li>3 Research / 1 Deep Options /mo</li>
+            <li>Basic email alerts</li>
+            <li>7-day retention</li>
+          </ul>
+        </div>
+        <div class="tier flagship">
+          <div class="tier-name"><b>Pro</b> · Operator</div>
+          <div class="tier-price">$49 <small>/mo</small></div>
+          <ul>
+            <li>Watchlist ≤ 100, unlimited positions</li>
+            <li>40 Research / 15 Deep Options / 4 Scanner per mo</li>
+            <li>Custom signal weights + risk profile</li>
+            <li>Position-aware recs</li>
+            <li>All alert types</li>
+            <li>30-day retention, AM digest</li>
+            <li>+5 custom universe slots</li>
+          </ul>
+        </div>
+        <div class="tier">
+          <div class="tier-name"><b>Premium</b> · Analyst</div>
+          <div class="tier-price">$149 <small>/mo</small></div>
+          <ul>
+            <li>200 Research / 60 Deep Options / 20 Scanner / 25 universe slots</li>
+            <li>Unlimited retention</li>
+            <li>Real-time webhooks (Discord/Slack)</li>
+            <li>Read-only API access</li>
+            <li>Backtest of own trades</li>
+            <li>Priority on-demand pipeline queue</li>
+            <li>Full export (CSV/Parquet)</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>Credit packs (add-on, all paid tiers)</h3>
+      <p>Pure-margin lever; absorbs power users without forcing them up a tier. Subscription credits expire monthly; purchased packs do not.</p>
+      <table>
+        <thead><tr><th>Pack</th><th>Credits</th><th>Price</th><th>Per-credit retail</th></tr></thead>
+        <tbody>
+          <tr><td>Research</td><td>50</td><td><span class="price">$15</span></td><td><span class="price">$0.30</span></td></tr>
+          <tr><td>Deep Options</td><td>25</td><td><span class="price">$20</span></td><td><span class="price">$0.80</span></td></tr>
+          <tr><td>Scanner</td><td>10 runs</td><td><span class="price">$25</span></td><td><span class="price">$2.50</span></td></tr>
+        </tbody>
+      </table>
+
+      <h3>B2B side-doors (not core year-1)</h3>
+      <ul>
+        <li><strong>Advisor white-label</strong> — relabel + custom universe + multi-client dashboard. Plausible $500–$2000/mo per firm. Pursue if 3+ qualified inbounds.</li>
+        <li><strong>API access</strong> — bundled in Premium; standalone $300–$600/mo for newsletters / quant hobbyists. Plausible only if data-vendor TOS allows derived-data redistribution.</li>
+        <li><strong>Newsletter syndication</strong> — license daily Industries summary + top-conviction list as co-branded section. $1k–$5k/mo per partner.</li>
+        <li><strong>Broker affiliate</strong> — referral from strike recommender → tastytrade/Webull/IBKR. $50–$200 CPA. Watch FINRA marketing rules.</li>
+      </ul>
+      <div class="callout warn">
+        <div class="callout-label">Avoid</div>
+        Sponsored research / education content. Erodes trust on an investment-adjacent product.
+      </div>
+    </section>
+
+    <!-- 4. PRICING -->
+    <section id="pricing">
+      <h2><span class="num">04</span> Pricing Strawman</h2>
+      <p class="subhead">Anchored against FMP $22/mo single-tenant cost; Benzinga Pro $37–$237; Unusual Whales $48–$80; Trade Ideas $120–$220; Seeking Alpha Premium $239/yr; Market Chameleon $69/mo.</p>
+      <table>
+        <thead><tr><th>Tier</th><th>Monthly</th><th>Annual (≈17% off)</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Free</td><td><span class="price">$0</span></td><td>—</td><td>Loss-leader; capped strictly</td></tr>
+          <tr><td>Starter</td><td><span class="price">$19</span></td><td><span class="price">$190</span></td><td>Below the psychological $25 line</td></tr>
+          <tr class="featured"><td><strong>Pro</strong></td><td><span class="price">$49</span></td><td><span class="price">$470</span></td><td>The flagship; target ~70% of revenue</td></tr>
+          <tr><td>Premium</td><td><span class="price">$149</span></td><td><span class="price">$1,430</span></td><td>API, backtest, priority queue</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <div class="callout-label">Founding-100 Promo</div>
+        First 100 paid signups: 50% off for 12 months. Converts trial users; seeds testimonials.
+      </div>
+    </section>
+
+    <!-- 5. ARCHITECTURE -->
+    <section id="architecture">
+      <h2><span class="num">05</span> Architectural Roadmap to v1 SaaS</h2>
+      <p class="subhead">Today: zero multi-tenancy. Seven non-negotiables to charge anyone.</p>
+
+      <ol>
+        <li><strong>Auth + users table + bearer-token middleware.</strong> FastAPI dependency on every protected route. Use a hosted provider (Clerk, Supabase Auth, Auth0) — skip building password reset / 2FA / email verification yourself.</li>
+        <li><strong><code>user_id</code> FK retrofit</strong> on user-owned tables: <code>watchlist</code>, <code>positions</code>, <code>strike_snapshots</code>, <code>research_results</code>, <code>deep_options_analyses</code>, <code>multibagger_universe</code>, plus a new <code>chart_configs</code> table. Migration writes existing rows to a single "legacy" admin user.</li>
+        <li><strong>Pipeline-amortization architecture</strong> — <em>the unit-economics keystone</em>:
+          <ul>
+            <li><strong>Shared pipeline</strong> runs once daily over the global ~100-ticker universe; writes to globally-readable tables.</li>
+            <li><strong>Per-user surfaces</strong> are filtered views over those tables.</li>
+            <li><strong>Per-user on-demand compute</strong> (Research, Deep Options, Scanner, custom-universe injection) is gated by credit balance.</li>
+            <li>Custom universe slots are <em>globally cached</em> — if user A and user B both add NVDA, it's <em>one</em> pipeline run.</li>
+          </ul>
+        </li>
+        <li><strong>Credits + quotas + entitlements service</strong> — small table layer: <code>subscriptions</code>, <code>credit_balances</code>, <code>credit_ledger</code>, <code>entitlements</code>. Every gated endpoint calls <code>check_and_decrement(user, feature)</code>.</li>
+        <li><strong>Stripe (or Paddle) integration</strong> — checkout, customer portal, webhook → entitlement updater, dunning. Paddle handles VAT/sales-tax globally; Stripe is more flexible. Pick one.</li>
+        <li><strong>Frontend auth + tier-aware UI</strong> — login, signup, account/billing page, "upgrade to unlock" modal, credit-balance widget.</li>
+        <li><strong>Minimum-viable alerts</strong> — email-only, daily-digest + rec-change. Postmark or SES + a worker. Push/SMS/Discord defer. Even this minimum is non-negotiable for retention.</li>
+      </ol>
+
+      <div class="callout warn">
+        <div class="callout-label">Defer Explicitly</div>
+        White-label theming · multi-account orgs · full RBAC · public API with key management · mobile app · real-time websockets · anything fancier than email alerts · full audit log · backtest engine · tax-doc exports.
+      </div>
+
+      <p><strong>Stack additions:</strong> Redis (rate-limit + alert-dedup + queue), ARQ/Celery/RQ worker for alerts and on-demand pipelines, Sentry, PostHog (or similar) for product analytics. <strong>Avoid microservice split; keep monolithic FastAPI.</strong></p>
+    </section>
+
+    <!-- 6. UNIT ECONOMICS -->
+    <section id="economics">
+      <h2><span class="num">06</span> Unit Economics</h2>
+      <p class="subhead">Single-VPS deploy assumed. Cost stack rough; refine after first 100 users.</p>
+
+      <table>
+        <thead><tr><th>Cost component</th><th>Monthly</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>FMP API</td><td><span class="price">$22</span></td><td>Fixed; binding rate-limit, not per-user</td></tr>
+          <tr><td>Finnhub</td><td><span class="price">$0 → $50</span></td><td>Free tier; upgrade if scale forces</td></tr>
+          <tr><td>NewsAPI</td><td><span class="price">$0 → $50</span></td><td>Consider Marketaux / Tiingo at scale</td></tr>
+          <tr><td>Hosting (app+DB+worker+Redis+backups)</td><td><span class="price">$40 – $80</span></td><td>—</td></tr>
+          <tr><td>Email (Postmark)</td><td><span class="price">~$15</span></td><td>10k sends</td></tr>
+          <tr><td>Auth (Clerk/Supabase)</td><td><span class="price">$0 → $25</span></td><td>Free tier covers early scale</td></tr>
+          <tr><td>Payment fees</td><td>~3% of revenue</td><td>Stripe / Paddle</td></tr>
+          <tr><td>LLM/FinBERT</td><td><span class="price">$0 – $0.30</span></td><td>FinBERT local; LLM only if Industries summaries</td></tr>
+          <tr><td><strong>Fixed monthly base</strong></td><td><strong><span class="price">~$200</span></strong></td><td>End-to-end through ~500 users</td></tr>
+        </tbody>
+      </table>
+
+      <div class="kpi-grid">
+        <div class="kpi">
+          <h4>Per-user gross margin</h4>
+          <ul><li><strong>~85%</strong> at $49 Pro ARPU once fixed base covered</li></ul>
+        </div>
+        <div class="kpi">
+          <h4>Break-even (infra only)</h4>
+          <ul><li><strong>5–6 paid Pro users</strong></li></ul>
+        </div>
+        <div class="kpi">
+          <h4>Honest break-even</h4>
+          <ul><li><strong>~50–60 users</strong> incl. 30hrs/mo founder time @ $75/hr opportunity cost</li></ul>
+        </div>
+        <div class="kpi">
+          <h4>FMP rate-limit ceiling</h4>
+          <ul><li><strong>~2000 DAU</strong> before tier upgrade forced</li></ul>
+        </div>
+      </div>
+
+      <div class="callout bad">
+        <div class="callout-label">Blowup Risk</div>
+        Custom-universe slots. Cap aggregate at 5× the base universe (≈500 user-added tickers/day globally) and dedup heavily. 1000 users × 5 unique names = 5000 ticker-runs/day → FMP becomes the bottleneck.
+      </div>
+    </section>
+
+    <!-- 7. KPIs -->
+    <section id="kpis">
+      <h2><span class="num">07</span> KPIs to Watch</h2>
+
+      <div class="kpi-grid">
+        <div class="kpi">
+          <h4>Activation (first 7d)</h4>
+          <ul>
+            <li>Added ≥3 watchlist tickers</li>
+            <li>Viewed ≥5 recommendations</li>
+            <li>Ran ≥1 Research</li>
+            <li>Configured ≥1 alert</li>
+            <li>Logged ≥1 position</li>
+            <li><strong>Target: ≥40% hit ≥3 of 5</strong></li>
+          </ul>
+        </div>
+        <div class="kpi">
+          <h4>Retention</h4>
+          <ul>
+            <li>D7 / D30 / D90 login rate</li>
+            <li>Weekly recs viewed per active user</li>
+            <li>Alert open/click-through (leading churn indicator)</li>
+            <li>% Pro using ≥50% Research credits monthly</li>
+          </ul>
+        </div>
+        <div class="kpi">
+          <h4>Monetization</h4>
+          <ul>
+            <li>Trial → paid (target 8–15%)</li>
+            <li>Free → paid at 30/60/90d</li>
+            <li>ARPU, MRR, NRR (incl. credit packs)</li>
+            <li>Credit-pack attach rate among Pro</li>
+            <li>Tier mix (Starter / Pro / Premium share)</li>
+          </ul>
+        </div>
+        <div class="kpi">
+          <h4>Product quality</h4>
+          <ul>
+            <li>Rec accuracy: rolling hit-rate at +X% / -Y% over 5/10/20 days</li>
+            <li>Conviction-score calibration: high vs mid gap</li>
+            <li>Industries 5-day forward conviction realized accuracy</li>
+            <li><strong>Publish transparently — core marketing</strong></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8. RISKS -->
+    <section id="risks">
+      <h2><span class="num">08</span> Risks &amp; Mitigations</h2>
+
+      <div class="callout bad">
+        <div class="callout-label">Regulatory · investment-adjacent</div>
+        Vela gives buy/sell recs on specific securities and specific options strikes. Could shade toward "investment advice" under SEC/FINRA rules.<br><br>
+        <strong>Mitigation:</strong> position as <em>informational/research/educational</em>; ship robust disclaimers ("not financial advice; informational only; past performance does not predict future results"); avoid suitability phrasing ("for YOU"); never manage or execute trades.<br><br>
+        <strong>REQUIRES SECURITIES COUNSEL BEFORE PUBLIC LAUNCH</strong> — do not fabricate compliance language.
+      </div>
+
+      <ul>
+        <li><strong>Data licensing — FMP / Finnhub / NewsAPI redistribution.</strong> TOS likely restricts re-display of raw data and may restrict derived data. Shared pipeline is fine; an external API tier or syndication likely needs higher commercial license. <em>Mitigation:</em> read each provider's commercial-use TOS; contact sales before launching API/syndication SKUs; structure public surface as <em>derived signals + commentary</em>, not raw quotes.</li>
+        <li><strong>Trust / accuracy.</strong> A few high-profile bad calls can sink retention. <em>Mitigation:</em> publish accuracy stats transparently; never imply precision the model doesn't have; always show <em>why</em> (signal breakdown), not just <em>what</em>.</li>
+        <li><strong>Universe is small (100 tickers).</strong> Competitors flex on breadth. <em>Mitigation:</em> lean into curation as a feature; use custom-universe slots as scaling pressure-release.</li>
+        <li><strong>API rate-limits / single-vendor concentration.</strong> FMP is binding. <em>Mitigation:</em> abstract data layer so Polygon / Tiingo / IEX Cloud can sub in; pre-negotiate the upgrade tier so it's a checkbox, not a re-architecture.</li>
+        <li><strong>Competitive response.</strong> Unusual Whales / Benzinga could ship "conviction stack" in a month. <em>Mitigation:</em> moat isn't the algorithm — it's curated universe + personalization + position-aware reasoning + Industries. Ship faster than they can copy.</li>
+        <li><strong>Churn from market downturns.</strong> Options-trader populations contract sharply in bad markets. <em>Mitigation:</em> annual plans; secondary swing-trader ICP is more durable; multibagger surface is a partial hedge.</li>
+        <li><strong>Signal-model staleness.</strong> Models drift. <em>Mitigation:</em> quarterly recalibration cadence; track accuracy KPIs as leading indicator.</li>
+      </ul>
+    </section>
+
+    <!-- 9. ROADMAP -->
+    <section id="roadmap">
+      <h2><span class="num">09</span> 12-Month Roadmap</h2>
+
+      <div class="timeline">
+        <div class="phase">
+          <div class="phase-when">Phase I · 90 days</div>
+          <div class="phase-name">Charge a Dollar</div>
+          <ul>
+            <li>Ship the seven non-negotiables from §05</li>
+            <li>Watchlist + risk profile + saved Research + position-aware overlay</li>
+            <li>Launch Free / Starter ($19) / Pro ($49)</li>
+            <li>Hold Premium back until usage data justifies</li>
+            <li>Founding-100 promo</li>
+          </ul>
+          <div class="target">Target: 100 paid users · $3–5k MRR</div>
+        </div>
+        <div class="phase">
+          <div class="phase-when">Phase II · 6 months</div>
+          <div class="phase-name">Earn the Seat</div>
+          <ul>
+            <li>Custom signal weights + custom universe slots</li>
+            <li>Conviction / flow / catalyst alerts; AM digest; Discord webhook</li>
+            <li>Launch Premium ($149) and Credit Packs</li>
+            <li>First credible accuracy-report publication</li>
+            <li>Outreach to 1–2 newsletter syndication partners; <strong>no white-label yet</strong></li>
+          </ul>
+          <div class="target">Target: 350 paid users · $15–20k MRR · ≥7% trial-to-paid</div>
+        </div>
+        <div class="phase">
+          <div class="phase-when">Phase III · 12 months</div>
+          <div class="phase-name">Defend &amp; Expand</div>
+          <ul>
+            <li>Read-only API (Premium-gated)</li>
+            <li>Backtest of user's own trades</li>
+            <li>Mobile-friendly PWA</li>
+            <li>Second data-provider abstraction</li>
+            <li>White-label only if 3+ qualified RIA inbounds</li>
+            <li>Hire #1 (full-stack or growth)</li>
+            <li>Securities counsel review at this scale</li>
+          </ul>
+          <div class="target">Target: 1000 paid users · $50k MRR · NRR &gt;100%</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10. FILES -->
+    <section id="files">
+      <h2><span class="num">10</span> Critical Files &amp; Existing Code to Reuse</h2>
+
+      <h3>Critical files for implementation</h3>
+      <ul>
+        <li><code>backend/</code> — FastAPI app. New: auth middleware, <code>users</code> / <code>subscriptions</code> / <code>credit_ledger</code> / <code>entitlements</code> / <code>chart_configs</code> tables, <code>user_id</code> FK retrofit migration, entitlements service module, Stripe webhook handler, alert worker, pipeline amortization split.</li>
+        <li><code>backend/db/models.py</code> &amp; <code>backend/db/init_db.py</code> — schema additions and FK retrofit.</li>
+        <li><code>backend/services/scheduler.py</code> &amp; <code>backend/services/recommendation_engine.py</code> — preserve as the "shared pipeline"; outputs become query-filterable rather than personalized inline.</li>
+        <li><code>backend/services/industry_summary.py</code> — already deterministic; reuse as-is for AM digest.</li>
+        <li><code>backend/api/routes.py</code> — every gated endpoint gains a <code>check_and_decrement(user, feature)</code> call; viewing endpoints get user-scoped query filters.</li>
+        <li><code>frontend/src/</code> — login/signup, billing/account page, tier-aware feature gating, credit-balance widget, personalization UI.</li>
+        <li><code>frontend/src/contexts/</code> — new <code>AuthContext</code> and <code>EntitlementsContext</code>.</li>
+        <li><code>docker-compose.yml</code> — add Redis service and worker container.</li>
+        <li><code>edgeflow-erd.html</code> — current schema; cross-check every user-owned table during retrofit.</li>
+      </ul>
+
+      <h3>Existing code to reuse (don't rebuild)</h3>
+      <ul>
+        <li><strong>Conviction stacker</strong> (<code>recommendation_engine.py</code>) — already has the signal categorization the personalization layer needs to weight.</li>
+        <li><strong>Strike recommender</strong> (<code>options_analyzer.recommend_strikes_all</code>) — already takes a risk profile; trivially extends to per-user override.</li>
+        <li><strong>Industry summary builder</strong> (<code>services/industry_summary.py</code>) — fact-based; ideal source for AM digest content.</li>
+        <li><strong><code>get_stock_data</code> cache</strong> — already supports the dedup story for custom universe slots.</li>
+        <li><strong>Knowledge page</strong> — exists; expand with tier-explainer + accuracy reports for the trust loop.</li>
+        <li><strong>PDF daily report</strong> — exists; gate as Pro deliverable.</li>
+        <li><strong>Positions tracking</strong> — informational; the position-aware overlay layers on top of existing schema.</li>
+      </ul>
+    </section>
+
+    <!-- 11. VERIFICATION -->
+    <section id="verification">
+      <h2><span class="num">11</span> Verification</h2>
+      <p class="subhead">v1 launch passes when these all work cleanly in the deployed environment.</p>
+
+      <ol class="check-list">
+        <li><strong>Sign up via auth provider</strong> → user row created → entitlements row created at Free tier → email verification works.</li>
+        <li><strong>Upgrade to Pro via Stripe Checkout</strong> → webhook fires → entitlements upgraded → dashboard immediately reflects new tier (no logout required).</li>
+        <li><strong>Run Research as Free user</strong> → blocked with 402-style upgrade prompt → upgrade → run succeeds → credit decremented → ledger row written → balance widget updates in &lt;2s.</li>
+        <li><strong>Trigger downgrade</strong> (Stripe cancellation in test mode) → webhook fires → Pro features lock at end of period → over-quota state is graceful (read-only of past results, not 500 errors).</li>
+        <li><strong>Personalization end-to-end</strong> — add 5 watchlist tickers → set Aggressive risk profile → set "alert me when conviction crosses +60" → confirm dashboard filters to those 5 → confirm strike recommender returns aggressive-profile strikes → confirm a synthetic conviction breach triggers an email within 5 minutes.</li>
+        <li><strong>Pipeline amortization sanity check</strong> — two test users with overlapping watchlists → confirm the shared daily pipeline runs ONCE for the union → confirm each user sees only their filtered slice.</li>
+        <li><strong>Custom universe slot</strong> — Pro user adds AAPL → next pipeline run includes AAPL exactly once → second user adding AAPL doesn't trigger a second run.</li>
+        <li><strong>Credit pack purchase</strong> via Stripe → webhook → ledger adds credit-pack rows with no expiry → consumed after subscription credits.</li>
+        <li><strong>Accuracy report KPI</strong> — backfill 30 days of recs and compute hit-rate; surface a numeric metric somewhere user-visible (even if just internal admin) before any "calibrated conviction" marketing claim.</li>
+        <li><strong>Smoke-test compliance disclaimer</strong> appears on every page that displays a recommendation, and on every email containing rec content.</li>
+      </ol>
+
+      <div class="callout">
+        <div class="callout-label">Reminder</div>
+        These checks validate the <em>engineering</em>, not <em>go-live readiness</em>. Marketing / legal / securities-counsel review is required separately before public launch.
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span>Vela — SaaS Monetization Strategy · v1</span>
+      <span>Internal document · Not financial advice</span>
+    </footer>
+
+  </main>
+</body>
+</html>

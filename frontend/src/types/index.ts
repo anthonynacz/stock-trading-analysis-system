@@ -573,6 +573,9 @@ export interface IndustryRecommendation {
   industry: string;
   action: string;
   conviction_score: number;
+  /** Conviction × user's saved industry_weight; equals conviction_score when weight=1. */
+  weighted_conviction_score: number | null;
+  industry_weight: number | null;
   signal_count: number;
   member_count: number | null;
   bullish_count: number | null;
@@ -599,11 +602,33 @@ export interface IndustryHistoryPoint {
   signal_count: number;
 }
 
+export interface IndustryForwardPoint {
+  forecast_date: string;
+  day_offset: number;
+  conviction_score: number;
+  action: string;
+}
+
+export interface IndustryTopComponent {
+  ticker: string;
+  company_name: string | null;
+  action: string;
+  conviction: number;
+  price: number | null;
+  market_cap: number | null;
+  pe_ratio: number | null;
+  pct_from_52w_high: number | null;
+  sector_industry: string | null;
+}
+
 export interface IndustryDetail {
   industry: string;
   latest: IndustryRecommendation;
   history: IndustryHistoryPoint[];
   members: Recommendation[];
+  executive_summary: string | null;
+  top_components: IndustryTopComponent[];
+  forward_outlook: IndustryForwardPoint[];
 }
 
 // ── Chart builder ──────────────────────────────────────────────────────

@@ -45,14 +45,24 @@ interface Props {
 }
 
 export default function IndustryCard({ item, selected, linkTo, onClick, compact }: Props) {
-  const conv = Number(item.conviction_score);
+  const rawConv = Number(item.conviction_score);
+  const weight = item.industry_weight != null ? Number(item.industry_weight) : 1;
+  const weighted = item.weighted_conviction_score != null
+    ? Number(item.weighted_conviction_score)
+    : rawConv;
+  // Display the weighted score by default (it's what drives ordering); show
+  // raw on hover. When weight=1, weighted === raw and we hide the badge.
+  const conv = weighted;
+  const isMuted = weight === 0;
+  const isBoosted = weight > 1.05;
+  const weightChanged = Math.abs(weight - 1) > 0.01;
   const reps = item.representative_tickers ?? [];
 
   const body = (
     <div
       className={`bg-card border rounded-lg p-3 text-left transition-colors ${
         selected ? 'border-purple-500' : 'border-border hover:border-text-secondary'
-      } ${onClick || linkTo ? 'cursor-pointer' : ''}`}
+      } ${onClick || linkTo ? 'cursor-pointer' : ''} ${isMuted ? 'opacity-50' : ''}`}
     >
       <div className="flex items-start justify-between gap-2 mb-1.5">
         <div className="flex-1 min-w-0">
@@ -63,12 +73,35 @@ export default function IndustryCard({ item, selected, linkTo, onClick, compact 
             </p>
           )}
         </div>
-        <ActionBadge action={item.action} />
+        <div className="flex items-center gap-1.5 shrink-0">
+          {weightChanged && (
+            <span
+              className={`text-[9px] font-bold tracking-wider uppercase px-1.5 py-px rounded ${
+                isMuted
+                  ? 'bg-gray-800 text-text-secondary'
+                  : isBoosted
+                    ? 'bg-emerald-900/40 text-emerald-300 border border-emerald-500/30'
+                    : 'bg-amber-900/40 text-amber-300 border border-amber-500/30'
+              }`}
+              title={`Your industry weight: ${weight.toFixed(2)}× (raw conviction ${rawConv >= 0 ? '+' : ''}${rawConv.toFixed(0)})`}
+            >
+              {weight.toFixed(2)}×
+            </span>
+          )}
+          <ActionBadge action={item.action} />
+        </div>
       </div>
 
       <div className="flex items-center gap-2 mb-2">
         <ConvictionBar score={conv} />
-        <span className="text-xs font-mono text-text-primary tabular-nums">
+        <span
+          className="text-xs font-mono text-text-primary tabular-nums"
+          title={
+            weightChanged
+              ? `Weighted ${conv >= 0 ? '+' : ''}${conv.toFixed(0)} = raw ${rawConv >= 0 ? '+' : ''}${rawConv.toFixed(0)} × ${weight.toFixed(2)}`
+              : undefined
+          }
+        >
           {conv >= 0 ? '+' : ''}
           {conv.toFixed(0)}
         </span>

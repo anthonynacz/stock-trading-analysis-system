@@ -28,12 +28,30 @@ import type {
   IndustryRecommendation,
   IndustryDetail,
   IndustryHistoryPoint,
+  IndustryForwardPoint,
+  IndustryTopComponent,
   ChartResponse,
   ChartDatasetsResponse,
   ChartDatasetKey,
 } from '../types';
 
+export const TOKEN_STORAGE_KEY = 'vela.access_token';
+
 const api = axios.create({ baseURL: '/api' });
+
+// Attach the access token (if any) to every outgoing request. The auth
+// middleware ignores the header in LEGACY_MODE and accepts it in JWT mode,
+// so this is safe to set unconditionally.
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem(TOKEN_STORAGE_KEY);
+  if (token) {
+    config.headers = config.headers ?? {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+export default api;
 
 /** Convert string-encoded Decimal fields to numbers (backend serializes Numeric as strings). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -369,6 +387,8 @@ export const getScannerStatus = () =>
 
 const INDUSTRY_NUMERIC = [
   'conviction_score',
+  'weighted_conviction_score',
+  'industry_weight',
   'breadth_positive_pct',
   'breadth_above_50d_pct',
   'cap_weighted_conviction',
@@ -395,6 +415,18 @@ export const getIndustryDetail = (industry: string) =>
           parseNumericFields<IndustryHistoryPoint>(h, ['conviction_score']),
         ),
         members: d.members,
+        top_components: (d.top_components ?? []).map((c) =>
+          parseNumericFields<IndustryTopComponent>(c, [
+            'conviction',
+            'price',
+            'market_cap',
+            'pe_ratio',
+            'pct_from_52w_high',
+          ]),
+        ),
+        forward_outlook: (d.forward_outlook ?? []).map((p) =>
+          parseNumericFields<IndustryForwardPoint>(p, ['conviction_score']),
+        ),
       };
     });
 

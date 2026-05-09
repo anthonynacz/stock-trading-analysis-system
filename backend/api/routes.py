@@ -64,8 +64,10 @@ from utils.schemas import (
     ChartQueryRequest,
     ChartResponse,
     IndustryDetailResponse,
+    IndustryForwardPoint,
     IndustryHistoryPoint,
     IndustryRecommendationResponse,
+    IndustryTopComponent,
     ScannerDatesResponse,
     ScannerResultResponse,
     ScannerRunResponse,
@@ -87,6 +89,141 @@ from utils.schemas import (
 )
 
 router = APIRouter(prefix="/api")
+
+
+# ── Auth (current user, dev token) ──────────────────────────────────────────
+
+from auth import get_current_user, mint_dev_token  # noqa: E402
+from db.models import User  # noqa: E402
+from config import settings  # noqa: E402
+
+
+@router.get("/me")
+async def me(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return the currently authenticated user. In LEGACY_MODE this is the
+    legacy admin user. Useful as a frontend boot-time call to learn the
+    user's id, email, role, and the small subset of preferences that other
+    UI components want without a second roundtrip (e.g. risk_profile drives
+    the StrikeRecommender's initial tab)."""
+    from services.preferences import ensure_preferences
+
+    pref = await ensure_preferences(db, user)
+    await db.commit()
+    return {
+        "id": user.id,
+        "email": user.email,
+        "role": user.role,
+        "provider": user.provider,
+        "is_active": user.is_active,
+        "legacy_mode": settings.LEGACY_MODE,
+        "risk_profile": pref.risk_profile,
+    }
+
+
+@router.get("/me/entitlements")
+async def my_entitlements(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return the user's tier, feature flags, monthly quotas, and current
+    credit balances. Frontend uses this to render the upgrade prompts +
+    credit-balance widget. ADMIN tier returns UNLIMITED (sentinel) for
+    every numeric field."""
+    from services.entitlements import (
+        UNLIMITED,
+        FEATURE_TO_QUOTA_FIELD,
+        get_balances_summary,
+        get_entitlements_for,
+        get_subscription,
+        get_tier_for,
+    )
+    from dataclasses import asdict
+
+    sub = await get_subscription(db, user)
+    tier = get_tier_for(user, sub)
+    ent = get_entitlements_for(tier)
+    balances = await get_balances_summary(db, user)
+
+    return {
+        "tier": tier,
+        "tier_label": ent.label,
+        "subscription_status": sub.status if sub else "NONE",
+        "current_period_end": (
+            sub.current_period_end.isoformat()
+            if sub and sub.current_period_end
+            else None
+        ),
+        "entitlements": asdict(ent),
+        "credits": {
+            feature: {
+                "balance": balances.get(feature, 0),
+                "monthly_quota": getattr(ent, FEATURE_TO_QUOTA_FIELD[feature]),
+            }
+            for feature in FEATURE_TO_QUOTA_FIELD
+        },
+        "unlimited_sentinel": UNLIMITED,
+    }
+
+
+@router.get("/me/preferences")
+async def get_my_preferences(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Returns the user's full personalization config + the catalog used to
+    render the Settings UI in one round-trip (so the frontend doesn't need a
+    second call to enumerate signal groups, sectors, alert keys)."""
+    from services.preferences import (
+        ensure_preferences,
+        get_catalog,
+        serialize_preferences,
+    )
+
+    pref = await ensure_preferences(db, user)
+    await db.commit()
+    return {
+        "preferences": serialize_preferences(pref),
+        "catalog": get_catalog(),
+    }
+
+
+@router.put("/me/preferences")
+async def update_my_preferences(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Partial update — only the keys present in payload are merged. Returns
+    the updated preferences. See services/preferences.py for validation rules."""
+    from services.preferences import (
+        ensure_preferences,
+        serialize_preferences,
+        validate_and_merge,
+    )
+
+    pref = await ensure_preferences(db, user)
+    pref = await validate_and_merge(db, user, payload or {}, pref)
+    return {"preferences": serialize_preferences(pref)}
+
+
+@router.post("/dev/token")
+async def dev_token(payload: dict):
+    """Mint a short-lived HS256 JWT for local testing. Disabled by default;
+    set DEV_TOKEN_ENABLED=true AND JWT_HS256_SECRET=<long-random> to enable."""
+    if not settings.DEV_TOKEN_ENABLED:
+        raise HTTPException(status_code=403, detail="Dev token endpoint disabled")
+    email = (payload or {}).get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="email required in body")
+    ttl = int((payload or {}).get("ttl_minutes") or 60)
+    try:
+        token = mint_dev_token(email, ttl_minutes=ttl)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"access_token": token, "token_type": "Bearer", "expires_in": ttl * 60}
 
 
 # ── Watchlist ───────────────────────────────────────────────────────────────
@@ -510,13 +647,42 @@ def _attach_sectors(
     return out
 
 
+def _apply_signal_weights_to_response(
+    resp: RecommendationResponse, weights: dict[str, float]
+) -> RecommendationResponse:
+    """In-place set weighted_conviction_score, weighted_action, and replace
+    `signals` with weighted variants so the UI's signal-bullet list shows
+    the user's adjusted points. Idempotent for weight=1 across the board."""
+    from services.preferences import apply_signal_weights
+
+    raw_conv = float(resp.conviction_score) if resp.conviction_score is not None else 0.0
+    new_conv, new_action, weighted_signals = apply_signal_weights(
+        raw_conv, resp.action, resp.signals, weights,
+    )
+    resp.weighted_conviction_score = Decimal(str(round(new_conv, 2)))
+    resp.weighted_action = new_action
+    if resp.signals is not None:
+        resp.signals = weighted_signals
+    return resp
+
+
 @router.get("/recommendations", response_model=list[RecommendationResponse])
 async def get_recommendations(
     action: str | None = Query(None),
     min_conviction: float | None = Query(None, ge=0, le=100),
     target_date: date | None = Query(None, alias="date"),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
+    """Returns today's (or given-date) recommendations. Each row is also
+    re-weighted by the caller's signal_group_weights — `weighted_conviction_score`
+    and `weighted_action` reflect the personalization, while raw
+    `conviction_score` / `action` preserve the engine's neutral output."""
+    from services.preferences import (
+        ensure_preferences,
+        get_signal_group_weights,
+    )
+
     effective_date = target_date or date.today()
     stmt = (
         select(Recommendation)
@@ -532,7 +698,19 @@ async def get_recommendations(
     result = await db.execute(stmt)
     recs = result.scalars().all()
     sector_map = await _ticker_sector_map(db, [r.ticker for r in recs])
-    return _attach_sectors(recs, sector_map)
+    out = _attach_sectors(recs, sector_map)
+
+    pref = await ensure_preferences(db, user)
+    await db.commit()
+    weights = get_signal_group_weights(pref)
+    for resp in out:
+        _apply_signal_weights_to_response(resp, weights)
+    # Re-sort by weighted conviction so UI's "top picks" reflect personalization
+    out.sort(
+        key=lambda r: float(r.weighted_conviction_score or r.conviction_score or 0),
+        reverse=True,
+    )
+    return out
 
 
 @router.get("/recommendations/{ticker}", response_model=list[RecommendationResponse])
@@ -540,7 +718,13 @@ async def get_recommendations_by_ticker(
     ticker: str,
     target_date: date | None = Query(None, alias="date"),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
+    from services.preferences import (
+        ensure_preferences,
+        get_signal_group_weights,
+    )
+
     stmt = (
         select(Recommendation)
         .options(selectinload(Recommendation.suggested_options))
@@ -557,7 +741,14 @@ async def get_recommendations_by_ticker(
     if not recs:
         raise HTTPException(status_code=404, detail=f"No recommendations found for {ticker.upper()}")
     sector_map = await _ticker_sector_map(db, [ticker.upper()])
-    return _attach_sectors(recs, sector_map)
+    out = _attach_sectors(recs, sector_map)
+
+    pref = await ensure_preferences(db, user)
+    await db.commit()
+    weights = get_signal_group_weights(pref)
+    for resp in out:
+        _apply_signal_weights_to_response(resp, weights)
+    return out
 
 
 # ── News ────────────────────────────────────────────────────────────────────
@@ -678,6 +869,21 @@ async def get_catalysts(db: AsyncSession = Depends(get_db)):
     result = await db.execute(stmt)
     earnings = result.scalars().all()
 
+    # Dedup: a ticker can only have one genuine earnings event within the
+    # next 14 days. The earnings_calendar table allows duplicates because
+    # its natural key is (ticker, earnings_date) — so a date revision from
+    # the upstream source creates a NEW row instead of updating the old one.
+    # We keep the first occurrence in ASC order (= soonest date), which is
+    # almost always the more recently confirmed estimate.
+    seen: set[str] = set()
+    deduped: list[EarningsCalendar] = []
+    for e in earnings:
+        if e.ticker in seen:
+            continue
+        seen.add(e.ticker)
+        deduped.append(e)
+    earnings = deduped
+
     response = []
     for e in earnings:
         days_until = (e.earnings_date - today).days
@@ -743,6 +949,7 @@ async def get_daily_report(
 async def save_strike_snapshot(
     body: StrikeSnapshotSaveRequest,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Save current strike scan results for historical review."""
     today = date.today()
@@ -757,11 +964,14 @@ async def save_strike_snapshot(
             if ticker_data.get(level) is not None
         }
 
-        # Upsert: check for existing row
+        # Upsert: check for existing row owned by this user (uniqueness is on
+        # (snapshot_date, ticker) globally for now; we still scope to the
+        # current user when matching so cross-tenant rows don't shadow).
         existing = await db.execute(
             select(StrikeSnapshot).where(
                 StrikeSnapshot.snapshot_date == today,
                 StrikeSnapshot.ticker == ticker.upper(),
+                StrikeSnapshot.user_id == user.id,
             )
         )
         row = existing.scalar_one_or_none()
@@ -771,6 +981,7 @@ async def save_strike_snapshot(
             row.results = results_json
         else:
             row = StrikeSnapshot(
+                user_id=user.id,
                 snapshot_date=today,
                 ticker=ticker.upper(),
                 current_price=Decimal(str(round(current_price, 2))) if current_price else None,
@@ -785,10 +996,14 @@ async def save_strike_snapshot(
 
 
 @router.get("/strikes/snapshots/dates")
-async def get_strike_snapshot_dates(db: AsyncSession = Depends(get_db)):
+async def get_strike_snapshot_dates(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Return dates that have saved strike snapshots."""
     stmt = (
         select(func.distinct(StrikeSnapshot.snapshot_date))
+        .where(StrikeSnapshot.user_id == user.id)
         .order_by(StrikeSnapshot.snapshot_date.desc())
     )
     result = await db.execute(stmt)
@@ -800,11 +1015,13 @@ async def get_strike_snapshot_dates(db: AsyncSession = Depends(get_db)):
 async def get_strike_snapshot(
     target_date: date | None = Query(None, alias="date"),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Load a saved strike snapshot for a given date."""
     effective_date = target_date or date.today()
     stmt = select(StrikeSnapshot).where(
         StrikeSnapshot.snapshot_date == effective_date,
+        StrikeSnapshot.user_id == user.id,
     )
     result = await db.execute(stmt)
     rows = result.scalars().all()
@@ -895,7 +1112,11 @@ def _bias_from_action(action: str | None) -> tuple[str, float]:
 
 
 @router.post("/options/deep/{ticker}", response_model=DeepOptionsAnalysisResponse)
-async def analyze_options_deep(ticker: str, db: AsyncSession = Depends(get_db)):
+async def analyze_options_deep(
+    ticker: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Run an expert-level options analysis for a single ticker."""
     import asyncio
     import re
@@ -963,6 +1184,7 @@ async def analyze_options_deep(ticker: str, db: AsyncSession = Depends(get_db)):
         )
 
         row = DeepOptionsAnalysis(
+            user_id=user.id,
             ticker=ticker,
             company_name=company_name,
             stock_price=(
@@ -995,10 +1217,13 @@ async def analyze_options_deep(ticker: str, db: AsyncSession = Depends(get_db)):
         await db.commit()
         await db.refresh(row)
 
-        # Cap history at 5 runs per ticker — drop the oldest beyond that.
+        # Cap history at 5 runs per (user, ticker) — drop the oldest beyond that.
         keep_stmt = (
             select(DeepOptionsAnalysis.id)
-            .where(DeepOptionsAnalysis.ticker == ticker)
+            .where(
+                DeepOptionsAnalysis.ticker == ticker,
+                DeepOptionsAnalysis.user_id == user.id,
+            )
             .order_by(DeepOptionsAnalysis.analyzed_at.desc())
             .limit(5)
         )
@@ -1007,7 +1232,10 @@ async def analyze_options_deep(ticker: str, db: AsyncSession = Depends(get_db)):
             stale = (
                 await db.execute(
                     select(DeepOptionsAnalysis)
-                    .where(DeepOptionsAnalysis.ticker == ticker)
+                    .where(
+                        DeepOptionsAnalysis.ticker == ticker,
+                        DeepOptionsAnalysis.user_id == user.id,
+                    )
                     .where(DeepOptionsAnalysis.id.notin_(keep_ids))
                 )
             ).scalars().all()
@@ -1027,13 +1255,18 @@ async def list_deep_options(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     # Order by execution date (newest day first), then ticker alphabetically,
     # then analyzed_at desc to break ties within the same day + ticker.
-    stmt = select(DeepOptionsAnalysis).order_by(
-        cast(DeepOptionsAnalysis.analyzed_at, Date).desc(),
-        DeepOptionsAnalysis.ticker.asc(),
-        DeepOptionsAnalysis.analyzed_at.desc(),
+    stmt = (
+        select(DeepOptionsAnalysis)
+        .where(DeepOptionsAnalysis.user_id == user.id)
+        .order_by(
+            cast(DeepOptionsAnalysis.analyzed_at, Date).desc(),
+            DeepOptionsAnalysis.ticker.asc(),
+            DeepOptionsAnalysis.analyzed_at.desc(),
+        )
     )
     if ticker:
         stmt = stmt.where(DeepOptionsAnalysis.ticker == ticker.upper())
@@ -1043,16 +1276,36 @@ async def list_deep_options(
 
 
 @router.get("/options/deep/{id_}", response_model=DeepOptionsAnalysisResponse)
-async def get_deep_options(id_: int, db: AsyncSession = Depends(get_db)):
-    row = await db.get(DeepOptionsAnalysis, id_)
+async def get_deep_options(
+    id_: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    res = await db.execute(
+        select(DeepOptionsAnalysis).where(
+            DeepOptionsAnalysis.id == id_,
+            DeepOptionsAnalysis.user_id == user.id,
+        )
+    )
+    row = res.scalars().first()
     if not row:
         raise HTTPException(status_code=404, detail="Deep options analysis not found")
     return DeepOptionsAnalysisResponse.model_validate(row)
 
 
 @router.delete("/options/deep/{id_}")
-async def delete_deep_options(id_: int, db: AsyncSession = Depends(get_db)):
-    row = await db.get(DeepOptionsAnalysis, id_)
+async def delete_deep_options(
+    id_: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    res = await db.execute(
+        select(DeepOptionsAnalysis).where(
+            DeepOptionsAnalysis.id == id_,
+            DeepOptionsAnalysis.user_id == user.id,
+        )
+    )
+    row = res.scalars().first()
     if not row:
         raise HTTPException(status_code=404, detail="Deep options analysis not found")
     await db.delete(row)
@@ -1081,11 +1334,21 @@ async def get_options_snapshot(
 @router.get("/options/{ticker}/strikes")
 async def recommend_strikes(
     ticker: str,
-    risk: str = Query("moderate", pattern="^(conservative|moderate|aggressive)$"),
+    risk: str | None = Query(None, pattern="^(conservative|moderate|aggressive)$"),
     budget: float | None = Query(None, ge=50, le=100000),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
+    """When `risk` is omitted, fall back to the user's saved risk_profile
+    preference (default 'moderate' for fresh users). Explicit `?risk=...`
+    always wins so the frontend can offer per-call overrides without saving."""
     from services.options_analyzer import OptionsAnalyzer
+    from services.preferences import ensure_preferences
+
+    if risk is None:
+        pref = await ensure_preferences(db, user)
+        risk = pref.risk_profile or "moderate"
+        await db.commit()
 
     client = DataSourceClient()
     try:
@@ -1497,41 +1760,119 @@ async def get_status(db: AsyncSession = Depends(get_db)):
 # ── Pipeline ───────────────────────────────────────────────────────────────
 
 
-@router.post("/refresh")
-async def trigger_refresh(background_tasks: BackgroundTasks):
-    """Legacy endpoint — runs full pipeline."""
-    from services.scheduler import run_tracked_pipeline, ALL_PHASES, pipeline_run
+def _check_pipeline_trigger_entitlement(user: User, db: AsyncSession) -> None:
+    """Raise 402 feature_locked if user's tier doesn't allow manual triggers.
+
+    The pipeline writes to globally-readable tables, so a single trigger
+    serves every user. We gate this entitlement primarily for cost control
+    (FMP rate limit) — FREE/STARTER rely on the daily cron.
+    """
+    # Synchronous helper — caller is async, but we need only sub + tier resolution
+    # which we already have via earlier deps. To keep this simple, the route
+    # itself does the check inline.
+    pass
+
+
+async def _try_start_pipeline(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession,
+    user: User,
+    phases: list[str] | None = None,
+) -> dict:
+    """Shared logic for /refresh and /pipeline/run.
+
+    1. Checks the user's manual_pipeline_trigger entitlement (402 if denied;
+       ADMIN bypasses).
+    2. If phases were requested, validates each against the user's
+       allowed_pipeline_phases tuple (per-tier allowlist). Phases outside
+       the allowlist → 402 with denied_phases detail.
+    3. If no phases requested, defaults to the user's full allowed set.
+    4. If a pipeline is already running, returns 200 with status='joined_existing'
+       (no new run kicked off; UI polls /pipeline/status to see it finish).
+    5. Otherwise schedules the run as a background task and returns
+       status='started'.
+    """
+    from services.entitlements import (
+        FeatureLocked,
+        get_entitlements_for,
+        get_subscription,
+        get_tier_for,
+    )
+    from services.scheduler import ALL_PHASES, pipeline_run, run_tracked_pipeline
+
+    sub = await get_subscription(db, user)
+    tier = get_tier_for(user, sub)
+    ent = get_entitlements_for(tier)
+    if not ent.manual_pipeline_trigger:
+        raise FeatureLocked("manual_pipeline_trigger", tier)
+
+    allowed = set(ent.allowed_pipeline_phases)
+    if phases:
+        # Validate phase names exist
+        invalid = [p for p in phases if p not in ALL_PHASES]
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Unknown phases: {invalid}")
+        # Validate user's tier permits each
+        denied = [p for p in phases if p not in allowed]
+        if denied:
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "feature_locked",
+                    "feature": "pipeline_phases",
+                    "tier": tier,
+                    "denied_phases": denied,
+                    "allowed_phases": list(ent.allowed_pipeline_phases),
+                    "message": (
+                        f"The {tier} tier may run "
+                        f"{', '.join(ent.allowed_pipeline_phases) or '<no phases>'}. "
+                        f"Upgrade to access {', '.join(denied)}."
+                    ),
+                },
+            )
+        requested = list(phases)
+    else:
+        # Default to the full allowed set for this tier
+        requested = list(ent.allowed_pipeline_phases)
 
     if pipeline_run.get("status") == "running":
-        raise HTTPException(status_code=409, detail="Pipeline already running")
+        return {
+            "status": "joined_existing",
+            "phases": list(pipeline_run.get("phases") or []),
+            "current": pipeline_run.get("current"),
+            "started_at": pipeline_run.get("started_at"),
+            "completed": list(pipeline_run.get("completed") or []),
+        }
 
-    background_tasks.add_task(run_tracked_pipeline, ALL_PHASES)
-    return {"status": "refresh_started"}
+    background_tasks.add_task(run_tracked_pipeline, requested)
+    return {"status": "started", "phases": requested}
+
+
+@router.post("/refresh")
+async def trigger_refresh(
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Legacy endpoint — runs the full pipeline. Tier-gated on
+    `manual_pipeline_trigger`; soft-merges concurrent calls."""
+    return await _try_start_pipeline(background_tasks, db, user)
 
 
 @router.post("/pipeline/run")
 async def run_pipeline(
     background_tasks: BackgroundTasks,
     body: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Start pipeline with optional phase selection.
 
     Body: { "phases": ["watchlist", "ratings", ...] }
-    Omit or pass empty phases for full pipeline.
+    Omit or pass empty phases for full pipeline. Tier-gated.
     """
-    from services.scheduler import run_tracked_pipeline, ALL_PHASES, pipeline_run
-
-    if pipeline_run.get("status") == "running":
-        raise HTTPException(status_code=409, detail="Pipeline already running")
-
-    requested = (body or {}).get("phases") or ALL_PHASES
-    # Validate phase names
-    invalid = [p for p in requested if p not in ALL_PHASES]
-    if invalid:
-        raise HTTPException(status_code=400, detail=f"Unknown phases: {invalid}")
-
-    background_tasks.add_task(run_tracked_pipeline, requested)
-    return {"status": "started", "phases": requested}
+    phases = (body or {}).get("phases") or None
+    return await _try_start_pipeline(background_tasks, db, user, phases)
 
 
 @router.get("/pipeline/status")
@@ -1556,7 +1897,11 @@ async def _research_to_response(
 
 
 @router.post("/research/{ticker}", response_model=ResearchResultResponse)
-async def analyze_ticker(ticker: str, db: AsyncSession = Depends(get_db)):
+async def analyze_ticker(
+    ticker: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Run a full on-demand analysis for any ticker."""
     import asyncio
     import re
@@ -1566,10 +1911,18 @@ async def analyze_ticker(ticker: str, db: AsyncSession = Depends(get_db)):
     from services.news_scanner import NewsScanner
     from services.options_analyzer import OptionsAnalyzer
     from services.recommendation_engine import RecommendationEngine
+    from services.entitlements import check_and_consume
 
     ticker = ticker.upper().strip()
     if not re.match(r"^[A-Z]{1,5}$", ticker):
         raise HTTPException(status_code=400, detail="Invalid ticker format")
+
+    # Credit gate — ADMIN bypass; FREE/insufficient → 402. Run BEFORE expensive
+    # pipeline work so we don't burn API quota on a request the user can't pay
+    # for. If the analysis later fails, the credit is still spent — that's
+    # consistent with how SaaS APIs typically handle "you used your turn"
+    # (Stripe, Twilio, etc. behave the same on errored billable calls).
+    await check_and_consume(db, user, "research", ref_id=f"research:{ticker}")
 
     data_client = DataSourceClient()
 
@@ -1618,6 +1971,7 @@ async def analyze_ticker(ticker: str, db: AsyncSession = Depends(get_db)):
 
     # Persist to research_results
     research = ResearchResult(
+        user_id=user.id,
         ticker=ticker,
         company_name=company_name,
         action=result["action"],
@@ -1660,9 +2014,14 @@ async def list_research(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """List research results, optionally filtered by ticker."""
-    stmt = select(ResearchResult).order_by(ResearchResult.analyzed_at.desc())
+    stmt = (
+        select(ResearchResult)
+        .where(ResearchResult.user_id == user.id)
+        .order_by(ResearchResult.analyzed_at.desc())
+    )
     if ticker:
         stmt = stmt.where(ResearchResult.ticker == ticker.upper())
     stmt = stmt.offset(offset).limit(limit)
@@ -1678,18 +2037,36 @@ async def list_research(
 
 
 @router.get("/research/{id_}", response_model=ResearchResultResponse)
-async def get_research(id_: int, db: AsyncSession = Depends(get_db)):
+async def get_research(
+    id_: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Get a single research result by ID."""
-    result = await db.get(ResearchResult, id_)
+    res = await db.execute(
+        select(ResearchResult).where(
+            ResearchResult.id == id_, ResearchResult.user_id == user.id
+        )
+    )
+    result = res.scalars().first()
     if not result:
         raise HTTPException(status_code=404, detail="Research result not found")
     return await _research_to_response(db, result)
 
 
 @router.delete("/research/{id_}")
-async def delete_research(id_: int, db: AsyncSession = Depends(get_db)):
+async def delete_research(
+    id_: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Delete a research result."""
-    result = await db.get(ResearchResult, id_)
+    res = await db.execute(
+        select(ResearchResult).where(
+            ResearchResult.id == id_, ResearchResult.user_id == user.id
+        )
+    )
+    result = res.scalars().first()
     if not result:
         raise HTTPException(status_code=404, detail="Research result not found")
     await db.delete(result)
@@ -1732,6 +2109,8 @@ def _compute_position_fields(
     is_on_watchlist = pos.ticker in watchlist_tickers
     rec_response = rec_map.get(pos.ticker)
 
+    health_flags = _compute_position_health(pos, current, days_to_expiry, rec_response)
+
     return PositionResponse(
         id=pos.id,
         ticker=pos.ticker,
@@ -1756,12 +2135,159 @@ def _compute_position_fields(
         days_to_expiry=days_to_expiry,
         is_on_watchlist=is_on_watchlist,
         recommendation=rec_response,
+        health_flags=health_flags,
     )
+
+
+def _compute_position_health(
+    pos: Position,
+    current_price: float | None,
+    days_to_expiry: int | None,
+    rec: RecommendationResponse | None,
+) -> list[dict]:
+    """Position-aware overlay: surface conditions worth a user's attention.
+
+    Computed fresh on every read (cheap — pure logic over already-loaded data).
+    Skipped for CLOSED positions since they're informational.
+    """
+    flags: list[dict] = []
+    if pos.status != "OPEN":
+        return flags
+
+    # 1. EXPIRED — option past expiry but still marked OPEN
+    if pos.expiry and days_to_expiry is not None and days_to_expiry < 0:
+        flags.append({
+            "code": "EXPIRED",
+            "severity": "critical",
+            "message": (
+                f"Expired {abs(days_to_expiry)} day"
+                f"{'s' if abs(days_to_expiry) != 1 else ''} ago — close the position."
+            ),
+        })
+
+    # 2. DTE_WARNING — option ≤7d to expiry
+    elif (
+        pos.position_type in ("CALL", "PUT")
+        and days_to_expiry is not None
+        and 0 <= days_to_expiry <= 7
+    ):
+        flags.append({
+            "code": "DTE_WARNING",
+            "severity": "warn",
+            "message": (
+                f"{days_to_expiry} day{'s' if days_to_expiry != 1 else ''} to expiry"
+                " — consider rolling or closing."
+            ),
+        })
+
+    # 3. STOP_BREACH — current price below stop_loss (STOCK) or below strike+0 for CALL
+    if current_price is not None and pos.stop_loss is not None:
+        stop = float(pos.stop_loss)
+        # For STOCK: breached when price <= stop
+        # For CALL: stop is in option-premium space; same comparison
+        # For PUT: stop is also premium space
+        if pos.position_type == "STOCK" and current_price <= stop:
+            flags.append({
+                "code": "STOP_BREACH",
+                "severity": "critical",
+                "message": (
+                    f"Price ${current_price:.2f} at/below stop ${stop:.2f}."
+                ),
+            })
+        elif pos.position_type in ("CALL", "PUT") and current_price <= stop:
+            flags.append({
+                "code": "STOP_BREACH",
+                "severity": "critical",
+                "message": (
+                    f"Premium ${current_price:.2f} at/below stop ${stop:.2f}."
+                ),
+            })
+
+    # 4. TARGET_HIT — current price reached target
+    if current_price is not None and pos.target_price is not None:
+        tgt = float(pos.target_price)
+        if pos.position_type == "STOCK" and current_price >= tgt:
+            flags.append({
+                "code": "TARGET_HIT",
+                "severity": "info",
+                "message": f"Target ${tgt:.2f} reached. Take profits or trail stop.",
+            })
+        elif pos.position_type in ("CALL", "PUT") and current_price >= tgt:
+            flags.append({
+                "code": "TARGET_HIT",
+                "severity": "info",
+                "message": f"Premium target ${tgt:.2f} reached.",
+            })
+
+    # 5. SIGNAL_CONFLICT — held instrument vs current rec direction
+    if rec is not None:
+        # Use weighted_action when present (user-personalized), else raw action.
+        rec_action = (
+            rec.weighted_action if getattr(rec, "weighted_action", None) else rec.action
+        )
+        bullish_rec = rec_action in ("BUY", "STRONG_BUY")
+        bearish_rec = rec_action in ("SELL", "STRONG_SELL")
+        if pos.position_type == "CALL" and bearish_rec:
+            flags.append({
+                "code": "SIGNAL_CONFLICT",
+                "severity": "warn",
+                "message": (
+                    f"You hold a CALL but Vela now rates this {rec_action.replace('_', ' ')}."
+                ),
+            })
+        elif pos.position_type == "PUT" and bullish_rec:
+            flags.append({
+                "code": "SIGNAL_CONFLICT",
+                "severity": "warn",
+                "message": (
+                    f"You hold a PUT but Vela now rates this {rec_action.replace('_', ' ')}."
+                ),
+            })
+        elif pos.position_type == "STOCK" and bearish_rec:
+            flags.append({
+                "code": "SIGNAL_CONFLICT",
+                "severity": "warn",
+                "message": (
+                    f"You hold STOCK but Vela now rates this {rec_action.replace('_', ' ')}."
+                ),
+            })
+
+    # 6. CONVICTION_DROP — current weighted/raw conviction is meaningfully negative
+    #    relative to whatever was true when the position was opened. We don't
+    #    persist the open-time conviction, so the heuristic is "current
+    #    conviction <= -30 for a long-style position" which is the SELL band.
+    if rec is not None and rec.conviction_score is not None:
+        conv = float(
+            rec.weighted_conviction_score
+            if getattr(rec, "weighted_conviction_score", None) is not None
+            else rec.conviction_score
+        )
+        # CALL/STOCK = bullish-leaning; PUT = bearish-leaning. Flag when the
+        # current direction has flipped strongly against the position.
+        if pos.position_type in ("CALL", "STOCK") and conv <= -30:
+            flags.append({
+                "code": "CONVICTION_DROP",
+                "severity": "warn",
+                "message": (
+                    f"Conviction is {conv:+.0f} — strongly against your long position."
+                ),
+            })
+        elif pos.position_type == "PUT" and conv >= 30:
+            flags.append({
+                "code": "CONVICTION_DROP",
+                "severity": "warn",
+                "message": (
+                    f"Conviction is {conv:+.0f} — strongly against your short position."
+                ),
+            })
+
+    return flags
 
 
 async def _get_watchlist_context(
     db: AsyncSession,
     position_tickers: set[str] | None = None,
+    user: User | None = None,
 ) -> tuple[set[str], dict[str, RecommendationResponse]]:
     """Load active watchlist tickers and latest recommendations for each.
 
@@ -1834,13 +2360,43 @@ async def _get_watchlist_context(
                     suggested_options=opts,
                 )
 
+    # Apply user signal weighting to each rec so embedded recommendations on
+    # positions reflect personalization. Skipped when user is None (e.g.
+    # internal callers that don't want weighting).
+    if user is not None:
+        from services.preferences import (
+            ensure_preferences,
+            get_signal_group_weights,
+        )
+        pref = await ensure_preferences(db, user)
+        await db.commit()
+        weights = get_signal_group_weights(pref)
+        for resp in rec_map.values():
+            _apply_signal_weights_to_response(resp, weights)
+
     return watchlist_tickers, rec_map
+
+
+async def _owned_position(db: AsyncSession, id_: int, user: User) -> Position:
+    """Load a position iff it's owned by the current user. 404 otherwise.
+
+    Returning 404 (not 403) on cross-tenant access is intentional: it doesn't
+    leak the existence of other users' rows.
+    """
+    result = await db.execute(
+        select(Position).where(Position.id == id_, Position.user_id == user.id)
+    )
+    pos = result.scalars().first()
+    if not pos:
+        raise HTTPException(status_code=404, detail="Position not found")
+    return pos
 
 
 @router.post("/positions", response_model=PositionResponse, status_code=201)
 async def create_position(
     body: PositionCreateRequest,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Create a new tracked position."""
     import asyncio
@@ -1867,6 +2423,7 @@ async def create_position(
         current_price = Decimal(str(stock_price))
 
     pos = Position(
+        user_id=user.id,
         ticker=ticker,
         company_name=company_name,
         position_type=body.position_type,
@@ -1885,7 +2442,7 @@ async def create_position(
     await db.commit()
     await db.refresh(pos)
 
-    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker})
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker}, user=user)
     return _compute_position_fields(pos, watchlist_tickers, rec_map)
 
 
@@ -1894,9 +2451,14 @@ async def list_positions(
     status: str | None = Query(None),
     ticker: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """List positions with computed P&L and recommendation overlay."""
-    query = select(Position).order_by(Position.opened_at.desc())
+    query = (
+        select(Position)
+        .where(Position.user_id == user.id)
+        .order_by(Position.opened_at.desc())
+    )
     if status:
         query = query.where(Position.status == status.upper())
     if ticker:
@@ -1906,18 +2468,19 @@ async def list_positions(
     positions = result.scalars().all()
 
     pos_tickers = {p.ticker for p in positions}
-    watchlist_tickers, rec_map = await _get_watchlist_context(db, pos_tickers)
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, pos_tickers, user=user)
     return [_compute_position_fields(p, watchlist_tickers, rec_map) for p in positions]
 
 
 @router.get("/positions/{id_}", response_model=PositionResponse)
-async def get_position(id_: int, db: AsyncSession = Depends(get_db)):
+async def get_position(
+    id_: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Get a single position with computed fields."""
-    pos = await db.get(Position, id_)
-    if not pos:
-        raise HTTPException(status_code=404, detail="Position not found")
-
-    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker})
+    pos = await _owned_position(db, id_, user)
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker}, user=user)
     return _compute_position_fields(pos, watchlist_tickers, rec_map)
 
 
@@ -1926,11 +2489,10 @@ async def update_position(
     id_: int,
     body: PositionUpdateRequest,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Update mutable position fields."""
-    pos = await db.get(Position, id_)
-    if not pos:
-        raise HTTPException(status_code=404, detail="Position not found")
+    pos = await _owned_position(db, id_, user)
 
     if body.stop_loss is not None:
         pos.stop_loss = body.stop_loss
@@ -1944,7 +2506,7 @@ async def update_position(
     await db.commit()
     await db.refresh(pos)
 
-    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker})
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker}, user=user)
     return _compute_position_fields(pos, watchlist_tickers, rec_map)
 
 
@@ -1953,11 +2515,10 @@ async def close_position(
     id_: int,
     body: PositionCloseRequest,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Close an open position and compute realized P&L."""
-    pos = await db.get(Position, id_)
-    if not pos:
-        raise HTTPException(status_code=404, detail="Position not found")
+    pos = await _owned_position(db, id_, user)
     if pos.status != "OPEN":
         raise HTTPException(status_code=409, detail="Position is already closed")
 
@@ -1981,29 +2542,33 @@ async def close_position(
     await db.commit()
     await db.refresh(pos)
 
-    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker})
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker}, user=user)
     return _compute_position_fields(pos, watchlist_tickers, rec_map)
 
 
 @router.delete("/positions/{id_}")
-async def delete_position(id_: int, db: AsyncSession = Depends(get_db)):
+async def delete_position(
+    id_: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Delete a position."""
-    pos = await db.get(Position, id_)
-    if not pos:
-        raise HTTPException(status_code=404, detail="Position not found")
+    pos = await _owned_position(db, id_, user)
     await db.delete(pos)
     await db.commit()
     return {"status": "deleted"}
 
 
 @router.post("/positions/{id_}/refresh-price", response_model=PositionResponse)
-async def refresh_position_price(id_: int, db: AsyncSession = Depends(get_db)):
+async def refresh_position_price(
+    id_: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Refresh the current stock price for a position via yfinance."""
     import asyncio
 
-    pos = await db.get(Position, id_)
-    if not pos:
-        raise HTTPException(status_code=404, detail="Position not found")
+    pos = await _owned_position(db, id_, user)
 
     client = DataSourceClient()
     try:
@@ -2018,7 +2583,7 @@ async def refresh_position_price(id_: int, db: AsyncSession = Depends(get_db)):
         await db.commit()
         await db.refresh(pos)
 
-    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker})
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker}, user=user)
     return _compute_position_fields(pos, watchlist_tickers, rec_map)
 
 
@@ -2172,8 +2737,16 @@ async def scanner_status():
 async def industries_list(
     target_date: date | None = Query(None, alias="date"),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    """Latest (or given-date) industry recommendations — one row per industry."""
+    """Latest (or given-date) industry recommendations — one row per industry.
+
+    Each row's conviction is multiplied by the user's `industry_weights[name]`
+    preference (default 1.0) to produce `weighted_conviction_score`. Sort
+    order uses the weighted value, so muted sectors (weight=0) sink to the
+    bottom and boosted sectors (weight=2) rise. Raw `conviction_score` is
+    preserved on the response so the UI can show the delta.
+    """
     if target_date is None:
         latest = await db.execute(select(func.max(IndustryRecommendation.rec_date)))
         target_date = latest.scalar()
@@ -2182,10 +2755,28 @@ async def industries_list(
     stmt = (
         select(IndustryRecommendation)
         .where(IndustryRecommendation.rec_date == target_date)
-        .order_by(IndustryRecommendation.conviction_score.desc())
     )
     result = await db.execute(stmt)
-    return result.scalars().all()
+    rows = list(result.scalars().all())
+
+    from services.preferences import ensure_preferences
+    pref = await ensure_preferences(db, user)
+    await db.commit()
+    weights = pref.industry_weights or {}
+
+    out: list[IndustryRecommendationResponse] = []
+    for row in rows:
+        resp = IndustryRecommendationResponse.model_validate(row)
+        weight = float(weights.get(row.industry, 1.0))
+        weighted = float(row.conviction_score) * weight
+        # Clamp to [-100, 100] same band as the underlying score
+        weighted = max(-100.0, min(100.0, weighted))
+        resp.weighted_conviction_score = Decimal(str(round(weighted, 2)))
+        resp.industry_weight = Decimal(str(round(weight, 2)))
+        out.append(resp)
+
+    out.sort(key=lambda r: float(r.weighted_conviction_score or 0), reverse=True)
+    return out
 
 
 @router.get("/industries/{industry:path}", response_model=IndustryDetailResponse)
@@ -2243,11 +2834,125 @@ async def industry_detail(industry: str, db: AsyncSession = Depends(get_db)):
         )
         members = list(mem_q.scalars().all())
 
+    # Top components (representative tickers) — enrich with live financials.
+    # Pulled from yfinance via the cached DataSourceClient.get_stock_data so
+    # the second request hits the cache. Empty rep list = empty top_components.
+    import asyncio as _asyncio
+    from services.industry_summary import (
+        build_executive_summary,
+        compute_forward_outlook,
+    )
+
+    rep_tickers_raw = latest.representative_tickers or []
+    data_client = DataSourceClient()
+    loop = _asyncio.get_event_loop()
+    top_components: list[IndustryTopComponent] = []
+    for rep in rep_tickers_raw[:3]:
+        ticker = rep.get("ticker") if isinstance(rep, dict) else None
+        if not ticker:
+            continue
+        try:
+            sd = await loop.run_in_executor(None, data_client.get_stock_data, ticker)
+        except Exception:
+            sd = {}
+        price = sd.get("price")
+        market_cap = sd.get("market_cap")
+        pe = sd.get("pe_ratio")
+        wk_high = sd.get("fifty_two_week_high")
+        pct_from_high = None
+        if price is not None and wk_high and wk_high > 0:
+            pct_from_high = (float(price) - float(wk_high)) / float(wk_high) * 100.0
+        top_components.append(
+            IndustryTopComponent(
+                ticker=ticker,
+                company_name=sd.get("company_name"),
+                action=str(rep.get("action") or "HOLD"),
+                conviction=Decimal(str(rep.get("conviction", 0))),
+                price=Decimal(str(price)) if price is not None else None,
+                market_cap=(
+                    Decimal(str(market_cap)) if market_cap is not None else None
+                ),
+                pe_ratio=Decimal(str(pe)) if pe is not None else None,
+                pct_from_52w_high=(
+                    Decimal(str(round(pct_from_high, 2)))
+                    if pct_from_high is not None
+                    else None
+                ),
+                sector_industry=sd.get("industry"),
+            )
+        )
+
+    # 5-day forward conviction projection
+    history_scores = [float(h.conviction_score) for h in history]
+    fwd_dicts = compute_forward_outlook(
+        current_conviction=float(latest.conviction_score),
+        history_scores=history_scores,
+        etf_momentum_20d=(
+            float(latest.etf_momentum_20d) if latest.etf_momentum_20d is not None else None
+        ),
+        avg_news_sentiment=(
+            float(latest.avg_news_sentiment) if latest.avg_news_sentiment is not None else None
+        ),
+        active_catalyst_count=int(latest.active_catalyst_count or 0),
+    )
+    forward_outlook = [IndustryForwardPoint(**fp) for fp in fwd_dicts]
+
+    # Executive summary — composed from facts.
+    component_dicts = [
+        {
+            "ticker": c.ticker,
+            "action": c.action,
+            "conviction": float(c.conviction),
+            "market_cap": float(c.market_cap) if c.market_cap is not None else None,
+            "price": float(c.price) if c.price is not None else None,
+        }
+        for c in top_components
+    ]
+    executive_summary = build_executive_summary(
+        industry=industry,
+        action=latest.action,
+        conviction=float(latest.conviction_score),
+        member_count=int(latest.member_count or 0),
+        bullish_count=int(latest.bullish_count or 0),
+        bearish_count=int(latest.bearish_count or 0),
+        breadth_above_50d_pct=(
+            float(latest.breadth_above_50d_pct)
+            if latest.breadth_above_50d_pct is not None
+            else None
+        ),
+        etf_symbol=latest.etf_symbol,
+        etf_rsi_14=(
+            float(latest.etf_rsi_14) if latest.etf_rsi_14 is not None else None
+        ),
+        etf_momentum_20d=(
+            float(latest.etf_momentum_20d)
+            if latest.etf_momentum_20d is not None
+            else None
+        ),
+        avg_news_sentiment=(
+            float(latest.avg_news_sentiment)
+            if latest.avg_news_sentiment is not None
+            else None
+        ),
+        news_article_count=int(latest.news_article_count or 0),
+        geopolitical_points=(
+            float(latest.geopolitical_points)
+            if latest.geopolitical_points is not None
+            else None
+        ),
+        active_catalyst_count=int(latest.active_catalyst_count or 0),
+        top_components=component_dicts,
+        top_signals=latest.signals or [],
+    )
+
     return IndustryDetailResponse(
         industry=industry,
         latest=latest,
         history=history,
         members=members,
+        executive_summary=executive_summary,
+        top_components=top_components,
+        forward_outlook=forward_outlook,
     )
 
 

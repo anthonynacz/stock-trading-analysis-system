@@ -1,0 +1,10 @@
+# Temporary override for smoke-testing JWT auth path.
+# Use with: docker compose -f docker-compose.yml -f docker-compose.auth-test.yml up -d backend
+# Revert with: docker compose up -d backend
+services:
+  backend:
+    environment:
+      LEGACY_MODE: "false"
+      JWT_HS256_SECRET: "smoke-test-secret-do-not-use-in-prod"
+      JWT_ISSUER: "vela-dev"
+      DEV_TOKEN_ENABLED: "true"

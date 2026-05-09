@@ -21,6 +21,15 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://edgeflow:avppVVR4NcnSagQzqa-LIDCZNjacTbz6@db:5432/edgeflow
+      # Auth — LEGACY_MODE stays on so anonymous browsing still resolves
+      # to the legacy admin. With the middleware now JWT-preferred, a
+      # signed-in user gets routed by their token while the LEGACY_MODE
+      # default catches everyone else. DEV_TOKEN_ENABLED + an HS256 secret
+      # let you log in via the /login page in development.
+      LEGACY_MODE: "true"
+      DEV_TOKEN_ENABLED: "true"
+      JWT_HS256_SECRET: "vela-dev-secret-rotate-before-production"
+      JWT_ISSUER: "vela-dev"
     env_file:
       - .env
     depends_on:

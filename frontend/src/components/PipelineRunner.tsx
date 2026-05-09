@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { PipelineRunStatus } from '../types';
 import { startPipeline, getPipelineStatus } from '../utils/api';
+import { useEntitlements } from '../contexts/EntitlementsContext';
 
 const ALL_PHASES = [
   { key: 'discovery', label: 'Discovery' },
@@ -69,6 +70,16 @@ export default function PipelineRunner({ onComplete }: Props) {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const completedRef = useRef(false);
+
+  // Tier gate. Three render paths:
+  //   - Empty allowlist → locked variant (FREE/STARTER)
+  //   - Subset (e.g. PRO's intraday-only) → simplified single-button refresh
+  //   - Full 8 phases → full UI with presets + custom phase picker (PREMIUM/ADMIN)
+  const { data: ent } = useEntitlements();
+  const canTrigger = ent?.entitlements.manual_pipeline_trigger ?? false;
+  const allowedPhases = ent?.entitlements.allowed_pipeline_phases ?? [];
+  const allowedSet = new Set(allowedPhases);
+  const hasFullPipelineAccess = allowedPhases.length >= ALL_PHASES.length;
 
   const isRunning = run?.status === 'running';
   const isDone = run?.status === 'completed' || run?.status === 'failed';
@@ -266,7 +277,64 @@ export default function PipelineRunner({ onComplete }: Props) {
     );
   }
 
-  // ── Render: button with dropdown menu ───────────────────────────────────
+  // ── Render: tier-locked variant ─────────────────────────────────────────
+
+  if (!canTrigger) {
+    return (
+      <div
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-border/50 text-text-secondary text-xs font-medium cursor-not-allowed"
+        title="Manual pipeline triggers are a Pro feature. The shared pipeline auto-runs daily; data updates for you when it does."
+      >
+        <svg
+          className="w-3.5 h-3.5 opacity-60"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m0 0v2m0-2h2m-2 0h-2m9-9V7a4 4 0 00-8 0v3m12 0H4a2 2 0 00-2 2v6a2 2 0 002 2h16a2 2 0 002-2v-6a2 2 0 00-2-2z" />
+        </svg>
+        <span>Refresh</span>
+        <span className="text-[9px] font-bold uppercase tracking-wider px-1 py-px rounded bg-amber-900/40 text-amber-300 border border-amber-500/30">
+          Pro+
+        </span>
+      </div>
+    );
+  }
+
+  // ── Render: intraday-only variant (PRO) ─────────────────────────────────
+  // Single button that runs the user's full allowed phase set (which for PRO
+  // is the intraday subset). No phase picker — users at this tier shouldn't
+  // need to think about which subset; the once-a-day expensive phases are
+  // off-limits and handled by the cron.
+
+  if (!hasFullPipelineAccess) {
+    const phaseLabels = ALL_PHASES
+      .filter((p) => allowedSet.has(p.key))
+      .map((p) => p.label)
+      .join(' · ');
+    return (
+      <button
+        onClick={() => handleStart(allowedPhases)}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-border text-text-primary text-xs font-medium hover:bg-text-secondary/20 transition-colors"
+        title={`Refresh runs the intraday subset for your tier: ${phaseLabels}. Once-a-day phases (discovery, watchlist, ratings, earnings) are handled by the daily cron.`}
+      >
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M13 10V3L4 14h7v7l9-11h-7z"
+          />
+        </svg>
+        <span>Refresh</span>
+        <span className="text-[9px] font-bold tracking-wider uppercase px-1 py-px rounded bg-purple-500/20 text-purple-300">
+          Intraday
+        </span>
+      </button>
+    );
+  }
+
+  // ── Render: full-pipeline variant (PREMIUM / ADMIN) ─────────────────────
 
   return (
     <div className="relative" ref={menuRef}>

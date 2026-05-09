@@ -11,5 +11,6 @@ RUN uv pip install --system torch --index-url https://download.pytorch.org/whl/c
 RUN uv pip install --system -r requirements.txt
 
 COPY . .
+RUN chmod +x /app/entrypoint.sh
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/entrypoint.sh"]

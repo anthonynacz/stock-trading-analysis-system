@@ -23,6 +23,201 @@ class Base(DeclarativeBase):
     pass
 
 
+# ── Users (multi-tenancy root) ──────────────────────────────────────────────
+
+class User(Base):
+    """Tenant root. Mirror of an external auth provider's user identity.
+
+    `provider` + `provider_user_id` are the source-of-truth identifier; `email`
+    is mirrored from the provider for human-readable display and for linking
+    pre-provider rows (the legacy admin user) to a real auth identity later.
+
+    The retrofit creates a single LEGACY_USER row and backfills every owned
+    row to point at it; once frontend auth integration ships, real users
+    upsert here on first JWT validation.
+    """
+
+    __tablename__ = "users"
+    __table_args__ = (
+        Index("ix_users_provider_sub", "provider", "provider_user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    provider: Mapped[Optional[str]] = mapped_column(String(50))  # supabase, clerk, auth0, legacy, dev
+    provider_user_id: Mapped[Optional[str]] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="USER")  # USER, ADMIN
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+# ── Subscriptions / entitlements / credits ──────────────────────────────────
+
+class Subscription(Base):
+    """One row per user representing their current paid (or free) tier.
+
+    Stripe / Paddle webhooks update this row in place — `external_provider` +
+    `external_subscription_id` are the link back to the billing system. A
+    user with no subscription is implicitly on the FREE tier; the entitlements
+    service treats absence as FREE.
+    """
+
+    __tablename__ = "subscriptions"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_subscription_user"),
+        Index("ix_subscription_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    tier: Mapped[str] = mapped_column(String(20), nullable=False, default="FREE")
+    # ACTIVE | TRIAL | PAST_DUE | CANCELED | EXPIRED
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    current_period_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    current_period_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    canceled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    external_provider: Mapped[Optional[str]] = mapped_column(String(20))  # stripe, paddle, manual
+    external_subscription_id: Mapped[Optional[str]] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CreditBalance(Base):
+    """Per-(user, feature) credit ledger summary.
+
+    `balance` is the live remaining count. `last_grant_at` tracks when the
+    monthly subscription quota was last applied so the entitlements service
+    can lazily refresh on consume rather than via a cron job.
+    """
+
+    __tablename__ = "credit_balances"
+    __table_args__ = (
+        UniqueConstraint("user_id", "feature", name="uq_credit_user_feature"),
+        Index("ix_credit_balance_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    feature: Mapped[str] = mapped_column(String(40), nullable=False)
+    balance: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_grant_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CreditLedger(Base):
+    """Append-only audit log of every credit grant / consumption / expiry.
+
+    Every change to CreditBalance.balance is paired with one row here so we
+    can answer "where did my credits go?" and reconcile against Stripe for
+    purchased packs. balance_after is the post-change balance for at-a-glance
+    inspection without re-summing the ledger.
+    """
+
+    __tablename__ = "credit_ledger"
+    __table_args__ = (
+        Index("ix_credit_ledger_user_feature", "user_id", "feature"),
+        Index("ix_credit_ledger_created", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    feature: Mapped[str] = mapped_column(String(40), nullable=False)
+    delta: Mapped[int] = mapped_column(Integer, nullable=False)  # signed
+    balance_after: Mapped[int] = mapped_column(Integer, nullable=False)
+    # monthly_grant | feature_use | credit_pack | tier_change | manual_adjust | expiry
+    reason: Mapped[str] = mapped_column(String(40), nullable=False)
+    ref_id: Mapped[Optional[str]] = mapped_column(String(255))  # stripe event id, etc.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ── Alert log (dedup ledger for the alerts worker) ──────────────────────────
+
+class AlertLog(Base):
+    """Append-only log of alerts fired per user.
+
+    The `key` column is a deterministic dedup key composed by the alerts
+    worker — e.g. `rec_change:NVDA:2026-05-07:HOLD->BUY`. Re-runs of the
+    scanner check this table before re-firing a duplicate.
+    """
+
+    __tablename__ = "alert_log"
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", name="uq_alert_log_user_key"),
+        Index("ix_alert_log_user_fired", "user_id", "fired_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    alert_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    ticker: Mapped[Optional[str]] = mapped_column(String(10))
+    key: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload: Mapped[Optional[dict]] = mapped_column(JSON)
+    fired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    delivered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    delivery_channel: Mapped[Optional[str]] = mapped_column(String(20))
+
+
+# ── User preferences (personalization) ─────────────────────────────────────
+
+class UserPreferences(Base):
+    """Per-user personalization config — single row per user.
+
+    Each JSON column is a structured blob the preferences service validates
+    and merges. Storing as JSON (not normalized child tables) is a deliberate
+    trade — these are read together, written together, and the schema
+    evolves quickly as we add personalization features. Validation lives in
+    `services/preferences.py`, not at the DB layer.
+    """
+
+    __tablename__ = "user_preferences"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_user_pref_user"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # conservative | moderate | aggressive — drives strike recommender + risk-leaning weights
+    risk_profile: Mapped[str] = mapped_column(String(20), nullable=False, default="moderate")
+    # signal_group → multiplier in [0.0, 2.0]; 1.0 = neutral, 0 = mute, 2 = double
+    signal_group_weights: Mapped[Optional[dict]] = mapped_column(JSON)
+    # sector_name → multiplier in [0.0, 2.0]; same semantics, applied at view-time
+    industry_weights: Mapped[Optional[dict]] = mapped_column(JSON)
+    # list of tickers the user wants injected into the shared pipeline (capped by tier)
+    custom_universe: Mapped[Optional[list]] = mapped_column(JSON)
+    # structured alert toggles + thresholds (rec_change, conviction_breach, earnings, ...)
+    alerts_config: Mapped[Optional[dict]] = mapped_column(JSON)
+    # AM digest: enabled, send_time_utc, included sections
+    digest_config: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+# ── Saved chart configs (per user) ──────────────────────────────────────────
+
+class ChartConfig(Base):
+    __tablename__ = "chart_configs"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_chart_user_name"),
+        Index("ix_chart_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    dataset: Mapped[str] = mapped_column(String(50), nullable=False)
+    spec: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 # ── Sectors ──────────────────────────────────────────────────────────────────
 
 class Sector(Base):
@@ -89,12 +284,15 @@ class Watchlist(Base):
     __table_args__ = (
         UniqueConstraint("ticker", "added_date", name="uq_watchlist_ticker_date"),
         Index("ix_watchlist_active", "is_active"),
+        Index("ix_watchlist_user", "user_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
     company_name: Mapped[Optional[str]] = mapped_column(String(255))
     sector_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sectors.id"))
+    # user_id nullable during retrofit; backfilled to legacy user by init_db.
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     added_date: Mapped[date] = mapped_column(Date, default=date.today)
     removed_date: Mapped[Optional[date]] = mapped_column(Date)
     entry_reason: Mapped[Optional[str]] = mapped_column(Text)
@@ -306,6 +504,7 @@ class StrikeSnapshot(Base):
     __tablename__ = "strike_snapshots"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
     current_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
@@ -316,6 +515,7 @@ class StrikeSnapshot(Base):
     __table_args__ = (
         UniqueConstraint("snapshot_date", "ticker", name="uq_strike_snap_date_ticker"),
         Index("ix_strike_snap_date", "snapshot_date"),
+        Index("ix_strike_snap_user", "user_id"),
     )
 
 
@@ -326,9 +526,11 @@ class ResearchResult(Base):
     __table_args__ = (
         Index("ix_research_ticker", "ticker"),
         Index("ix_research_analyzed", "analyzed_at"),
+        Index("ix_research_user", "user_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
     company_name: Mapped[Optional[str]] = mapped_column(String(255))
     analyzed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -356,9 +558,11 @@ class DeepOptionsAnalysis(Base):
     __table_args__ = (
         Index("ix_deep_opt_ticker", "ticker"),
         Index("ix_deep_opt_analyzed", "analyzed_at"),
+        Index("ix_deep_opt_user", "user_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
     company_name: Mapped[Optional[str]] = mapped_column(String(255))
     analyzed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -389,9 +593,11 @@ class Position(Base):
         Index("ix_position_ticker", "ticker"),
         Index("ix_position_status", "status"),
         Index("ix_position_opened", "opened_at"),
+        Index("ix_position_user", "user_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
     company_name: Mapped[Optional[str]] = mapped_column(String(255))
     position_type: Mapped[str] = mapped_column(String(10), nullable=False)  # CALL, PUT, STOCK
@@ -418,9 +624,11 @@ class MultibaggerUniverse(Base):
     __table_args__ = (
         UniqueConstraint("ticker", name="uq_mbu_ticker"),
         Index("ix_mbu_active", "is_active"),
+        Index("ix_mbu_user", "user_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
     ticker: Mapped[str] = mapped_column(String(10), nullable=False)
     company_name: Mapped[Optional[str]] = mapped_column(String(255))
     theme: Mapped[Optional[str]] = mapped_column(String(80))  # e.g. AI_MEMORY, ROBOTICS, NUCLEAR, GLP1

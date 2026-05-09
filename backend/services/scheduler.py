@@ -62,6 +62,73 @@ pipeline_run: dict = {
 
 
 # ---------------------------------------------------------------------------
+# Custom universe injection
+# ---------------------------------------------------------------------------
+
+async def _inject_custom_universe(session) -> set[str]:
+    """Read every user's `custom_universe` preference, dedupe globally, and
+    ensure each ticker is present in today's active watchlist with
+    `is_manual=True` (so it survives rotation).
+
+    Returns the set of tickers that were inserted (existing entries are
+    only flagged is_manual=True; the count of newly-added tickers is the
+    "injected" cardinality).
+
+    Architecture notes:
+      - Watchlist is currently a globally shared table. So a custom-universe
+        ticker added by user A becomes visible to user B in the watchlist UI.
+        This matches the strategy doc's "globally cached / globally deduped"
+        design — the cost is one pipeline run regardless of who added it.
+        Per-user *visibility* of the watchlist is a separate (deferred)
+        concern documented in CLAUDE.md.
+      - Re-runs the same day are safe: existing rows are detected via
+        is_active=True, so we don't violate uq_watchlist_ticker_date.
+    """
+    from datetime import date as _date
+    from sqlalchemy import select
+    from db.models import UserPreferences, Watchlist
+
+    pref_result = await session.execute(select(UserPreferences))
+    custom: set[str] = set()
+    for pref in pref_result.scalars():
+        for t in (pref.custom_universe or []):
+            if isinstance(t, str) and t.strip():
+                custom.add(t.strip().upper())
+
+    if not custom:
+        return set()
+
+    existing_q = await session.execute(
+        select(Watchlist).where(
+            Watchlist.is_active.is_(True),
+            Watchlist.ticker.in_(custom),
+        )
+    )
+    existing = {w.ticker: w for w in existing_q.scalars()}
+
+    today = _date.today()
+    added: set[str] = set()
+    for ticker in custom:
+        if ticker in existing:
+            # Re-affirm is_manual so the ticker is rotation-protected
+            wl = existing[ticker]
+            if not wl.is_manual:
+                wl.is_manual = True
+            continue
+        session.add(Watchlist(
+            ticker=ticker,
+            added_date=today,
+            is_active=True,
+            is_manual=True,
+            entry_reason="Custom universe slot",
+        ))
+        added.add(ticker)
+
+    await session.commit()
+    return added
+
+
+# ---------------------------------------------------------------------------
 # Pipeline phase runner
 # ---------------------------------------------------------------------------
 
@@ -82,6 +149,10 @@ async def run_pipeline_phase(phase: str) -> None:
         elif phase == "watchlist":
             result = await watchlist_mgr.rotate_watchlist()
             logger.info("Watchlist rotation complete: %s", result)
+            injected = await _inject_custom_universe(session)
+            if injected:
+                logger.info("Custom universe injection: %d tickers added (%s)",
+                            len(injected), sorted(injected))
 
         elif phase == "ratings":
             active = await watchlist_mgr.get_active_watchlist()
@@ -327,6 +398,34 @@ def start_scheduler() -> None:
     scheduler.add_job(
         run_pipeline_phase, "cron", args=["earnings"],
         hour=17, minute=0, day_of_week=weekdays, id="postmarket_earnings",
+    )
+
+    # -- Personalization workers ---------------------------------------------
+    # Retention sweeper at 04:00 ET. Hard-deletes per-user research +
+    # deep-options older than the user's tier retention_days. ADMIN/PREMIUM
+    # are skipped (UNLIMITED).
+    from services.retention import run_retention_sweep
+    scheduler.add_job(
+        run_retention_sweep, "cron",
+        hour=4, minute=0, id="retention_sweep",
+    )
+
+    # AM digest dispatcher every 30 min between 06:00–13:00 ET. Iterates
+    # users whose digest_config.send_time_utc falls in the past slot,
+    # composes content, and dispatches to delivery (currently log stub).
+    from services.digest import run_digest_dispatch
+    scheduler.add_job(
+        run_digest_dispatch, "cron",
+        hour="6-13", minute="0,30", day_of_week=weekdays, id="digest_dispatch",
+    )
+
+    # Alerts trigger scan every 30 min during market hours. Scans for
+    # rec changes / conviction breaches / unusual flow / earnings T-N
+    # / news spikes / insider filings; dedup against alert_log.
+    from services.alerts import run_alerts_scan
+    scheduler.add_job(
+        run_alerts_scan, "cron",
+        hour="6-17", minute="*/30", day_of_week=weekdays, id="alerts_scan",
     )
 
     scheduler.start()

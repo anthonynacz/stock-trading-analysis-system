@@ -7,7 +7,30 @@ class Settings(BaseSettings):
     FINNHUB_API_KEY: str = ""
     NEWSAPI_KEY: str = ""
 
+    # ── Auth / multi-tenancy ────────────────────────────────────────────────
+    # When True, all protected routes resolve to the LEGACY_USER_EMAIL admin
+    # user and JWTs are not required. Default ON during the SaaS retrofit so
+    # existing UI keeps working; flip OFF when frontend auth integration ships.
+    LEGACY_MODE: bool = True
+    LEGACY_USER_EMAIL: str = "anthonynacouzy@gmail.com"
+
+    # JWT verification — provider-agnostic. Configure ONE of:
+    #   JWT_JWKS_URL   — for OIDC providers (Supabase / Clerk / Auth0)
+    #   JWT_HS256_SECRET — for HS256-signed tokens (dev or simple flows)
+    JWT_JWKS_URL: str = ""
+    JWT_HS256_SECRET: str = ""
+    JWT_ALGORITHMS: str = "RS256,HS256"  # comma-separated
+    JWT_AUDIENCE: str = ""
+    JWT_ISSUER: str = ""
+
+    # Enables POST /api/dev/token (mints a short-lived HS256 JWT). Dev only.
+    DEV_TOKEN_ENABLED: bool = False
+
     model_config = {"env_file": [".env", "../.env"], "extra": "ignore"}
+
+    @property
+    def jwt_algorithms_list(self) -> list[str]:
+        return [a.strip() for a in self.JWT_ALGORITHMS.split(",") if a.strip()]
 
 
 settings = Settings()
