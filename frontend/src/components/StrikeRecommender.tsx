@@ -122,7 +122,7 @@ export default function StrikeRecommender({ ticker }: StrikeRecommenderProps) {
           step={50}
           value={budget}
           onChange={(e) => setBudget(Number(e.target.value))}
-          className="w-full h-1.5 rounded-full appearance-none bg-border cursor-pointer accent-purple-500"
+          className="w-full h-1.5 rounded-full appearance-none bg-border cursor-pointer accent-accent-500"
         />
         <div className="flex justify-between text-[9px] text-text-secondary">
           <span>$50</span>
@@ -134,7 +134,7 @@ export default function StrikeRecommender({ ticker }: StrikeRecommenderProps) {
       <button
         onClick={handleFind}
         disabled={loading}
-        className="w-full py-1.5 text-xs font-semibold rounded bg-purple-700/80 text-white hover:bg-purple-600/80 disabled:opacity-40 transition-colors"
+        className="w-full py-1.5 text-xs font-semibold rounded bg-accent-700/80 text-white hover:bg-accent-600/80 disabled:opacity-40 transition-colors"
       >
         {loading ? 'Searching...' : 'Find Strikes'}
       </button>
@@ -161,7 +161,7 @@ export default function StrikeRecommender({ ticker }: StrikeRecommenderProps) {
                   onClick={() => setActiveTab(level)}
                   className={`flex-1 px-2 py-1 text-[10px] font-semibold rounded capitalize transition-colors ${
                     activeTab === level
-                      ? 'bg-purple-900/60 text-purple-300 border border-purple-600/60'
+                      ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
                       : 'bg-card border border-border text-text-secondary hover:text-text-primary'
                   }`}
                 >

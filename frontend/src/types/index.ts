@@ -233,6 +233,35 @@ export interface ResearchResult {
     unusual_activity_detail: string | null;
   } | null;
   suggested_options: SuggestedOption[];
+  // Deep-news enrichment (Tier 1)
+  news_summary: string | null;
+  news_clusters: {
+    by_category: Record<string, number>;
+    by_source_quality: Record<string, number>;
+    article_count_14d: number;
+  } | null;
+  sentiment_timeline: Array<{
+    date: string;
+    mean_sentiment: number;
+    article_count: number;
+  }> | null;
+  top_headlines: Array<{
+    headline: string;
+    summary: string;
+    source: string | null;
+    source_quality: 'PRIMARY' | 'MAJOR_PRESS' | 'ANALYST' | 'AGGREGATOR' | 'OTHER';
+    category: string;
+    sentiment_score: number | null;
+    impact_level: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+    published_at: string | null;
+    url: string | null;
+  }> | null;
+  // Bull / bear / watch synthesis (Tier 3)
+  bull_case: string | null;
+  bear_case: string | null;
+  watch_text: string | null;
+  enrichment_status: 'PENDING' | 'COMPLETE' | 'PARTIAL' | 'FAILED' | null;
+  enrichment_error: string | null;
 }
 
 // ── Deep Options Analysis ─────────────────────────────────────────────────

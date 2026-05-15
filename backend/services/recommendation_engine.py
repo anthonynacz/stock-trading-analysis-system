@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from db.models import (
     AnalystRating,
+    DeepOptionsAnalysis,
     EarningsCalendar,
     MarketNews,
     OptionsSnapshot,
@@ -600,6 +601,68 @@ class RecommendationEngine:
         except Exception:
             logger.exception("_rolling_call_volume_3d failed for %s", ticker)
             return 0.0
+
+    async def _iv_rank_5d_change(self, ticker: str, current_rank: float) -> float | None:
+        """Return the change in iv_rank (in percentage points) over the last 5
+        trading days, or None if no comparable historical row exists.
+
+        Uses options_snapshots history: picks the row closest to 5 trading
+        days ago (within a 4–8 day window to handle weekends / off-days).
+        Returns ``current_rank - prior_rank``.
+        """
+        try:
+            cutoff_min = datetime.now(tz=timezone.utc) - timedelta(days=8)
+            cutoff_max = datetime.now(tz=timezone.utc) - timedelta(days=4)
+            stmt = (
+                select(OptionsSnapshot.iv_rank)
+                .where(
+                    OptionsSnapshot.ticker == ticker,
+                    OptionsSnapshot.iv_rank.isnot(None),
+                    OptionsSnapshot.snapshot_time >= cutoff_min,
+                    OptionsSnapshot.snapshot_time <= cutoff_max,
+                )
+                .order_by(OptionsSnapshot.snapshot_time.desc())
+                .limit(1)
+            )
+            row = (await self._session.execute(stmt)).first()
+            if not row or row[0] is None:
+                return None
+            prior_rank = float(row[0])
+            return current_rank - prior_rank
+        except Exception:
+            logger.exception("_iv_rank_5d_change failed for %s", ticker)
+            return None
+
+    async def _latest_deep_options_risks(
+        self, ticker: str, max_age_days: int = 7
+    ) -> list[dict]:
+        """Return the ``hidden_risks`` list from the most recent
+        :class:`DeepOptionsAnalysis` for *ticker* within *max_age_days*.
+
+        Returns ``[]`` when no recent analysis exists. The bubble-up signals
+        in `_stack_signals` filter this list by severity.
+        """
+        try:
+            cutoff = datetime.now(tz=timezone.utc) - timedelta(days=max_age_days)
+            stmt = (
+                select(DeepOptionsAnalysis.hidden_risks)
+                .where(
+                    DeepOptionsAnalysis.ticker == ticker,
+                    DeepOptionsAnalysis.analyzed_at >= cutoff,
+                )
+                .order_by(DeepOptionsAnalysis.analyzed_at.desc())
+                .limit(1)
+            )
+            row = (await self._session.execute(stmt)).first()
+            if not row or not row[0]:
+                return []
+            risks = row[0]
+            if not isinstance(risks, list):
+                return []
+            return risks
+        except Exception:
+            logger.exception("_latest_deep_options_risks failed for %s", ticker)
+            return []
 
     # ------------------------------------------------------------------
     # Signal stacking
@@ -1221,6 +1284,28 @@ class RecommendationEngine:
                     "detail": f"Earnings within 7 days + high vega ({vega_pct * 100:.1f}% premium per 1% IV) — expect IV crush post-event",
                 })
 
+            # IV Spike Warning — iv_rank rose sharply over the last 5 trading
+            # days. Front-loaded premium accumulation outside an earnings
+            # window typically resolves with an event + crush; the signal
+            # fires regardless of whether we know the catalyst. Skip when the
+            # earnings-keyed IV Crush Risk already fired above so the user
+            # doesn't see two near-duplicates.
+            if options_snapshot and not (earnings_imminent and vega_pct > 0.08):
+                current_rank = float(options_snapshot.iv_rank or 0)
+                if current_rank > 0:
+                    rank_change = await self._iv_rank_5d_change(ticker, current_rank)
+                    if rank_change is not None and rank_change >= 20:
+                        score -= 12
+                        signals.append({
+                            "signal": "IV Spike Warning",
+                            "points": -12,
+                            "detail": (
+                                f"IV rank rose {rank_change:+.0f}pp over 5 trading days "
+                                f"(now {current_rank:.0f}) — premium building ahead of an "
+                                "unknown catalyst; expect crush on resolution"
+                            ),
+                        })
+
             # Favorable Theta — low decay with strong conviction
             if near_dte <= 14 and theta_pct < 0.01 and score > 30:
                 score += 5
@@ -1229,6 +1314,56 @@ class RecommendationEngine:
                     "points": 5,
                     "detail": f"Low theta decay ({theta_pct * 100:.1f}%/day) with strong conviction — time is manageable",
                 })
+
+        # ── Deep-options hidden-risk bubble-up ──────────────────────────
+        # Pulls hidden_risks from the most recent deep_options_analyses row
+        # (≤7d). Each MEDIUM/HIGH severity finding surfaces as its own signal
+        # in the daily stack so users see the structural options warnings
+        # without leaving the Dashboard for the Options Lab.
+        # Severity gating: BACKWARDATION fires even at LOW severity (it's the
+        # critical "IV crush imminent" signal — see APLD May 11). Others
+        # require MEDIUM or HIGH to avoid noise from minor structural drift.
+        deep_risks = await self._latest_deep_options_risks(ticker)
+        if deep_risks:
+            seen_codes: set[str] = set()
+            for risk in deep_risks:
+                code = risk.get("code")
+                severity = risk.get("severity", "LOW")
+                detail = risk.get("detail") or risk.get("title") or ""
+                if not code or code in seen_codes:
+                    continue
+                seen_codes.add(code)
+
+                if code == "BACKWARDATION":
+                    # Term-structure backwardation fires at any severity. This
+                    # is the textbook "IV crush coming" signature.
+                    score -= 12
+                    signals.append({
+                        "signal": "Term Backwardation",
+                        "points": -12,
+                        "detail": detail,
+                    })
+                elif code == "PUT_SKEW" and severity in ("MEDIUM", "HIGH"):
+                    score -= 8
+                    signals.append({
+                        "signal": "Elevated Put Skew",
+                        "points": -8,
+                        "detail": detail,
+                    })
+                elif code == "NEGATIVE_GEX" and severity in ("MEDIUM", "HIGH"):
+                    score -= 10
+                    signals.append({
+                        "signal": "Negative Gamma Exposure",
+                        "points": -10,
+                        "detail": detail,
+                    })
+                elif code == "PIN_RISK" and severity in ("MEDIUM", "HIGH"):
+                    score -= 5
+                    signals.append({
+                        "signal": "Options Pin Risk",
+                        "points": -5,
+                        "detail": detail,
+                    })
 
         # ── News sentiment (scaled by magnitude and count) ──────────────
         avg_sentiment = news_sentiment.get("avg_sentiment", 0.0)

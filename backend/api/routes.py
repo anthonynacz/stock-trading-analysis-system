@@ -2000,10 +2000,37 @@ async def analyze_ticker(
         ),
         options_data=_jsonable(result["options_data"]),
         suggested_options=_jsonable(result["suggested_contracts"]),
+        enrichment_status="PENDING",
     )
     db.add(research)
     await db.commit()
     await db.refresh(research)
+
+    # Deep-news + bull/bear/watch enrichment. Best-effort: any failure inside
+    # the enricher leaves the base research intact and just marks the status.
+    try:
+        from services.research_enricher import enrich as _enrich_research
+
+        enrichment = await _enrich_research(
+            db, ticker, company_name, result, data_client,
+        )
+        research.enrichment_status = enrichment.status
+        research.enrichment_error = enrichment.error
+        research.news_summary = enrichment.news_summary
+        research.news_clusters = _jsonable(enrichment.news_clusters)
+        research.sentiment_timeline = _jsonable(enrichment.sentiment_timeline)
+        research.top_headlines = _jsonable(enrichment.top_headlines)
+        research.bull_case = enrichment.bull_case
+        research.bear_case = enrichment.bear_case
+        research.watch_text = enrichment.watch_text
+        await db.commit()
+        await db.refresh(research)
+    except Exception as e:
+        logger.exception("Enrichment failed for %s", ticker)
+        research.enrichment_status = "FAILED"
+        research.enrichment_error = str(e)[:500]
+        await db.commit()
+        await db.refresh(research)
 
     return await _research_to_response(db, research)
 

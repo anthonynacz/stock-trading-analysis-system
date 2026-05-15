@@ -89,7 +89,7 @@ export default function TrendChart({ data, loading, error, sma, onSmaChange }: T
               onClick={() => onSmaChange(w)}
               className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
                 sma === w
-                  ? 'bg-purple-900/60 text-purple-300 border border-purple-600/60'
+                  ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
                   : 'bg-card border border-border text-text-secondary hover:text-text-primary'
               }`}
             >

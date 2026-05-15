@@ -4,6 +4,7 @@ import type { Recommendation, OptionsSnapshot, SignalDetail } from '../types';
 import { getTickerRecommendations, getOptions } from '../utils/api';
 import { useTickerTrends } from '../hooks/useEdgeFlow';
 import { ACTION_COLORS, getActionLabel, shortSectorLabel } from '../utils/theme';
+import { actionLabel, detectDemotion } from '../utils/recommendation';
 import StrikeRecommender from './StrikeRecommender';
 import TrendChart from './TrendChart';
 import DayComparison from './DayComparison';
@@ -123,6 +124,15 @@ export default function TickerDetail({ ticker, companyName, selectedDate, onClos
   }, [fetchData]);
 
   const borderColor = rec ? (ACTION_COLORS[rec.action] ?? '#21262d') : '#21262d';
+  const demotion = rec
+    ? detectDemotion(rec.conviction_score, rec.action, rec.signals)
+    : null;
+  const actionTooltip = demotion?.isDemoted
+    ? `Score ${Number(rec?.conviction_score ?? 0).toFixed(0)}: natural band ${actionLabel(demotion.naturalAction)}. ` +
+      `Demoted to ${actionLabel(demotion.finalAction)}` +
+      (demotion.gateName ? ` by ${demotion.gateName}.` : '.') +
+      (demotion.gateDetail ? ` ${demotion.gateDetail}` : '')
+    : undefined;
 
   return (
     <div className="bg-card border border-border rounded-lg overflow-hidden sticky top-16">
@@ -140,15 +150,24 @@ export default function TickerDetail({ ticker, companyName, selectedDate, onClos
           )}
           {rec && (
             <span
-              className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase"
+              className={demotion?.isDemoted ? 'px-1.5 py-0.5 rounded text-[10px] font-bold uppercase cursor-help' : 'px-1.5 py-0.5 rounded text-[10px] font-bold uppercase'}
               style={{ backgroundColor: borderColor + '22', color: borderColor }}
+              title={actionTooltip}
             >
               {getActionLabel(rec.action)}
             </span>
           )}
+          {rec && demotion?.isDemoted && (
+            <span
+              className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-px rounded bg-amber-900/40 text-amber-300 border border-amber-500/30 cursor-help"
+              title={actionTooltip}
+            >
+              ↓ {actionLabel(demotion.naturalAction)}
+            </span>
+          )}
           {rec && (rec.revision_number ?? 0) > 0 && (
             <span
-              className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-900/50 text-purple-300 border border-purple-500/40 flex items-center gap-1"
+              className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-accent-900/50 text-accent-300 border border-accent-500/40 flex items-center gap-1"
               title={
                 `Revised${rec.prior_action && rec.prior_action !== rec.action ? `: ${rec.prior_action.replace('_', ' ')} → ${rec.action.replace('_', ' ')}` : ''}` +
                 (rec.prior_conviction_score != null && rec.conviction_score != null
@@ -167,7 +186,7 @@ export default function TickerDetail({ ticker, companyName, selectedDate, onClos
           <button
             onClick={() => navigate(`/options-lab?ticker=${encodeURIComponent(ticker)}&auto=1`)}
             title={`Run deep options analysis for ${ticker}`}
-            className="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-900/40 text-purple-300 hover:bg-purple-800/60 hover:text-purple-200 transition-colors flex items-center gap-1"
+            className="px-2 py-0.5 rounded text-[10px] font-semibold bg-accent-900/40 text-accent-300 hover:bg-accent-800/60 hover:text-accent-200 transition-colors flex items-center gap-1"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -379,7 +398,7 @@ export default function TickerDetail({ ticker, companyName, selectedDate, onClos
                 }
                 navigate(`/positions?${params.toString()}`);
               }}
-              className="w-full py-2 px-3 rounded-md text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white transition-colors"
+              className="w-full py-2 px-3 rounded-md text-xs font-semibold bg-accent-600 hover:bg-accent-500 text-white transition-colors"
             >
               Open Position
             </button>

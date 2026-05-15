@@ -256,7 +256,7 @@ export default function UniversePage() {
             onClick={() => setTab('universe')}
             className={`text-xs px-3 py-1.5 rounded-md transition-colors font-medium ${
               tab === 'universe'
-                ? 'bg-purple-500/20 text-purple-400'
+                ? 'bg-accent-500/20 text-accent-400'
                 : 'text-text-secondary hover:text-text-primary'
             }`}
           >
@@ -266,7 +266,7 @@ export default function UniversePage() {
             onClick={() => setTab('candidates')}
             className={`text-xs px-3 py-1.5 rounded-md transition-colors font-medium relative ${
               tab === 'candidates'
-                ? 'bg-purple-500/20 text-purple-400'
+                ? 'bg-accent-500/20 text-accent-400'
                 : 'text-text-secondary hover:text-text-primary'
             }`}
           >
@@ -291,7 +291,7 @@ export default function UniversePage() {
               onChange={(e) => setAddTicker(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
               placeholder="Add ticker..."
-              className="text-sm bg-card border border-border rounded-lg px-3 py-1.5 text-text-primary placeholder:text-text-secondary/50 w-32 focus:outline-none focus:border-purple-500"
+              className="text-sm bg-card border border-border rounded-lg px-3 py-1.5 text-text-primary placeholder:text-text-secondary/50 w-32 focus:outline-none focus:border-accent-500"
             />
             <select
               value={addSector}
@@ -305,7 +305,7 @@ export default function UniversePage() {
             <button
               onClick={handleAdd}
               disabled={adding || !addTicker.trim()}
-              className="text-xs px-3 py-1.5 rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 transition-colors font-medium disabled:opacity-50"
+              className="text-xs px-3 py-1.5 rounded-lg bg-accent-500/20 text-accent-400 hover:bg-accent-500/30 transition-colors font-medium disabled:opacity-50"
             >
               {adding ? 'Adding...' : 'Add'}
             </button>

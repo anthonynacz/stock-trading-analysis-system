@@ -17,3 +17,4 @@ torch>=2.2.0
 reportlab>=4.1.0
 pyjwt[crypto]>=2.8.0
 alembic>=1.13.0
+anthropic>=0.45.0

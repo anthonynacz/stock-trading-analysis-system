@@ -11,7 +11,7 @@ function getSignalColor(signal: string): string {
   if (s.includes('theta') || s.includes('decay')) return 'bg-amber-900/60 text-amber-400';
   if (s.includes('crush') || s.includes('vega')) return 'bg-orange-900/60 text-orange-400';
   if (s.includes('iv') || s.includes('implied')) return 'bg-amber-900/60 text-amber-400';
-  if (s.includes('news')) return 'bg-purple-900/60 text-purple-400';
+  if (s.includes('news')) return 'bg-accent-900/60 text-accent-400';
   if (s.includes('wick') || s.includes('gap-down') || s.includes('near low') || s.includes('near high'))
     return 'bg-orange-900/60 text-orange-400';
   return 'bg-gray-800 text-text-secondary';

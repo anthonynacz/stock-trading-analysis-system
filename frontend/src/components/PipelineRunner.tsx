@@ -46,7 +46,7 @@ const PRESETS: {
     description: 'News + Options + Recs + Industries (skip slow phases)',
     phases: ['news', 'options', 'recommendations', 'industries'],
     iconPath: 'M13 10V3L4 14h7v7l9-11h-7z',
-    iconColor: 'text-purple-400',
+    iconColor: 'text-accent-400',
   },
 ];
 
@@ -327,7 +327,7 @@ export default function PipelineRunner({ onComplete }: Props) {
           />
         </svg>
         <span>Refresh</span>
-        <span className="text-[9px] font-bold tracking-wider uppercase px-1 py-px rounded bg-purple-500/20 text-purple-300">
+        <span className="text-[9px] font-bold tracking-wider uppercase px-1 py-px rounded bg-accent-500/20 text-accent-300">
           Intraday
         </span>
       </button>
@@ -412,7 +412,7 @@ export default function PipelineRunner({ onComplete }: Props) {
                 type="checkbox"
                 checked={selected.has(phase.key)}
                 onChange={() => togglePhase(phase.key)}
-                className="accent-purple-500"
+                className="accent-accent-500"
               />
               {phase.label}
             </label>
@@ -421,7 +421,7 @@ export default function PipelineRunner({ onComplete }: Props) {
             <button
               onClick={handleRunSelected}
               disabled={selected.size === 0}
-              className="w-full text-xs py-1 rounded bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 font-medium disabled:opacity-40 transition-colors"
+              className="w-full text-xs py-1 rounded bg-accent-500/20 text-accent-400 hover:bg-accent-500/30 font-medium disabled:opacity-40 transition-colors"
             >
               Run {selected.size > 0 ? `${selected.size} phase${selected.size > 1 ? 's' : ''}` : 'selected'}
             </button>

@@ -61,7 +61,7 @@ export default function IndustryCard({ item, selected, linkTo, onClick, compact 
   const body = (
     <div
       className={`bg-card border rounded-lg p-3 text-left transition-colors ${
-        selected ? 'border-purple-500' : 'border-border hover:border-text-secondary'
+        selected ? 'border-accent-500' : 'border-border hover:border-text-secondary'
       } ${onClick || linkTo ? 'cursor-pointer' : ''} ${isMuted ? 'opacity-50' : ''}`}
     >
       <div className="flex items-start justify-between gap-2 mb-1.5">

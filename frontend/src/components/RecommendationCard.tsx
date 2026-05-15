@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Recommendation, SignalDetail } from '../types';
 import { ACTION_COLORS, getActionLabel, shortSectorLabel } from '../utils/theme';
+import { actionLabel, detectDemotion } from '../utils/recommendation';
 import OptionsTable from './OptionsTable';
 
 interface RecommendationCardProps {
@@ -72,7 +73,7 @@ function RevisionBadge({ rec }: { rec: Recommendation }) {
   return (
     <span className="relative group inline-flex">
       <span
-        className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-900/50 text-purple-300 border border-purple-500/40 flex items-center gap-1 cursor-help"
+        className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-accent-900/50 text-accent-300 border border-accent-500/40 flex items-center gap-1 cursor-help"
         aria-label="Revised recommendation"
       >
         <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
@@ -82,8 +83,8 @@ function RevisionBadge({ rec }: { rec: Recommendation }) {
       </span>
       {/* Hover tooltip with diff */}
       <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 hidden group-hover:block z-50 pointer-events-none">
-        <div className="bg-gray-900 border border-purple-500/60 text-white text-[10px] px-2 py-1.5 rounded whitespace-nowrap shadow-lg space-y-0.5">
-          <div className="text-purple-300 font-semibold uppercase tracking-wider text-[9px]">
+        <div className="bg-gray-900 border border-accent-500/60 text-white text-[10px] px-2 py-1.5 rounded whitespace-nowrap shadow-lg space-y-0.5">
+          <div className="text-accent-300 font-semibold uppercase tracking-wider text-[9px]">
             Revision {rec.revision_number}
           </div>
           {rec.prior_action != null && (
@@ -128,11 +129,22 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
 
   const isRevised = (rec.revision_number ?? 0) > 0;
   const sectorShort = shortSectorLabel(rec.sector);
+  const demotion = detectDemotion(
+    rec.conviction_score,
+    rec.action,
+    rec.signals,
+  );
+  const actionTooltip = demotion.isDemoted
+    ? `Score ${Number(rec.conviction_score ?? 0).toFixed(0)}: natural band ${actionLabel(demotion.naturalAction)}. ` +
+      `Demoted to ${actionLabel(demotion.finalAction)}` +
+      (demotion.gateName ? ` by ${demotion.gateName}.` : '.') +
+      (demotion.gateDetail ? ` ${demotion.gateDetail}` : '')
+    : undefined;
 
   return (
     <div
       className={`bg-card rounded-lg border overflow-hidden cursor-pointer transition-colors hover:border-text-secondary/30 ${
-        isRevised ? 'border-purple-500/40 ring-1 ring-purple-500/20' : 'border-border'
+        isRevised ? 'border-accent-500/40 ring-1 ring-accent-500/20' : 'border-border'
       }`}
       style={{ borderLeftWidth: '3px', borderLeftColor: borderColor }}
       onClick={() => setExpanded((v) => !v)}
@@ -141,11 +153,20 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
       <div className="px-3 py-2 space-y-1.5">
         <div className="flex items-center gap-2">
           <span
-            className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase"
+            className={demotion.isDemoted ? 'px-1.5 py-0.5 rounded text-[10px] font-bold uppercase cursor-help' : 'px-1.5 py-0.5 rounded text-[10px] font-bold uppercase'}
             style={{ backgroundColor: borderColor + '22', color: borderColor }}
+            title={actionTooltip}
           >
             {getActionLabel(rec.action)}
           </span>
+          {demotion.isDemoted && (
+            <span
+              className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-px rounded bg-amber-900/40 text-amber-300 border border-amber-500/30 cursor-help"
+              title={actionTooltip}
+            >
+              ↓ {actionLabel(demotion.naturalAction)}
+            </span>
+          )}
           <RevisionBadge rec={rec} />
           <span className="text-sm font-bold text-text-primary">{rec.ticker}</span>
           {sectorShort && (
@@ -169,7 +190,7 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
           <button
             onClick={openOptionsLab}
             title={`Run deep options analysis for ${rec.ticker}`}
-            className={`${rec.signal_count != null ? '' : 'ml-auto'} px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-900/40 text-purple-300 hover:bg-purple-800/60 hover:text-purple-200 transition-colors flex items-center gap-1 shrink-0`}
+            className={`${rec.signal_count != null ? '' : 'ml-auto'} px-2 py-0.5 rounded text-[10px] font-semibold bg-accent-900/40 text-accent-300 hover:bg-accent-800/60 hover:text-accent-200 transition-colors flex items-center gap-1 shrink-0`}
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -194,8 +215,8 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
         <div className="px-3 pb-2.5 pt-0 border-t border-border space-y-2" onClick={(e) => e.stopPropagation()}>
           {/* Revision diff line — when this row was overwritten by a same-day re-run */}
           {isRevised && (
-            <div className="mt-2 px-2 py-1 rounded bg-purple-900/20 border border-purple-500/30 text-[11px] text-text-primary flex items-center gap-2 flex-wrap">
-              <span className="text-purple-300 font-semibold uppercase tracking-wider text-[9px]">
+            <div className="mt-2 px-2 py-1 rounded bg-accent-900/20 border border-accent-500/30 text-[11px] text-text-primary flex items-center gap-2 flex-wrap">
+              <span className="text-accent-300 font-semibold uppercase tracking-wider text-[9px]">
                 Revised
               </span>
               {rec.prior_action != null && rec.prior_action !== rec.action && (

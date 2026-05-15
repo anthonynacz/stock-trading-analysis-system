@@ -68,7 +68,7 @@ function ScoreBar({ score }: { score: number }) {
     <div className="flex items-center gap-2">
       <div className="w-20 h-1.5 bg-border rounded-full overflow-hidden">
         <div
-          className="h-full bg-gradient-to-r from-purple-500 to-red-500"
+          className="h-full bg-gradient-to-r from-accent-500 to-red-500"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -98,7 +98,7 @@ function ResultCard({
       type="button"
       onClick={onClick}
       className={`text-left bg-card border rounded-lg p-3 transition-colors ${
-        selected ? 'border-purple-500' : 'border-border hover:border-text-secondary'
+        selected ? 'border-accent-500' : 'border-border hover:border-text-secondary'
       }`}
     >
       <div className="flex items-center justify-between gap-2 mb-1">
@@ -490,7 +490,7 @@ export default function ScannerPage() {
               <button
                 type="submit"
                 disabled={!addInput.trim()}
-                className="text-[11px] font-semibold px-2 py-1 rounded bg-purple-900/60 text-purple-300 hover:bg-purple-800/60 disabled:opacity-40 transition-colors"
+                className="text-[11px] font-semibold px-2 py-1 rounded bg-accent-900/60 text-accent-300 hover:bg-accent-800/60 disabled:opacity-40 transition-colors"
               >
                 Add
               </button>

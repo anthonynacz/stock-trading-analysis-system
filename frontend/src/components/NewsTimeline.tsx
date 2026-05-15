@@ -109,7 +109,7 @@ export default function NewsTimeline({
                 onClick={() => setPage(i)}
                 className={`w-7 h-7 rounded text-xs font-medium transition-colors ${
                   i === safePage
-                    ? 'bg-purple-500/20 text-purple-400'
+                    ? 'bg-accent-500/20 text-accent-400'
                     : 'text-text-secondary hover:text-text-primary hover:bg-border/60'
                 }`}
               >
@@ -188,7 +188,7 @@ export default function NewsTimeline({
                         .map((r) => (
                           <span
                             key={r.ticker}
-                            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-purple-900/30 text-purple-400 border border-purple-700/30"
+                            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-accent-900/30 text-accent-400 border border-accent-700/30"
                             style={{ opacity: 0.4 + r.relevance_score * 0.6 }}
                             title={`${r.relevance_source} (${r.relevance_score})`}
                           >

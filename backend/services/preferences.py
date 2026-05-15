@@ -409,10 +409,15 @@ _SIGNAL_NAME_TO_GROUP: dict[str, str] = {
     "Bearish OI Skew": "options_flow",
     "High IV Rank": "options_flow",
     "Smart Money Positioning": "options_flow",
+    "Term Backwardation": "options_flow",
+    "Elevated Put Skew": "options_flow",
+    "Negative Gamma Exposure": "options_flow",
+    "Options Pin Risk": "options_flow",
     # greeks
     "Heavy Theta Decay": "greeks",
     "Elevated Theta Decay": "greeks",
     "IV Crush Risk": "greeks",
+    "IV Spike Warning": "greeks",
     "Favorable Theta": "greeks",
     # news sentiment
     "Positive News Sentiment": "news_sentiment",

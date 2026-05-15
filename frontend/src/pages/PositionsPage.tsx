@@ -130,7 +130,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             type="text"
             value={ticker}
             onChange={(e) => setTicker(e.target.value)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-purple-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500"
             placeholder="NVDA"
             required
           />
@@ -162,7 +162,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             min={1}
             value={quantity}
             onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-purple-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
           />
         </div>
         <div>
@@ -172,7 +172,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             step="0.01"
             value={entryPrice}
             onChange={(e) => setEntryPrice(e.target.value)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-purple-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
             placeholder="0.00"
             required
           />
@@ -188,7 +188,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
               step="0.01"
               value={strikePrice}
               onChange={(e) => setStrikePrice(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-purple-500"
+              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
               placeholder="0.00"
             />
           </div>
@@ -199,7 +199,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
               step="0.01"
               value={premiumPaid}
               onChange={(e) => setPremiumPaid(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-purple-500"
+              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
               placeholder="Per contract"
             />
           </div>
@@ -209,7 +209,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
               type="date"
               value={expiry}
               onChange={(e) => setExpiry(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-purple-500"
+              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
             />
           </div>
         </div>
@@ -223,7 +223,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             step="0.01"
             value={stopLoss}
             onChange={(e) => setStopLoss(e.target.value)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-purple-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
             placeholder="Optional"
           />
         </div>
@@ -234,7 +234,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             step="0.01"
             value={targetPrice}
             onChange={(e) => setTargetPrice(e.target.value)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-purple-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
             placeholder="Optional"
           />
         </div>
@@ -244,7 +244,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             type="text"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-purple-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
             placeholder="Optional"
           />
         </div>
@@ -254,7 +254,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
         <button
           type="submit"
           disabled={submitting || !ticker.trim() || !entryPrice}
-          className="px-4 py-1.5 text-xs font-semibold rounded bg-purple-900/60 text-purple-400 hover:bg-purple-800/60 disabled:opacity-40 transition-colors"
+          className="px-4 py-1.5 text-xs font-semibold rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 disabled:opacity-40 transition-colors"
         >
           {submitting ? 'Adding...' : 'Add Position'}
         </button>
@@ -283,7 +283,7 @@ function PositionCard({
     <div
       onClick={onClick}
       className={`bg-card border rounded-lg px-3 py-2.5 cursor-pointer transition-colors hover:border-text-secondary/40 ${
-        selected ? 'ring-1 ring-purple-500/60' : ''
+        selected ? 'ring-1 ring-accent-500/60' : ''
       }`}
       style={{ borderLeftWidth: 3, borderLeftColor: borderColor }}
     >
@@ -644,7 +644,7 @@ function PositionDetail({
             <button
               onClick={handleAnalyze}
               disabled={analyzing}
-              className="w-full py-1.5 text-xs rounded bg-purple-900/60 text-purple-400 hover:bg-purple-800/60 disabled:opacity-40 transition-colors"
+              className="w-full py-1.5 text-xs rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 disabled:opacity-40 transition-colors"
             >
               {analyzing ? 'Analyzing (30-60s)...' : 'Run EdgeFlow Analysis'}
             </button>
@@ -663,14 +663,14 @@ function PositionDetail({
           <textarea
             value={editNotes}
             onChange={(e) => { setEditNotes(e.target.value); setNotesChanged(true); }}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-purple-500 resize-none"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500 resize-none"
             rows={2}
             placeholder="Add notes..."
           />
           {notesChanged && (
             <button
               onClick={handleSaveNotes}
-              className="mt-1 px-3 py-1 text-[10px] rounded bg-purple-900/60 text-purple-400 hover:bg-purple-800/60 transition-colors"
+              className="mt-1 px-3 py-1 text-[10px] rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 transition-colors"
             >
               Save Notes
             </button>
@@ -687,7 +687,7 @@ function PositionDetail({
                 step="0.01"
                 value={closePrice}
                 onChange={(e) => setClosePrice(e.target.value)}
-                className="flex-1 px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-purple-500"
+                className="flex-1 px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
                 placeholder={isOption ? 'Close premium' : 'Close price'}
               />
               <button
@@ -702,7 +702,7 @@ function PositionDetail({
               type="text"
               value={closeNotes}
               onChange={(e) => setCloseNotes(e.target.value)}
-              className="w-full mt-2 px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-purple-500"
+              className="w-full mt-2 px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
               placeholder="Close notes (optional)"
             />
           </div>
@@ -793,7 +793,7 @@ export default function PositionsPage() {
           <h1 className="text-2xl font-bold">My Positions</h1>
           <button
             onClick={() => { setShowForm((v) => !v); if (showForm) setInitialForm(undefined); }}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-purple-900/60 text-purple-400 hover:bg-purple-800/60 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 transition-colors"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -822,7 +822,7 @@ export default function PositionsPage() {
               onClick={() => { setTab(t); setSelectedId(null); }}
               className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
                 tab === t
-                  ? 'border-purple-500 text-text-primary'
+                  ? 'border-accent-500 text-text-primary'
                   : 'border-transparent text-text-secondary hover:text-text-primary'
               }`}
             >

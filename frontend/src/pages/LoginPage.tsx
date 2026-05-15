@@ -67,7 +67,7 @@ export default function LoginPage() {
               placeholder="you@example.com"
               autoComplete="email"
               required
-              className="mt-1 w-full bg-page border border-border rounded px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-purple-500"
+              className="mt-1 w-full bg-page border border-border rounded px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-500"
             />
           </label>
 
@@ -80,7 +80,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={submitting || !email.trim()}
-            className="w-full py-2 rounded-md text-sm font-semibold bg-purple-600 hover:bg-purple-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="w-full py-2 rounded-md text-sm font-semibold bg-accent-600 hover:bg-accent-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {submitting ? 'Signing in…' : 'Continue with dev token'}
           </button>
@@ -89,7 +89,7 @@ export default function LoginPage() {
         {legacyMode && (
           <p className="text-[11px] text-amber-300 bg-amber-900/15 border border-amber-500/25 rounded px-2.5 py-2">
             <span className="font-semibold">Legacy mode is on.</span> If you don't sign in
-            here, the <a href="/" className="text-purple-400 hover:underline">dashboard</a> opens
+            here, the <a href="/" className="text-accent-400 hover:underline">dashboard</a> opens
             as the legacy admin. Sign in above to switch to a real user (e.g.{' '}
             <code className="font-mono">anthony@vela.io</code>).
           </p>

@@ -146,7 +146,7 @@ function ConvictionChart({
               y1={PADDING_TOP}
               x2={todayX}
               y2={H - PADDING_BOTTOM}
-              stroke="#a78bfa"
+              stroke="#34d399"
               strokeWidth={0.7}
               strokeDasharray="2 2"
             />
@@ -154,7 +154,7 @@ function ConvictionChart({
               x={todayX}
               y={PADDING_TOP + 8}
               fontSize="7"
-              fill="#a78bfa"
+              fill="#34d399"
               textAnchor={todayX < W / 2 ? 'start' : 'end'}
               dx={todayX < W / 2 ? 2 : -2}
             >
@@ -185,7 +185,7 @@ function ConvictionChart({
             cy={yOf(p.score)}
             r={p.offset === 0 ? 2.4 : 1.6}
             fill={p.score >= 0 ? '#2ea043' : '#f85149'}
-            stroke={p.offset === 0 ? '#a78bfa' : 'none'}
+            stroke={p.offset === 0 ? '#34d399' : 'none'}
             strokeWidth={p.offset === 0 ? 0.8 : 0}
             opacity={p.forecast && p.offset !== 0 ? 0.85 : 1}
           />
@@ -197,7 +197,7 @@ function ConvictionChart({
             x={xOf(off)}
             y={H - 3}
             fontSize="7"
-            fill={off === 0 ? '#a78bfa' : '#8b949e'}
+            fill={off === 0 ? '#34d399' : '#8b949e'}
             textAnchor="middle"
           >
             {fmtOffset(off)}
@@ -232,9 +232,9 @@ function ConvictionChart({
         <span className="flex items-center gap-1">
           <span
             className="inline-block w-px h-3"
-            style={{ borderLeft: '1px dashed #a78bfa' }}
+            style={{ borderLeft: '1px dashed #34d399' }}
           />
-          <span className="text-purple-300">Today (T0)</span>
+          <span className="text-accent-300">Today (T0)</span>
         </span>
       </div>
     </div>
@@ -244,8 +244,8 @@ function ConvictionChart({
 function ExecutiveSummaryPanel({ summary }: { summary: string | null }) {
   if (!summary) return null;
   return (
-    <div className="rounded-md border border-purple-500/25 bg-purple-950/20 p-3">
-      <div className="text-[10px] font-semibold text-purple-300 uppercase tracking-wider mb-1">
+    <div className="rounded-md border border-accent-500/25 bg-accent-950/20 p-3">
+      <div className="text-[10px] font-semibold text-accent-300 uppercase tracking-wider mb-1">
         Executive Summary
       </div>
       <p className="text-xs text-text-primary leading-relaxed">{summary}</p>

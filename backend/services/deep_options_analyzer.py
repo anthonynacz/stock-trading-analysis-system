@@ -247,16 +247,14 @@ class DeepOptionsAnalyzer:
         if atm_strike is None:
             return None
 
-        # ATM IV: average of direct-ATM call+put IV. yfinance often returns
-        # ~1e-5 (i.e., zero) for stale ATM quotes (off-hours), so fall back to
-        # the median of valid IVs from near-ATM contracts (within 5% of spot).
-        c_iv = _safe_float(atm_call.get("impliedVolatility")) if atm_call else None
-        p_iv = _safe_float(atm_put.get("impliedVolatility")) if atm_put else None
-        ivs = [iv for iv in (c_iv, p_iv) if iv is not None and 0.05 <= iv <= 3.0]
-        atm_iv = sum(ivs) / len(ivs) if ivs else None
-
-        if atm_iv is None:
-            band = spot * 0.05
+        # ATM IV: median of valid IVs from contracts within a tight band of
+        # spot. More stable than reading two direct-ATM contracts whose
+        # anchors flip between adjacent strikes on a sub-dollar spot move —
+        # one stale yfinance mid-quote on the new anchor used to swing
+        # iv_rank by 25+ points run-to-run. Falls back to a wider 5% band
+        # if the 2.5% band yields nothing valid (sparse small-cap chains).
+        def _band_median_iv(half_pct: float) -> float | None:
+            band = spot * half_pct
             nearby: list[float] = []
             for c in calls + puts:
                 k = _safe_float(c.get("strike"))
@@ -265,9 +263,12 @@ class DeepOptionsAnalyzer:
                     continue
                 if 0.05 <= iv <= 3.0:
                     nearby.append(iv)
-            if nearby:
-                nearby.sort()
-                atm_iv = nearby[len(nearby) // 2]  # median
+            if not nearby:
+                return None
+            nearby.sort()
+            return nearby[len(nearby) // 2]
+
+        atm_iv = _band_median_iv(0.025) or _band_median_iv(0.05)
 
         # ATM premiums (mid of bid/ask, else lastPrice)
         def _mid(c: dict | None) -> float | None:
@@ -815,15 +816,22 @@ class DeepOptionsAnalyzer:
         target: float,
         contracts: list[dict],
         min_oi: int,
-        tolerance_pct: float = 0.05,
+        tolerance_pct: float = 0.03,
     ) -> tuple[float | None, dict | None]:
         """Snap a math-derived target strike to the nearest *liquid* contract.
 
         Scans contracts within ±tolerance_pct of target; among those meeting
-        ``min_oi``, returns the one with the highest liquidity score
-        (OI + 5 × daily_vol). Returns (None, None) if nothing qualifies — the
+        ``min_oi``, returns the one with the highest distance-weighted
+        liquidity score. Returns (None, None) if nothing qualifies — the
         caller should treat this as a NO_TRADE / LIQUIDITY signal rather than
         ship a recommendation that can't be filled.
+
+        Score = (OI + 5 × daily_vol) × max(0, 1 − 4 × |k − target| / target).
+        With factor 4, a strike 2% off-target needs ~9% more raw liquidity to
+        win; one 5% off-target needs ~25% more. This keeps picks tracking the
+        math target instead of drifting to whichever in-band strike happens
+        to have the most OI, which is what produces 10%+ strike swings on a
+        small spot move across a discrete grid.
         """
         if not contracts or target is None:
             return None, None
@@ -838,10 +846,8 @@ class DeepOptionsAnalyzer:
             if oi < min_oi:
                 continue
             vol = int(c.get("volume") or 0)
-            score = oi + 5 * vol
-            # Tie-breaker: prefer strikes closer to the math target
-            distance_penalty = abs(k - target) / max(target, 1)
-            score = score - distance_penalty
+            distance_factor = max(0.0, 1 - 4 * abs(k - target) / max(target, 1))
+            score = (oi + 5 * vol) * distance_factor
             candidates.append((score, c))
         if not candidates:
             return None, None

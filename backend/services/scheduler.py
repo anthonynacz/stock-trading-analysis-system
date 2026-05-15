@@ -11,8 +11,10 @@ from datetime import datetime
 
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy import select
 
 from db.connection import async_session
+from db.models import UniverseStock
 from services.analyst_tracker import AnalystTracker
 from services.earnings_calendar import EarningsCalendarService
 from services.news_scanner import NewsScanner
@@ -171,10 +173,26 @@ async def run_pipeline_phase(phase: str) -> None:
         elif phase == "news":
             active = await watchlist_mgr.get_active_watchlist()
             active_tickers = [w.ticker for w in active]
-            ticker_company_map = {w.ticker: w.company_name for w in active}
+            # Per-ticker news fetches stay scoped to the watchlist (rate-limit
+            # bound on Finnhub /company-news), but relevance scoring expands to
+            # every active universe member so that a headline mentioning a
+            # non-watchlist ticker (e.g. AKAM in a "movers" article) still
+            # produces a NewsTickerRelevance row for that ticker.
+            universe_result = await session.execute(
+                select(UniverseStock.ticker, UniverseStock.company_name)
+                .where(UniverseStock.is_active.is_(True))
+            )
+            ticker_company_map: dict[str, str | None] = {
+                row[0]: row[1] for row in universe_result.all()
+            }
+            for w in active:
+                ticker_company_map.setdefault(w.ticker, w.company_name)
             scanner = NewsScanner(session, data_client)
             new_items = await scanner.scan_news(active_tickers, ticker_company_map)
-            logger.info("News scan complete: %d new items", len(new_items))
+            logger.info(
+                "News scan complete: %d new items, scored against %d tickers",
+                len(new_items), len(ticker_company_map),
+            )
 
         elif phase == "options":
             active = await watchlist_mgr.get_active_watchlist()

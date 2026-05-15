@@ -98,7 +98,7 @@ function ResultCard({ r, selected, onClick, onDelete }: {
     <div
       onClick={onClick}
       className={`bg-card border rounded-lg p-3 cursor-pointer transition-all hover:border-text-secondary group relative ${
-        selected ? 'border-purple-500 ring-1 ring-purple-500/30' : 'border-border'
+        selected ? 'border-accent-500 ring-1 ring-accent-500/30' : 'border-border'
       }`}
     >
       <button
@@ -197,7 +197,7 @@ function StrategyCard({ strategy }: { strategy: StrategyRecommendation | null })
           IV {strategy.iv_bucket}
         </span>
         {strategy.near_earnings && strategy.earnings_dte !== null && (
-          <span className="px-1.5 py-px rounded text-[10px] font-semibold uppercase bg-purple-900/40 text-purple-400">
+          <span className="px-1.5 py-px rounded text-[10px] font-semibold uppercase bg-accent-900/40 text-accent-400">
             Earnings {strategy.earnings_dte}d
           </span>
         )}
@@ -820,7 +820,7 @@ export default function OptionsLabPage() {
                   ? 'No tickers to refresh'
                   : `Re-run deep analysis for all ${results.length} ticker${results.length !== 1 ? 's' : ''}`
               }
-              className="px-3 py-1.5 text-sm font-semibold rounded bg-card border border-border text-text-primary hover:border-purple-500 hover:text-purple-300 disabled:opacity-40 disabled:hover:border-border disabled:hover:text-text-primary transition-colors flex items-center gap-1.5"
+              className="px-3 py-1.5 text-sm font-semibold rounded bg-card border border-border text-text-primary hover:border-accent-500 hover:text-accent-300 disabled:opacity-40 disabled:hover:border-border disabled:hover:text-text-primary transition-colors flex items-center gap-1.5"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -853,16 +853,16 @@ export default function OptionsLabPage() {
                 onChange={(e) => { setTickerInput(e.target.value); clearError(); }}
                 placeholder="Enter ticker..."
                 disabled={!!analyzingTicker}
-                className="w-32 px-3 py-1.5 text-sm bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-purple-500 disabled:opacity-50"
+                className="w-32 px-3 py-1.5 text-sm bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500 disabled:opacity-50"
               />
               <button
                 type="submit"
                 disabled={!!analyzingTicker || !tickerInput.trim()}
-                className="px-4 py-1.5 text-sm font-semibold rounded bg-purple-900/60 text-purple-400 hover:bg-purple-800/60 disabled:opacity-40 transition-colors flex items-center gap-2"
+                className="px-4 py-1.5 text-sm font-semibold rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 disabled:opacity-40 transition-colors flex items-center gap-2"
               >
                 {analyzingTicker && !batchProgress ? (
                   <>
-                    <div className="w-3.5 h-3.5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+                    <div className="w-3.5 h-3.5 border-2 border-accent-400 border-t-transparent rounded-full animate-spin" />
                     Analyzing...
                   </>
                 ) : (
@@ -877,7 +877,7 @@ export default function OptionsLabPage() {
 
         {analyzingTicker && (
           <div className="bg-card border border-border rounded-lg p-4 flex items-center gap-3">
-            <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin shrink-0" />
+            <div className="w-4 h-4 border-2 border-accent-400 border-t-transparent rounded-full animate-spin shrink-0" />
             {batchProgress ? (
               <>
                 <div className="flex-1 flex items-center gap-3">
@@ -887,7 +887,7 @@ export default function OptionsLabPage() {
                   </span>
                   <div className="flex-1 max-w-xs h-1.5 rounded-full bg-border overflow-hidden">
                     <div
-                      className="h-full rounded-full bg-purple-500 transition-all"
+                      className="h-full rounded-full bg-accent-500 transition-all"
                       style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
                     />
                   </div>
@@ -917,7 +917,7 @@ export default function OptionsLabPage() {
                 value={filterTicker}
                 onChange={(e) => setFilterTicker(e.target.value)}
                 placeholder="Filter by ticker..."
-                className="w-36 px-2 py-1 text-xs bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-purple-500"
+                className="w-36 px-2 py-1 text-xs bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500"
               />
               {filterTicker && (
                 <button

@@ -7,3 +7,9 @@ node_modules/
 dist/
 .vite/
 resources/
+
+# Local scratch / OS / tool noise
+.claude/
+bash.exe.stackdump
+tmp_*.json
+frontend/tmp_*.json

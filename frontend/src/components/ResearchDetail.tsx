@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import type { ResearchResult, SignalDetail } from '../types';
 import { useTickerTrends } from '../hooks/useEdgeFlow';
 import { ACTION_COLORS, getActionLabel, shortSectorLabel } from '../utils/theme';
+import { actionLabel, detectDemotion } from '../utils/recommendation';
 import StrikeRecommender from './StrikeRecommender';
 import TrendChart from './TrendChart';
 import DayComparison from './DayComparison';
@@ -107,6 +108,17 @@ export default function ResearchDetail({ result, onClose, onReanalyze, analyzing
   const navigate = useNavigate();
 
   const borderColor = ACTION_COLORS[result.action] ?? '#21262d';
+  const demotion = detectDemotion(
+    result.conviction_score,
+    result.action,
+    result.signals,
+  );
+  const actionTooltip = demotion.isDemoted
+    ? `Score ${Number(result.conviction_score ?? 0).toFixed(0)}: natural band ${actionLabel(demotion.naturalAction)}. ` +
+      `Demoted to ${actionLabel(demotion.finalAction)}` +
+      (demotion.gateName ? ` by ${demotion.gateName}.` : '.') +
+      (demotion.gateDetail ? ` ${demotion.gateDetail}` : '')
+    : undefined;
 
   return (
     <div className="bg-card border border-border rounded-lg overflow-hidden sticky top-10">
@@ -123,17 +135,26 @@ export default function ResearchDetail({ result, onClose, onReanalyze, analyzing
             </span>
           )}
           <span
-            className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase"
+            className={demotion.isDemoted ? 'px-1.5 py-0.5 rounded text-[10px] font-bold uppercase cursor-help' : 'px-1.5 py-0.5 rounded text-[10px] font-bold uppercase'}
             style={{ backgroundColor: borderColor + '22', color: borderColor }}
+            title={actionTooltip}
           >
             {getActionLabel(result.action)}
           </span>
+          {demotion.isDemoted && (
+            <span
+              className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-px rounded bg-amber-900/40 text-amber-300 border border-amber-500/30 cursor-help"
+              title={actionTooltip}
+            >
+              ↓ {actionLabel(demotion.naturalAction)}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <button
             onClick={() => navigate(`/options-lab?ticker=${encodeURIComponent(result.ticker)}&auto=1`)}
             title={`Run deep options analysis for ${result.ticker}`}
-            className="px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-900/40 text-purple-300 hover:bg-purple-800/60 hover:text-purple-200 transition-colors flex items-center gap-1"
+            className="px-2 py-0.5 rounded text-[10px] font-semibold bg-accent-900/40 text-accent-300 hover:bg-accent-800/60 hover:text-accent-200 transition-colors flex items-center gap-1"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -143,11 +164,11 @@ export default function ResearchDetail({ result, onClose, onReanalyze, analyzing
           <button
             onClick={() => onReanalyze(result.ticker)}
             disabled={analyzing}
-            className="p-1 rounded hover:bg-purple-900/40 transition-colors text-text-secondary hover:text-purple-400 disabled:opacity-40"
+            className="p-1 rounded hover:bg-accent-900/40 transition-colors text-text-secondary hover:text-accent-400 disabled:opacity-40"
             title="Re-analyze"
           >
             {analyzing ? (
-              <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+              <div className="w-4 h-4 border-2 border-accent-400 border-t-transparent rounded-full animate-spin" />
             ) : (
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -231,6 +252,180 @@ export default function ResearchDetail({ result, onClose, onReanalyze, analyzing
           <div className="space-y-1">
             <h4 className="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Rationale</h4>
             <p className="text-xs text-text-primary">{result.rationale}</p>
+          </div>
+        )}
+
+        {/* Deep-news narrative summary */}
+        {result.news_summary && (
+          <div className="space-y-1 border-l-2 border-blue-500/60 pl-3 py-1 bg-blue-500/5">
+            <h4 className="text-[10px] font-semibold text-blue-400 uppercase tracking-wider">
+              Narrative Summary
+            </h4>
+            <p className="text-xs text-text-primary leading-relaxed whitespace-pre-line">
+              {result.news_summary}
+            </p>
+          </div>
+        )}
+
+        {/* Bull / Bear / Watch synthesis */}
+        {(result.bull_case || result.bear_case || result.watch_text) && (
+          <div className="space-y-2">
+            {result.bull_case && (
+              <div className="space-y-1 border-l-2 border-green-500/60 pl-3 py-1 bg-green-500/5">
+                <h4 className="text-[10px] font-semibold text-green-400 uppercase tracking-wider">
+                  Bull Case
+                </h4>
+                <p className="text-xs text-text-primary leading-relaxed whitespace-pre-line">
+                  {result.bull_case}
+                </p>
+              </div>
+            )}
+            {result.bear_case && (
+              <div className="space-y-1 border-l-2 border-red-500/60 pl-3 py-1 bg-red-500/5">
+                <h4 className="text-[10px] font-semibold text-red-400 uppercase tracking-wider">
+                  Bear Case
+                </h4>
+                <p className="text-xs text-text-primary leading-relaxed whitespace-pre-line">
+                  {result.bear_case}
+                </p>
+              </div>
+            )}
+            {result.watch_text && (
+              <div className="space-y-1 border-l-2 border-amber-500/60 pl-3 py-1 bg-amber-500/5">
+                <h4 className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">
+                  What To Watch
+                </h4>
+                <p className="text-xs text-text-primary leading-relaxed whitespace-pre-line">
+                  {result.watch_text}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* News activity — category + source-quality breakdown */}
+        {result.news_clusters && result.news_clusters.article_count_14d > 0 && (
+          <div className="space-y-1.5">
+            <h4 className="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
+              News Activity ({result.news_clusters.article_count_14d} articles · 14d)
+            </h4>
+            <div className="flex flex-wrap gap-1">
+              {Object.entries(result.news_clusters.by_category)
+                .sort((a, b) => b[1] - a[1])
+                .map(([cat, count]) => (
+                  <span
+                    key={cat}
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800/60 text-text-secondary"
+                  >
+                    {cat.toLowerCase()} <span className="text-text-primary font-mono">{count}</span>
+                  </span>
+                ))}
+            </div>
+            <div className="flex flex-wrap gap-1 text-[10px]">
+              {Object.entries(result.news_clusters.by_source_quality)
+                .sort((a, b) => b[1] - a[1])
+                .map(([q, count]) => {
+                  const colorMap: Record<string, string> = {
+                    PRIMARY: 'text-green-400',
+                    MAJOR_PRESS: 'text-blue-400',
+                    ANALYST: 'text-amber-400',
+                    AGGREGATOR: 'text-text-secondary',
+                    OTHER: 'text-text-secondary',
+                  };
+                  return (
+                    <span key={q} className={`${colorMap[q] ?? 'text-text-secondary'}`}>
+                      {q.toLowerCase().replace('_', ' ')} <span className="font-mono">{count}</span>
+                    </span>
+                  );
+                })}
+            </div>
+          </div>
+        )}
+
+        {/* Sentiment timeline */}
+        {result.sentiment_timeline && result.sentiment_timeline.length > 0 && (
+          <div className="space-y-1.5">
+            <h4 className="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
+              Sentiment Timeline (FinBERT, 14d)
+            </h4>
+            <div className="flex items-end gap-1 h-12">
+              {result.sentiment_timeline.map((p) => {
+                const mag = Math.min(Math.abs(p.mean_sentiment), 1);
+                const heightPct = mag * 100;
+                const positive = p.mean_sentiment >= 0;
+                return (
+                  <div
+                    key={p.date}
+                    className="flex-1 flex flex-col items-center justify-end"
+                    title={`${p.date}: sent=${p.mean_sentiment.toFixed(2)} (n=${p.article_count})`}
+                  >
+                    <div
+                      className={`w-full rounded-sm ${positive ? 'bg-green-500/60' : 'bg-red-500/60'}`}
+                      style={{ height: `${Math.max(heightPct, 6)}%` }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-between text-[9px] text-text-secondary font-mono">
+              <span>{result.sentiment_timeline[0]?.date.slice(5)}</span>
+              <span>{result.sentiment_timeline[result.sentiment_timeline.length - 1]?.date.slice(5)}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Top headlines */}
+        {result.top_headlines && result.top_headlines.length > 0 && (
+          <div className="space-y-1.5">
+            <h4 className="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
+              Top Headlines
+            </h4>
+            <ul className="space-y-1.5">
+              {result.top_headlines.map((h, i) => {
+                const sent = h.sentiment_score ?? 0;
+                const sentColor = sent > 0.1 ? 'text-green-400' : sent < -0.1 ? 'text-red-400' : 'text-text-secondary';
+                const impactBg =
+                  h.impact_level === 'HIGH' ? 'bg-amber-900/40 text-amber-400'
+                    : h.impact_level === 'MEDIUM' ? 'bg-gray-800/60 text-text-secondary'
+                    : 'bg-gray-900/40 text-text-secondary';
+                return (
+                  <li key={i} className="text-xs leading-snug">
+                    <div className="flex items-start gap-1.5">
+                      <span className={`shrink-0 text-[9px] px-1 py-px rounded font-semibold ${impactBg}`}>
+                        {(h.impact_level ?? 'LOW').slice(0, 1)}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        {h.url ? (
+                          <a href={h.url} target="_blank" rel="noreferrer" className="text-text-primary hover:text-blue-400">
+                            {h.headline}
+                          </a>
+                        ) : (
+                          <span className="text-text-primary">{h.headline}</span>
+                        )}
+                        <div className="text-[10px] text-text-secondary mt-0.5 flex items-center gap-1.5 flex-wrap">
+                          <span>{h.source ?? 'unknown'}</span>
+                          {h.published_at && <span>· {h.published_at.slice(0, 10)}</span>}
+                          <span>· {h.category.toLowerCase()}</span>
+                          {h.sentiment_score != null && (
+                            <span className={`font-mono ${sentColor}`}>
+                              {h.sentiment_score >= 0 ? '+' : ''}{h.sentiment_score.toFixed(2)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
+        {/* Enrichment status footer */}
+        {result.enrichment_status && result.enrichment_status !== 'COMPLETE' && (
+          <div className="text-[10px] text-text-secondary italic">
+            Enrichment: {result.enrichment_status}
+            {result.enrichment_error ? ` — ${result.enrichment_error}` : ''}
           </div>
         )}
 

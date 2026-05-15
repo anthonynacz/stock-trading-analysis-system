@@ -282,6 +282,18 @@ class ResearchResultResponse(BaseModel):
     stop_loss_price: Optional[Decimal] = None
     options_data: Optional[dict[str, Any]] = None
     suggested_options: Optional[list[dict[str, Any]]] = None
+    # Deep-news enrichment (Tier 1)
+    news_summary: Optional[str] = None
+    news_clusters: Optional[dict[str, Any]] = None
+    sentiment_timeline: Optional[list[dict[str, Any]]] = None
+    top_headlines: Optional[list[dict[str, Any]]] = None
+    # Bull / bear / watch synthesis (Tier 3)
+    bull_case: Optional[str] = None
+    bear_case: Optional[str] = None
+    watch_text: Optional[str] = None
+    # Status flags
+    enrichment_status: Optional[str] = None
+    enrichment_error: Optional[str] = None
 
 
 # ── Deep options analysis ──────────────────────────────────────────────────

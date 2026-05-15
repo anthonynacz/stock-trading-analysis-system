@@ -105,7 +105,7 @@ function ChipsInput({
             onClick={() => toggle(o.key)}
             className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
               selected.includes(o.key)
-                ? 'bg-purple-900/60 border-purple-500/60 text-purple-200'
+                ? 'bg-accent-900/60 border-accent-500/60 text-accent-200'
                 : 'bg-page border-border text-text-secondary hover:border-text-secondary'
             }`}
             title={o.group}
@@ -130,7 +130,7 @@ function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className={`bg-page border border-border rounded px-2 py-1 text-xs text-text-primary placeholder-text-secondary focus:outline-none focus:border-purple-500 ${props.className ?? ''}`}
+      className={`bg-page border border-border rounded px-2 py-1 text-xs text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500 ${props.className ?? ''}`}
     />
   );
 }
@@ -139,7 +139,7 @@ function SelectInput(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select
       {...props}
-      className={`bg-page border border-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-purple-500 ${props.className ?? ''}`}
+      className={`bg-page border border-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-accent-500 ${props.className ?? ''}`}
     />
   );
 }
@@ -643,7 +643,7 @@ export default function ChartsPage() {
                 onClick={() => setDataset(k)}
                 className={`px-3 py-2 text-xs font-medium transition-colors border-b-2 ${
                   dataset === k
-                    ? 'border-purple-500 text-text-primary'
+                    ? 'border-accent-500 text-text-primary'
                     : 'border-transparent text-text-secondary hover:text-text-primary'
                 }`}
                 title={info?.description}
@@ -675,7 +675,7 @@ export default function ChartsPage() {
               <button
                 onClick={runBuild}
                 disabled={loading}
-                className="px-4 py-1.5 rounded text-xs font-semibold bg-purple-600/80 hover:bg-purple-600 text-white transition-colors disabled:opacity-50"
+                className="px-4 py-1.5 rounded text-xs font-semibold bg-accent-600/80 hover:bg-accent-600 text-white transition-colors disabled:opacity-50"
               >
                 {loading ? 'Building…' : 'Build'}
               </button>

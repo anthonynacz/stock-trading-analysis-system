@@ -157,7 +157,7 @@ export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggle
                         </span>
                       )}
                       {item.is_manual && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-900/60 text-purple-400">
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-accent-900/60 text-accent-400">
                           MANUAL
                         </span>
                       )}

@@ -340,7 +340,7 @@ function WatchlistSection() {
               {weights.map((w) => (
                 <tr key={w.factor} className="border-t border-border/60">
                   <td className="px-3 py-2 text-text-primary">{w.factor}</td>
-                  <td className="px-3 py-2 text-center font-mono font-semibold text-purple-400">{w.weight}</td>
+                  <td className="px-3 py-2 text-center font-mono font-semibold text-accent-400">{w.weight}</td>
                   <td className="px-3 py-2 text-text-secondary hidden md:table-cell">{w.desc}</td>
                 </tr>
               ))}
@@ -385,7 +385,7 @@ function WatchlistSection() {
       <div>
         <h3 className="text-base font-semibold text-text-primary mb-2">Manual & Locked Tickers</h3>
         <p className="text-sm text-text-secondary">
-          <span className="text-purple-400 font-semibold">Manual</span> tickers are added by hand and are
+          <span className="text-accent-400 font-semibold">Manual</span> tickers are added by hand and are
           not scored — they remain on the watchlist until removed.{' '}
           <span className="text-amber-400 font-semibold">Locked</span> tickers participate in scoring but
           are protected from automatic rotation, ensuring they stay on the watchlist regardless of rank.
@@ -507,7 +507,7 @@ function LabElementCard({ el }: { el: LabElement }) {
       <div className="flex items-baseline gap-2 mb-2 flex-wrap">
         <h4 className="text-sm font-semibold text-text-primary">{el.name}</h4>
         {el.values && (
-          <span className="text-[10px] font-mono text-purple-300 bg-purple-900/30 px-1.5 py-px rounded">
+          <span className="text-[10px] font-mono text-accent-300 bg-accent-900/30 px-1.5 py-px rounded">
             {el.values}
           </span>
         )}
@@ -1438,7 +1438,7 @@ function TradingGuideSection() {
           {/* Playbook 7 — Reversal */}
           <div className="bg-card border border-border rounded-lg p-4 space-y-3">
             <div className="flex items-center gap-2">
-              <span className="px-2 py-0.5 rounded text-xs font-bold bg-purple-900/30 text-purple-400">
+              <span className="px-2 py-0.5 rounded text-xs font-bold bg-accent-900/30 text-accent-400">
                 REVERSAL SETUP
               </span>
               <span className="text-[10px] text-text-secondary font-medium">Any IV</span>
@@ -1506,7 +1506,7 @@ function TradingGuideSection() {
               </tr>
               <tr className="border-t border-border/60">
                 <td className="px-3 py-2">
-                  <span className="px-2 py-0.5 rounded text-xs font-bold bg-purple-900/40 text-purple-400">WAIT</span>
+                  <span className="px-2 py-0.5 rounded text-xs font-bold bg-accent-900/40 text-accent-400">WAIT</span>
                 </td>
                 <td className="px-3 py-2 text-text-secondary">Conviction 15-29, or conviction &ge; 30 but stock hasn't moved yet</td>
                 <td className="px-3 py-2 text-text-secondary">Signals are positive but need confirmation — a pullback entry, volume breakout, or another signal stacking before committing.</td>
@@ -2385,7 +2385,7 @@ function StrategyCard({ strategy }: { strategy: Strategy }) {
     <div className="bg-card border border-border rounded-lg p-4">
       <div className="flex items-baseline justify-between gap-2 mb-1 flex-wrap">
         <h3 className="text-base font-semibold text-text-primary">{strategy.name}</h3>
-        <span className="text-[10px] font-mono text-purple-300 bg-purple-900/30 px-1.5 py-px rounded">
+        <span className="text-[10px] font-mono text-accent-300 bg-accent-900/30 px-1.5 py-px rounded">
           {strategy.verdict}
         </span>
       </div>
@@ -2479,7 +2479,7 @@ export default function KnowledgePage() {
               onClick={() => setActiveTab(tab.key)}
               className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
                 activeTab === tab.key
-                  ? 'border-purple-500 text-text-primary'
+                  ? 'border-accent-500 text-text-primary'
                   : 'border-transparent text-text-secondary hover:text-text-primary'
               }`}
             >

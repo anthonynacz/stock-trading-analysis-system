@@ -86,7 +86,7 @@ function WeightSlider({
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         disabled={disabled}
-        className="w-full accent-purple-500"
+        className="w-full accent-accent-500"
       />
       <div className="flex justify-between text-[10px] text-text-secondary mt-0.5">
         <span>Mute</span>
@@ -178,14 +178,14 @@ function RiskProfilePane({
               onClick={() => setDraft('risk_profile', rp.key as RiskProfile)}
               className={`w-full text-left px-3 py-3 rounded border transition-colors ${
                 active
-                  ? 'border-purple-500 bg-purple-900/20'
+                  ? 'border-accent-500 bg-accent-900/20'
                   : 'border-border hover:border-text-secondary/40 hover:bg-border/20'
               }`}
             >
               <div className="flex items-center justify-between">
                 <span className="text-sm font-semibold text-text-primary capitalize">{rp.label}</span>
                 {active && (
-                  <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-px rounded bg-purple-500/20 text-purple-300">
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-px rounded bg-accent-500/20 text-accent-300">
                     Active
                   </span>
                 )}
@@ -313,7 +313,7 @@ function AlertsPane({
                   type="checkbox"
                   checked={enabled}
                   onChange={(e) => patchAlerts(fieldKey as 'rec_change', e.target.checked as never)}
-                  className="mt-1 accent-purple-500"
+                  className="mt-1 accent-accent-500"
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
@@ -439,7 +439,7 @@ function CustomUniversePane({
         <button
           onClick={add}
           disabled={!canAdd || !input.trim()}
-          className="px-4 py-1.5 rounded text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="px-4 py-1.5 rounded text-xs font-semibold bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         >
           Add
         </button>
@@ -452,12 +452,12 @@ function CustomUniversePane({
           {draft.custom_universe.map((t) => (
             <span
               key={t}
-              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-mono bg-purple-900/30 text-purple-300 border border-purple-500/30"
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-mono bg-accent-900/30 text-accent-300 border border-accent-500/30"
             >
               {t}
               <button
                 onClick={() => remove(t)}
-                className="text-purple-400 hover:text-white"
+                className="text-accent-400 hover:text-white"
                 title={`Remove ${t}`}
               >
                 ×
@@ -499,7 +499,7 @@ function DigestPane({
           type="checkbox"
           checked={d.enabled}
           onChange={(e) => patchDigest('enabled', e.target.checked)}
-          className="accent-purple-500"
+          className="accent-accent-500"
         />
         <div className="flex-1">
           <div className="text-sm font-semibold text-text-primary">Enable AM digest</div>
@@ -537,7 +537,7 @@ function DigestPane({
               type="checkbox"
               checked={d[row.key as keyof typeof d] as boolean}
               onChange={(e) => patchDigest(row.key as 'include_top_picks', e.target.checked as never)}
-              className="accent-purple-500"
+              className="accent-accent-500"
             />
             <span className="text-sm text-text-primary">{row.label}</span>
           </label>
@@ -586,7 +586,7 @@ export default function SettingsPage() {
                   onClick={() => setActive(s.key)}
                   className={`w-full text-left px-3 py-2 rounded text-sm transition-colors ${
                     active === s.key
-                      ? 'bg-purple-900/30 text-text-primary border-l-2 border-purple-500'
+                      ? 'bg-accent-900/30 text-text-primary border-l-2 border-accent-500'
                       : 'text-text-secondary hover:text-text-primary hover:bg-border/30'
                   }`}
                 >
@@ -629,9 +629,9 @@ export default function SettingsPage() {
 
         {/* Sticky save bar */}
         {dirty && (
-          <div className="sticky bottom-4 mt-6 bg-card border border-purple-500/40 rounded-lg p-3 flex items-center justify-between shadow-lg">
+          <div className="sticky bottom-4 mt-6 bg-card border border-accent-500/40 rounded-lg p-3 flex items-center justify-between shadow-lg">
             <span className="text-sm text-text-primary">
-              <span className="text-purple-300 font-semibold">Unsaved changes.</span> Review and save.
+              <span className="text-accent-300 font-semibold">Unsaved changes.</span> Review and save.
             </span>
             <div className="flex gap-2">
               <button
@@ -644,7 +644,7 @@ export default function SettingsPage() {
               <button
                 onClick={save}
                 disabled={saving}
-                className="px-4 py-1.5 rounded text-sm font-semibold bg-purple-600 hover:bg-purple-500 text-white disabled:opacity-50 transition-colors"
+                className="px-4 py-1.5 rounded text-sm font-semibold bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50 transition-colors"
               >
                 {saving ? 'Saving…' : 'Save changes'}
               </button>

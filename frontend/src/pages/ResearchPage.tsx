@@ -31,7 +31,7 @@ function ResearchCard({
     <div
       onClick={onClick}
       className={`bg-card border rounded-lg p-3 cursor-pointer transition-all hover:border-text-secondary group relative ${
-        selected ? 'border-purple-500 ring-1 ring-purple-500/30' : 'border-border'
+        selected ? 'border-accent-500 ring-1 ring-accent-500/30' : 'border-border'
       }`}
     >
       {/* Delete button */}
@@ -165,16 +165,16 @@ export default function ResearchPage() {
               onChange={(e) => { setTickerInput(e.target.value); clearError(); }}
               placeholder="Enter ticker..."
               disabled={!!analyzingTicker}
-              className="w-32 px-3 py-1.5 text-sm bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-purple-500 disabled:opacity-50"
+              className="w-32 px-3 py-1.5 text-sm bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500 disabled:opacity-50"
             />
             <button
               type="submit"
               disabled={!!analyzingTicker || !tickerInput.trim()}
-              className="px-4 py-1.5 text-sm font-semibold rounded bg-purple-900/60 text-purple-400 hover:bg-purple-800/60 disabled:opacity-40 transition-colors flex items-center gap-2"
+              className="px-4 py-1.5 text-sm font-semibold rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 disabled:opacity-40 transition-colors flex items-center gap-2"
             >
               {analyzingTicker ? (
                 <>
-                  <div className="w-3.5 h-3.5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+                  <div className="w-3.5 h-3.5 border-2 border-accent-400 border-t-transparent rounded-full animate-spin" />
                   Analyzing...
                 </>
               ) : (
@@ -190,7 +190,7 @@ export default function ResearchPage() {
 
         {analyzingTicker && (
           <div className="bg-card border border-border rounded-lg p-4 flex items-center gap-3">
-            <div className="w-4 h-4 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+            <div className="w-4 h-4 border-2 border-accent-400 border-t-transparent rounded-full animate-spin" />
             <span className="text-sm text-text-secondary">
               Running full analysis for <span className="text-text-primary font-semibold">{analyzingTicker}</span>...
               This may take 30-60 seconds.
@@ -209,7 +209,7 @@ export default function ResearchPage() {
                 value={filterTicker}
                 onChange={(e) => setFilterTicker(e.target.value)}
                 placeholder="Filter by ticker..."
-                className="w-36 px-2 py-1 text-xs bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-purple-500"
+                className="w-36 px-2 py-1 text-xs bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500"
               />
               {filterTicker && (
                 <button

@@ -72,7 +72,7 @@ function UserBadge() {
         {tierLabel}
       </span>
       <span
-        className="w-6 h-6 rounded-full bg-purple-700/60 text-white text-[11px] font-semibold flex items-center justify-center"
+        className="w-6 h-6 rounded-full bg-accent-700/60 text-white text-[11px] font-semibold flex items-center justify-center"
         title={user.email}
       >
         {initials}
@@ -106,7 +106,7 @@ function UserBadge() {
         <NavLink
           to="/login"
           title="Sign in as a real user (legacy mode is on by default)"
-          className="text-[11px] font-semibold text-purple-300 hover:text-purple-200 px-2 py-1 rounded hover:bg-purple-900/30 transition-colors"
+          className="text-[11px] font-semibold text-accent-300 hover:text-accent-200 px-2 py-1 rounded hover:bg-accent-900/30 transition-colors"
         >
           Sign in
         </NavLink>
@@ -130,7 +130,7 @@ export default function AppNav() {
             className={({ isActive }) =>
               `text-sm transition-colors ${
                 isActive
-                  ? 'text-text-primary font-semibold border-b-2 border-purple-500'
+                  ? 'text-text-primary font-semibold border-b-2 border-accent-500'
                   : 'text-text-secondary hover:text-text-primary'
               }`
             }

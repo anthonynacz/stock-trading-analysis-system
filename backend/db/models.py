@@ -549,6 +549,24 @@ class ResearchResult(Base):
     options_data: Mapped[Optional[dict]] = mapped_column(JSON)
     suggested_options: Mapped[Optional[list]] = mapped_column(JSON)
 
+    # Deep-news enrichment (Tier 1) — clustered headlines, sentiment timeline,
+    # source-quality breakdown, LLM-synthesized narrative summary.
+    news_summary: Mapped[Optional[str]] = mapped_column(Text)
+    news_clusters: Mapped[Optional[dict]] = mapped_column(JSON)
+    sentiment_timeline: Mapped[Optional[list]] = mapped_column(JSON)
+    top_headlines: Mapped[Optional[list]] = mapped_column(JSON)
+
+    # Bull / bear / watch synthesis (Tier 3) — LLM-generated thesis trio.
+    bull_case: Mapped[Optional[str]] = mapped_column(Text)
+    bear_case: Mapped[Optional[str]] = mapped_column(Text)
+    watch_text: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Enrichment status: PENDING / COMPLETE / PARTIAL / FAILED. PARTIAL means
+    # news clustering succeeded but the LLM calls were skipped (no API key) or
+    # failed for one of the two prompts.
+    enrichment_status: Mapped[Optional[str]] = mapped_column(String(20))
+    enrichment_error: Mapped[Optional[str]] = mapped_column(Text)
+
 
 # ── Deep options analyses (expert-level single-ticker options report) ──────
 

@@ -159,7 +159,7 @@ function DetailedColumn({ rec, prevRec }: { rec: Recommendation; prevRec: Recomm
                   <span className={`font-mono font-bold shrink-0 w-5 text-right ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
                     {isPositive ? '+' : ''}{sig.points}
                   </span>
-                  <span className={`text-text-primary ${isNew ? 'underline decoration-purple-500/60' : ''}`}>
+                  <span className={`text-text-primary ${isNew ? 'underline decoration-accent-500/60' : ''}`}>
                     {sig.signal}
                   </span>
                 </div>
@@ -223,7 +223,7 @@ export default function DayComparison({ ticker }: DayComparisonProps) {
               onClick={() => setTab(t)}
               className={`px-1.5 py-0.5 text-[10px] rounded transition-colors ${
                 tab === t
-                  ? 'bg-purple-900/60 text-purple-300 border border-purple-600/60'
+                  ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
                   : 'bg-card border border-border text-text-secondary hover:text-text-primary'
               }`}
             >

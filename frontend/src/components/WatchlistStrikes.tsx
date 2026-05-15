@@ -190,7 +190,7 @@ export default function WatchlistStrikes({ selectedDate }: WatchlistStrikesProps
                 step={50}
                 value={budget}
                 onChange={(e) => setBudget(Number(e.target.value))}
-                className="w-full h-1.5 rounded-full appearance-none bg-border cursor-pointer accent-purple-500"
+                className="w-full h-1.5 rounded-full appearance-none bg-border cursor-pointer accent-accent-500"
               />
               <div className="flex justify-between text-[9px] text-text-secondary">
                 <span>$50</span>
@@ -203,7 +203,7 @@ export default function WatchlistStrikes({ selectedDate }: WatchlistStrikesProps
               <button
                 onClick={handleScan}
                 disabled={loading}
-                className="px-4 py-2 text-sm font-semibold rounded bg-purple-700/80 text-white hover:bg-purple-600/80 disabled:opacity-40 transition-colors whitespace-nowrap"
+                className="px-4 py-2 text-sm font-semibold rounded bg-accent-700/80 text-white hover:bg-accent-600/80 disabled:opacity-40 transition-colors whitespace-nowrap"
               >
                 {loading ? 'Scanning...' : 'Scan Watchlist'}
               </button>
@@ -272,12 +272,12 @@ export default function WatchlistStrikes({ selectedDate }: WatchlistStrikesProps
                     onClick={() => setActiveTab(level)}
                     className={`px-3 py-1.5 text-xs font-semibold rounded capitalize transition-colors ${
                       activeTab === level
-                        ? 'bg-purple-900/60 text-purple-300 border border-purple-600/60'
+                        ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
                         : 'bg-card border border-border text-text-secondary hover:text-text-primary'
                     }`}
                   >
                     {level}
-                    <span className={`ml-1.5 text-[10px] ${activeTab === level ? 'text-purple-400' : 'text-text-secondary'}`}>
+                    <span className={`ml-1.5 text-[10px] ${activeTab === level ? 'text-accent-400' : 'text-text-secondary'}`}>
                       ({count})
                     </span>
                   </button>

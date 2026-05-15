@@ -221,7 +221,7 @@ export default function Dashboard() {
                 <button
                   type="submit"
                   disabled={addingTicker || !addTickerInput.trim()}
-                  className="px-2 py-1 text-xs font-semibold rounded bg-purple-900/60 text-purple-400 hover:bg-purple-800/60 disabled:opacity-40 transition-colors"
+                  className="px-2 py-1 text-xs font-semibold rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 disabled:opacity-40 transition-colors"
                 >
                   {addingTicker ? '...' : 'Add'}
                 </button>

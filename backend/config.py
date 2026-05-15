@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     # Enables POST /api/dev/token (mints a short-lived HS256 JWT). Dev only.
     DEV_TOKEN_ENABLED: bool = False
 
+    # Anthropic API — used by research enrichment for narrative summary and
+    # bull/bear/watch synthesis. When unset, enrichment skips the LLM calls
+    # but still produces clustered news / sentiment timeline / top headlines.
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MODEL: str = "claude-sonnet-4-6"
+
     model_config = {"env_file": [".env", "../.env"], "extra": "ignore"}
 
     @property
