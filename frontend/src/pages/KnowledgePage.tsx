@@ -2465,7 +2465,7 @@ export default function KnowledgePage() {
 
   return (
     <div className="min-h-screen bg-page text-text-primary">
-      <div className="max-w-5xl mx-auto px-4 py-8">
+      <div className="max-w-5xl mx-auto px-3 py-4 sm:px-4 sm:py-8">
         <h1 className="text-2xl font-bold mb-1">Knowledge Base</h1>
         <p className="text-sm text-text-secondary mb-6">
           Reference guide for EdgeFlow's signal stacking, scoring, and pipeline mechanics.

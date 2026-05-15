@@ -558,7 +558,7 @@ export default function SettingsPage() {
 
   return (
     <div className="min-h-screen bg-page text-text-primary">
-      <div className="max-w-6xl mx-auto px-4 py-6">
+      <div className="max-w-6xl mx-auto px-3 py-4 sm:px-4 sm:py-6">
         <h1 className="text-2xl font-bold mb-1">Settings</h1>
         <p className="text-sm text-text-secondary mb-5">
           Personalization. Save once — applies to your dashboard, recommendations, alerts, and the

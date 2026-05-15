@@ -301,7 +301,7 @@ function TopComponentsPanel({ items }: { items: IndustryTopComponent[] }) {
                   {conv.toFixed(0)}
                 </span>
               </div>
-              <div className="grid grid-cols-4 gap-x-2 text-[10px] font-mono tabular-nums">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-1 text-[10px] font-mono tabular-nums">
                 <CompMini label="Px" value={c.price != null ? `$${c.price.toFixed(2)}` : '—'} />
                 <CompMini label="Cap" value={fmtCap(c.market_cap)} />
                 <CompMini label="P/E" value={c.pe_ratio != null ? c.pe_ratio.toFixed(1) : '—'} />
@@ -546,7 +546,7 @@ export default function IndustriesPage() {
 
   return (
     <div className="min-h-screen bg-page text-text-primary">
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
+      <div className="max-w-7xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-4">
         <div>
           <h1 className="text-2xl font-bold mb-1">Industries</h1>
           <p className="text-sm text-text-secondary">

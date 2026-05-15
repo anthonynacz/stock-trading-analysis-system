@@ -238,7 +238,7 @@ export default function UniversePage() {
   }, [candidates]);
 
   return (
-    <main className="max-w-7xl mx-auto px-4 py-4 space-y-4">
+    <main className="max-w-7xl mx-auto px-3 py-3 sm:px-4 sm:py-4 space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-bold text-text-primary">

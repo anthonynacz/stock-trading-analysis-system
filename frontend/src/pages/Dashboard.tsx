@@ -162,7 +162,7 @@ export default function Dashboard() {
         onDateChange={setSelectedDate}
       />
 
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-8">
+      <div className="max-w-7xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-6 sm:space-y-8">
         {/* Watchlist Changes (Entrants / Exiters) */}
         {watchlistChanges.data &&
           (watchlistChanges.data.entrants.length > 0 ||

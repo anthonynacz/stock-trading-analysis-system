@@ -151,7 +151,7 @@ export default function ResearchPage() {
 
   return (
     <div className="min-h-screen bg-page text-text-primary">
-      <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-4 sm:space-y-6">
         {/* Analyze input */}
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold text-text-primary">Research</h1>
