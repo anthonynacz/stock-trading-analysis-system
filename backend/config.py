@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     # Enables POST /api/dev/token (mints a short-lived HS256 JWT). Dev only.
     DEV_TOKEN_ENABLED: bool = False
 
+    # Max in-flight per-ticker news fetches inside NewsScanner.scan_news. The
+    # phase is bounded by Finnhub /company-news (60 calls/min on the free
+    # tier); 10 is a safe default for a ~60-ticker watchlist.
+    NEWS_FETCH_CONCURRENCY: int = 10
+
     # Anthropic API — used by research enrichment for narrative summary and
     # bull/bear/watch synthesis. When unset, enrichment skips the LLM calls
     # but still produces clustered news / sentiment timeline / top headlines.

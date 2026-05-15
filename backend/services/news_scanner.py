@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from config import settings
 from db.models import MarketNews, NewsTickerRelevance
 from utils.data_sources import DataSourceClient
 from utils.finbert import score_batch
@@ -52,26 +53,29 @@ class NewsScanner:
         loop = asyncio.get_event_loop()
         raw_items: list[tuple[str | None, dict]] = []
 
-        # Fetch ticker-specific news ------------------------------------------
-        for ticker in tickers:
-            try:
-                items = await loop.run_in_executor(
-                    None, self._data_client.get_news, ticker
-                )
-                for item in items:
-                    raw_items.append((ticker, item))
-            except Exception:
-                logger.exception("Failed to fetch news for ticker %s", ticker)
+        # Fetch ticker-specific + general news concurrently, bounded by a
+        # semaphore so we don't burst past the upstream rate limit (Finnhub
+        # /company-news is the binding one at 60 calls/min on the free tier).
+        sem = asyncio.Semaphore(max(1, settings.NEWS_FETCH_CONCURRENCY))
 
-        # Fetch general market news --------------------------------------------
-        try:
-            general_items = await loop.run_in_executor(
-                None, self._data_client.get_news, None
-            )
-            for item in general_items:
-                raw_items.append((None, item))
-        except Exception:
-            logger.exception("Failed to fetch general market news")
+        async def _fetch(ticker: str | None) -> list[tuple[str | None, dict]]:
+            async with sem:
+                try:
+                    items = await loop.run_in_executor(
+                        None, self._data_client.get_news, ticker
+                    )
+                    return [(ticker, item) for item in items]
+                except Exception:
+                    if ticker is None:
+                        logger.exception("Failed to fetch general market news")
+                    else:
+                        logger.exception("Failed to fetch news for ticker %s", ticker)
+                    return []
+
+        fetch_targets: list[str | None] = list(tickers) + [None]
+        fetched = await asyncio.gather(*(_fetch(t) for t in fetch_targets))
+        for batch in fetched:
+            raw_items.extend(batch)
 
         if not raw_items:
             return []
