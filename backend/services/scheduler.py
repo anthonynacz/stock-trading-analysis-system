@@ -461,6 +461,15 @@ def start_scheduler() -> None:
         hour="6-17", minute="*/30", day_of_week=weekdays, id="alerts_scan",
     )
 
+    # Nightly portfolio P&L snapshot at 16:45 ET, Mon-Fri (after post-close
+    # options refresh + recommendations regen, so the most recent prices are
+    # already cached by yfinance). Writes one row per user per day.
+    from services.pnl import run_pnl_snapshot
+    scheduler.add_job(
+        run_pnl_snapshot, "cron",
+        hour=16, minute=45, day_of_week=weekdays, id="pnl_snapshot",
+    )
+
     scheduler.start()
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
 

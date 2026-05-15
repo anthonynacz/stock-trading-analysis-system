@@ -15,6 +15,7 @@ from db.models import (  # noqa: F401 — imported for metadata registration
     MultibaggerSnapshot,
     MultibaggerUniverse,
     PipelineRunLog,
+    PortfolioPnlSnapshot,
     Position,
     Sector,
     Subscription,

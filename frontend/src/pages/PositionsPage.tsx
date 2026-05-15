@@ -6,9 +6,12 @@ import {
   createPosition,
   closePosition,
   deletePosition,
+  getPnlHistory,
+  refreshAllPositions,
   refreshPositionPrice,
   updatePosition,
   analyzeResearch,
+  type PnlHistory,
 } from '../utils/api';
 import { ACTION_COLORS, getActionLabel } from '../utils/theme';
 
@@ -35,6 +38,153 @@ const TYPE_COLORS: Record<string, string> = {
   PUT: '#f85149',
   STOCK: '#58a6ff',
 };
+
+/* ── P&L History (day / month rollup) ────────────────────────────────── */
+
+function formatMonth(yyyymm: string): string {
+  // yyyymm like "2026-05"
+  const [y, m] = yyyymm.split('-').map(Number);
+  const d = new Date(y, (m ?? 1) - 1, 1);
+  return d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function formatDay(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+function PnlHistorySection() {
+  const [data, setData] = useState<PnlHistory | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<'day' | 'month'>('day');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const h = await getPnlHistory(90);
+        if (!cancelled) {
+          setData(h);
+        }
+      } catch {
+        if (!cancelled) setData({ daily: [], monthly: [] });
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    const interval = setInterval(load, 5 * 60_000); // 5 min
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="bg-card border border-border rounded-lg p-4">
+        <div className="text-sm text-text-secondary">Loading P&L history…</div>
+      </div>
+    );
+  }
+  if (!data || (data.daily.length === 0 && data.monthly.length === 0)) {
+    return (
+      <div className="bg-card border border-border rounded-lg p-4">
+        <div className="text-sm font-bold text-text-primary mb-1">P&L over time</div>
+        <p className="text-xs text-text-secondary">
+          No snapshots yet. The first row is written tonight at 16:45 ET after market close,
+          and one row per weekday thereafter.
+        </p>
+      </div>
+    );
+  }
+
+  const rows = view === 'day' ? data.daily : data.monthly;
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-3 sm:p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-text-primary">P&L over time</h3>
+        <div className="flex gap-1">
+          {(['day', 'month'] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`px-3 py-1.5 sm:px-2.5 sm:py-1 text-[11px] font-semibold rounded transition-colors ${
+                view === v
+                  ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
+                  : 'bg-page/60 border border-border text-text-secondary hover:text-text-primary'
+              }`}
+            >
+              {v === 'day' ? 'Daily' : 'Monthly'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <ul className="divide-y divide-border max-h-72 overflow-y-auto">
+        {rows.length === 0 && (
+          <li className="py-3 text-xs text-text-secondary text-center">No {view} data.</li>
+        )}
+        {view === 'day' && (data.daily ?? []).map((d) => {
+          const color = pnlColor(d.realized_pnl_today);
+          return (
+            <li key={d.date} className="py-2 flex items-center gap-3">
+              <span className="text-xs font-mono tabular-nums text-text-primary w-24 shrink-0">
+                {formatDay(d.date)}
+              </span>
+              <span
+                className="text-xs font-mono tabular-nums font-semibold w-24 shrink-0 text-right"
+                style={{ color }}
+                title="Realized P&L from positions closed this day"
+              >
+                {d.realized_pnl_today >= 0 ? '+' : ''}{formatCurrency(d.realized_pnl_today)}
+              </span>
+              <span className="text-[10px] text-text-secondary flex-1 min-w-0 truncate">
+                {d.closed_count_today > 0 && `${d.closed_count_today} closed · `}
+                {d.open_count} open
+              </span>
+              <span
+                className="text-[10px] font-mono tabular-nums text-text-secondary w-20 shrink-0 text-right"
+                title="Unrealized P&L at snapshot time"
+              >
+                {d.unrealized_pnl >= 0 ? '+' : ''}{formatCurrency(d.unrealized_pnl)} U
+              </span>
+            </li>
+          );
+        })}
+        {view === 'month' && (data.monthly ?? []).map((m) => (
+          <li key={m.month} className="py-2 flex items-center gap-3">
+            <span className="text-xs font-medium text-text-primary w-28 shrink-0">
+              {formatMonth(m.month)}
+            </span>
+            <span
+              className="text-xs font-mono tabular-nums font-semibold w-24 shrink-0 text-right"
+              style={{ color: pnlColor(m.realized_pnl) }}
+              title="Total realized P&L closed in this month"
+            >
+              {m.realized_pnl >= 0 ? '+' : ''}{formatCurrency(m.realized_pnl)}
+            </span>
+            <span className="text-[10px] text-text-secondary flex-1 min-w-0 truncate">
+              {m.closed_count > 0 ? `${m.closed_count} closed` : 'no closures'}
+            </span>
+            <span
+              className="text-[10px] font-mono tabular-nums text-text-secondary w-20 shrink-0 text-right"
+              title="Unrealized at the latest snapshot in this month"
+            >
+              {m.latest_unrealized >= 0 ? '+' : ''}{formatCurrency(m.latest_unrealized)} U
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[10px] text-text-secondary mt-3">
+        Snapshots written nightly at 16:45 ET. <strong>U</strong> = unrealized at snapshot time;
+        the bold number is realized P&L closed in the period.
+      </p>
+    </div>
+  );
+}
+
 
 /* ── Summary Bar ────────────────────────────────────────────────────────── */
 
@@ -722,6 +872,28 @@ export default function PositionsPage() {
   const [initialForm, setInitialForm] = useState<Partial<PositionCreateRequest> | undefined>();
 
   const positions = usePositions(tab);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Bulk-refresh prices on the FIRST mount so the P&L the user sees is fresh.
+  // The hook's 60s poll keeps it warm after that.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setRefreshing(true);
+      try {
+        await refreshAllPositions();
+        if (!cancelled) positions.refetch();
+      } catch {
+        // best-effort; existing prices remain
+      } finally {
+        if (!cancelled) setRefreshing(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Handle pre-fill from Dashboard "Open Position" link
   useEffect(() => {
@@ -782,6 +954,17 @@ export default function PositionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handleRefreshAll = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refreshAllPositions();
+      positions.refetch();
+    } finally {
+      setRefreshing(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const selected = positions.data?.find((p) => p.id === selectedId) ?? null;
   const allPositions = positions.data ?? [];
 
@@ -789,17 +972,38 @@ export default function PositionsPage() {
     <div className="min-h-screen bg-page text-text-primary">
       <div className="max-w-7xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-4">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">My Positions</h1>
-          <button
-            onClick={() => { setShowForm((v) => !v); if (showForm) setInitialForm(undefined); }}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 transition-colors"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            {showForm ? 'Cancel' : 'Add Position'}
-          </button>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-bold">My Positions</h1>
+            {refreshing && (
+              <span className="flex items-center gap-1 text-[11px] text-text-secondary" title="Pulling latest prices">
+                <span className="w-3 h-3 border-2 border-text-secondary border-t-transparent rounded-full animate-spin inline-block" />
+                refreshing
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleRefreshAll}
+              disabled={refreshing}
+              title="Refresh prices for all open positions"
+              aria-label="Refresh all prices"
+              className="p-2 sm:p-1.5 rounded hover:bg-border/60 disabled:opacity-40 transition-colors text-text-secondary"
+            >
+              <svg className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582M4.582 9A8.001 8.001 0 0119.418 9M20 20v-5h-.581m0 0a8.003 8.003 0 01-15.357-2" />
+              </svg>
+            </button>
+            <button
+              onClick={() => { setShowForm((v) => !v); if (showForm) setInitialForm(undefined); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              {showForm ? 'Cancel' : 'Add Position'}
+            </button>
+          </div>
         </div>
 
         {/* Add form */}
@@ -813,6 +1017,9 @@ export default function PositionsPage() {
 
         {/* Summary (open positions only) */}
         {tab === 'OPEN' && allPositions.length > 0 && <SummaryBar positions={allPositions} />}
+
+        {/* P&L history rollup (day / month) */}
+        <PnlHistorySection />
 
         {/* Tabs */}
         <div className="flex gap-1 border-b border-border">

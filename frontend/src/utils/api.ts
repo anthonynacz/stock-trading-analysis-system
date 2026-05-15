@@ -330,6 +330,34 @@ export const closePosition = (id: number, data: { close_price: number; notes?: s
 export const deletePosition = (id: number) =>
   api.delete(`/positions/${id}`);
 
+export const refreshAllPositions = () =>
+  api.post<Position[]>('/positions/refresh-all').then((r) => r.data);
+
+export interface PnlDaily {
+  date: string;
+  unrealized_pnl: number;
+  realized_pnl_today: number;
+  realized_pnl_cumulative: number;
+  open_count: number;
+  closed_count_today: number;
+}
+
+export interface PnlMonthly {
+  month: string;          // "YYYY-MM"
+  realized_pnl: number;
+  closed_count: number;
+  latest_unrealized: number;
+  latest_open_count: number;
+}
+
+export interface PnlHistory {
+  daily: PnlDaily[];
+  monthly: PnlMonthly[];
+}
+
+export const getPnlHistory = (days = 90) =>
+  api.get<PnlHistory>('/positions/pnl-history', { params: { days } }).then((r) => r.data);
+
 export const refreshPositionPrice = (id: number) =>
   api.post<Position>(`/positions/${id}/refresh-price`).then((r) => parsePosition(r.data));
 

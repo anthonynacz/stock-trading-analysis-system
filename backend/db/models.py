@@ -165,6 +165,34 @@ class AlertLog(Base):
 
 # ── Pipeline run log (scheduler observability) ─────────────────────────────
 
+class PortfolioPnlSnapshot(Base):
+    """Per-user daily snapshot of portfolio P&L.
+
+    Written nightly post-market-close by services/pnl.py::run_pnl_snapshot.
+    Powers /api/positions/pnl-history and the day/month rollup on the
+    Positions page. `unrealized_pnl` is the SUM across OPEN positions at
+    snapshot time. `realized_pnl_today` is the SUM across positions CLOSED
+    that day (closed_at::date == snapshot_date). Cumulative variant aids
+    "lifetime realized" totals without re-summing the whole table.
+    """
+
+    __tablename__ = "portfolio_pnl_snapshot"
+    __table_args__ = (
+        UniqueConstraint("user_id", "snapshot_date", name="uq_pnl_snapshot_user_date"),
+        Index("ix_pnl_snapshot_user_date", "user_id", "snapshot_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
+    unrealized_pnl: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
+    realized_pnl_today: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
+    realized_pnl_cumulative: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0"))
+    open_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    closed_count_today: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class PipelineRunLog(Base):
     """Append-only log of pipeline phase + worker invocations.
 

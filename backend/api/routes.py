@@ -38,6 +38,7 @@ from db.models import (
     NewsTickerRelevance,
     OptionsSnapshot,
     PipelineRunLog,
+    PortfolioPnlSnapshot,
     Position,
     Recommendation,
     ResearchResult,
@@ -2613,6 +2614,167 @@ async def refresh_position_price(
 
     watchlist_tickers, rec_map = await _get_watchlist_context(db, {pos.ticker}, user=user)
     return _compute_position_fields(pos, watchlist_tickers, rec_map)
+
+
+@router.get("/positions/pnl-history")
+async def get_pnl_history(
+    days: int = Query(90, ge=1, le=730),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Daily P&L snapshots for the current user, newest first.
+
+    Returns `{daily, monthly}` where:
+      - daily: per-day rows from portfolio_pnl_snapshot for the last N days
+      - monthly: aggregated realized P&L per calendar month (MM-YYYY ->
+        sum of realized_pnl_today + last unrealized snapshot of the month)
+    """
+    cutoff = date.today() - timedelta(days=days)
+    stmt = (
+        select(PortfolioPnlSnapshot)
+        .where(
+            PortfolioPnlSnapshot.user_id == user.id,
+            PortfolioPnlSnapshot.snapshot_date >= cutoff,
+        )
+        .order_by(PortfolioPnlSnapshot.snapshot_date.desc())
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+
+    daily = [
+        {
+            "date": r.snapshot_date.isoformat(),
+            "unrealized_pnl": float(r.unrealized_pnl),
+            "realized_pnl_today": float(r.realized_pnl_today),
+            "realized_pnl_cumulative": float(r.realized_pnl_cumulative),
+            "open_count": r.open_count,
+            "closed_count_today": r.closed_count_today,
+        }
+        for r in rows
+    ]
+
+    # Monthly rollup: sum realized_pnl_today per (year, month).
+    # Unrealized is a state, not flow — take the LATEST snapshot's unrealized
+    # for the in-progress month so the user sees a meaningful "this month" line.
+    monthly_acc: dict[str, dict] = {}
+    for r in rows:
+        key = r.snapshot_date.strftime("%Y-%m")
+        if key not in monthly_acc:
+            monthly_acc[key] = {
+                "month": key,
+                "realized_pnl": 0.0,
+                "closed_count": 0,
+                "latest_unrealized": float(r.unrealized_pnl),  # rows ordered newest-first
+                "latest_open_count": r.open_count,
+            }
+        monthly_acc[key]["realized_pnl"] += float(r.realized_pnl_today)
+        monthly_acc[key]["closed_count"] += r.closed_count_today
+
+    monthly = sorted(monthly_acc.values(), key=lambda m: m["month"], reverse=True)
+
+    return {"daily": daily, "monthly": monthly}
+
+
+@router.post("/positions/refresh-all", response_model=list[PositionResponse])
+async def refresh_all_positions(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Refresh current_price for every open position the user owns, then return
+    the freshly computed P&L for each. Per-ticker fetches are deduped: one
+    stock-data call per unique ticker, one options-chain call per unique
+    ticker with at least one CALL/PUT position. Failures are silent per
+    position (existing current_price retained)."""
+    import asyncio
+    import logging
+    logger_refresh = logging.getLogger(__name__)
+
+    result = await db.execute(
+        select(Position).where(
+            Position.user_id == user.id,
+            Position.status == "OPEN",
+        )
+    )
+    positions = list(result.scalars())
+    if not positions:
+        return []
+
+    stock_tickers = sorted({
+        p.ticker for p in positions if p.position_type == "STOCK"
+    })
+    option_tickers = sorted({
+        p.ticker for p in positions if p.position_type in ("CALL", "PUT")
+    })
+
+    client = DataSourceClient()
+    loop = asyncio.get_event_loop()
+    stock_prices: dict[str, float] = {}
+    chains: dict[str, dict] = {}
+
+    try:
+        for tk in stock_tickers:
+            try:
+                data = await loop.run_in_executor(None, client.get_stock_data, tk)
+                p = (data or {}).get("price")
+                if p is not None:
+                    stock_prices[tk] = float(p)
+            except Exception:
+                logger_refresh.exception("refresh_all: stock fetch failed for %s", tk)
+
+        for tk in option_tickers:
+            try:
+                ch = await loop.run_in_executor(
+                    None,
+                    lambda t=tk: client.get_options_chain(t, mode="spread"),
+                )
+                chains[tk] = ch or {}
+            except Exception:
+                logger_refresh.exception("refresh_all: chain fetch failed for %s", tk)
+    finally:
+        client.close()
+
+    updated = 0
+    for pos in positions:
+        if pos.position_type == "STOCK":
+            price = stock_prices.get(pos.ticker)
+            if price is not None:
+                pos.current_price = Decimal(str(round(price, 2)))
+                updated += 1
+        else:
+            # CALL or PUT — find the contract on the spread chain.
+            ch = chains.get(pos.ticker, {})
+            chain_map = ch.get("chains", {}) if isinstance(ch, dict) else {}
+            if not chain_map or not pos.expiry or not pos.strike_price:
+                continue
+            expiry_str = pos.expiry.isoformat()
+            exp_chain = chain_map.get(expiry_str)
+            if not exp_chain:
+                continue
+            side = "calls" if pos.position_type == "CALL" else "puts"
+            target_strike = float(pos.strike_price)
+            match = None
+            for c in exp_chain.get(side, []):
+                strike = c.get("strike")
+                if strike is None:
+                    continue
+                if abs(float(strike) - target_strike) < 0.01:
+                    match = c
+                    break
+            if match is None:
+                continue
+            last = match.get("lastPrice")
+            if last is None or float(last) <= 0:
+                continue
+            pos.current_price = Decimal(str(round(float(last), 2)))
+            updated += 1
+
+    if updated > 0:
+        await db.commit()
+        for pos in positions:
+            await db.refresh(pos)
+
+    pos_tickers = {p.ticker for p in positions}
+    watchlist_tickers, rec_map = await _get_watchlist_context(db, pos_tickers, user=user)
+    return [_compute_position_fields(p, watchlist_tickers, rec_map) for p in positions]
 
 
 # ── Multi-bagger scanner ────────────────────────────────────────────────────
