@@ -1,6 +1,6 @@
 """EdgeFlow API routes."""
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from io import BytesIO
@@ -37,6 +37,7 @@ from db.models import (
     MultibaggerUniverse,
     NewsTickerRelevance,
     OptionsSnapshot,
+    PipelineRunLog,
     Position,
     Recommendation,
     ResearchResult,
@@ -3040,3 +3041,96 @@ async def charts_datasets():
             },
         ],
     }
+
+
+# ── Schedule observability ──────────────────────────────────────────────────
+
+
+@router.get("/schedule/runs")
+async def get_schedule_runs(
+    hours: int = Query(72, ge=1, le=168),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Recent pipeline run history. Global phase rows are visible to every
+    user; per-user worker rows (digest/alerts/retention) are scoped to
+    current_user.id unless the caller is ADMIN."""
+    from sqlalchemy import or_
+
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+    stmt = select(PipelineRunLog).where(PipelineRunLog.started_at >= cutoff)
+    if user.role != "ADMIN":
+        stmt = stmt.where(
+            or_(PipelineRunLog.user_id.is_(None), PipelineRunLog.user_id == user.id)
+        )
+    stmt = stmt.order_by(PipelineRunLog.started_at.desc()).limit(1000)
+    rows = (await db.execute(stmt)).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "phase": r.phase,
+            "user_id": r.user_id,
+            "status": r.status,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+            "duration_ms": r.duration_ms,
+            "error_message": r.error_message,
+            "meta": _jsonable(r.meta) if r.meta else None,
+        }
+        for r in rows
+    ]
+
+
+def _job_phase_label(job) -> str:
+    """Map an APScheduler job to its phase name as stored in pipeline_run_log."""
+    func_name = getattr(job.func, "__name__", str(job.func))
+    if func_name == "run_pipeline_phase":
+        args = job.args or ()
+        return args[0] if args else "pipeline"
+    if func_name == "run_retention_sweep":
+        return "retention_sweep"
+    if func_name == "run_digest_dispatch":
+        return "digest_dispatch"
+    if func_name == "run_alerts_scan":
+        return "alerts_scan"
+    return func_name
+
+
+@router.get("/schedule/upcoming")
+async def get_schedule_upcoming(
+    hours: int = Query(24, ge=1, le=72),
+    user: User = Depends(get_current_user),
+):
+    """Next fire times for every APScheduler job within the requested window.
+
+    Computed at request time from the live scheduler's cron triggers — no
+    persistence, no caching. If the scheduler isn't running (e.g. in some
+    test contexts), returns an empty list."""
+    from services import scheduler as sched_mod
+
+    if sched_mod.scheduler is None or not sched_mod.scheduler.running:
+        return []
+
+    import pytz
+    now = datetime.now(tz=pytz.timezone("US/Eastern"))
+    end = now + timedelta(hours=hours)
+    out: list[dict] = []
+
+    for job in sched_mod.scheduler.get_jobs():
+        trigger = job.trigger
+        phase = _job_phase_label(job)
+        # Walk consecutive fires within the window
+        prev = None
+        for _ in range(200):  # hard cap on iterations
+            next_fire = trigger.get_next_fire_time(prev, now)
+            if next_fire is None or next_fire > end:
+                break
+            out.append({
+                "job_id": job.id,
+                "phase": phase,
+                "fires_at": next_fire.isoformat(),
+            })
+            prev = next_fire
+
+    out.sort(key=lambda x: x["fires_at"])
+    return out

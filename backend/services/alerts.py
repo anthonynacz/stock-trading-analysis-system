@@ -365,6 +365,14 @@ async def _scan_for_user(session: AsyncSession, user: User) -> dict[str, int]:
 # ── Cron entry point ────────────────────────────────────────────────────────
 
 async def run_alerts_scan() -> dict[str, Any]:
+    from services.run_log import (
+        STATUS_FAILED,
+        STATUS_SUCCESS,
+        record_run_finish,
+        record_run_start,
+    )
+
+    global_run_id = await record_run_start(phase="alerts_scan", user_id=None)
     started = datetime.now(tz=timezone.utc)
     summary: dict[str, Any] = {
         "started_at": started.isoformat(),
@@ -380,17 +388,38 @@ async def run_alerts_scan() -> dict[str, Any]:
             summary["users_examined"] += 1
             try:
                 counts = await _scan_for_user(session, user)
+                fired_this_user = 0
                 for k, v in counts.items():
                     summary["alerts_fired"] += v
                     summary["by_type"][k] = summary["by_type"].get(k, 0) + v
+                    fired_this_user += v
                 await session.commit()
-            except Exception:
+                # Per-user row only when any alerts fired — keeps the log small
+                if fired_this_user > 0:
+                    u_run = await record_run_start(phase="alerts_scan", user_id=user.id)
+                    await record_run_finish(
+                        u_run,
+                        status=STATUS_SUCCESS,
+                        meta={"fired": fired_this_user, "by_type": counts},
+                    )
+            except Exception as exc:
                 logger.exception("alerts scan failed for user %s", user.id)
                 summary["errors"] += 1
                 await session.rollback()
+                u_run = await record_run_start(phase="alerts_scan", user_id=user.id)
+                await record_run_finish(
+                    u_run,
+                    status=STATUS_FAILED,
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
     finally:
         await session.close()
 
     summary["finished_at"] = datetime.now(tz=timezone.utc).isoformat()
     logger.info("Alerts scan done: %s", summary)
+    await record_run_finish(
+        global_run_id,
+        status=STATUS_SUCCESS if summary["errors"] == 0 else STATUS_FAILED,
+        meta={k: v for k, v in summary.items() if k not in {"started_at", "finished_at"}},
+    )
     return summary

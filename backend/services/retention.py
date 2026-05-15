@@ -73,6 +73,14 @@ async def _retain_for_user(session: AsyncSession, user: User) -> dict[str, int]:
 async def run_retention_sweep() -> dict[str, Any]:
     """APScheduler entry point. Walks every user, deletes rows past their
     tier's retention window. Tier-skip (UNLIMITED) is a no-op."""
+    from services.run_log import (
+        STATUS_FAILED,
+        STATUS_SUCCESS,
+        record_run_finish,
+        record_run_start,
+    )
+
+    global_run_id = await record_run_start(phase="retention_sweep", user_id=None)
     started = datetime.now(tz=timezone.utc)
     summary = {
         "started_at": started.isoformat(),
@@ -90,14 +98,31 @@ async def run_retention_sweep() -> dict[str, Any]:
                 summary["users_processed"] += 1
                 summary["research_results_deleted"] += counts["research_results"]
                 summary["deep_options_analyses_deleted"] += counts["deep_options_analyses"]
-            except Exception:
+                # Per-user row only when something was actually deleted
+                if counts["research_results"] or counts["deep_options_analyses"]:
+                    u_run = await record_run_start(phase="retention_sweep", user_id=user.id)
+                    await record_run_finish(
+                        u_run, status=STATUS_SUCCESS, meta=counts,
+                    )
+            except Exception as exc:
                 logger.exception("retention sweep failed for user %s", user.id)
                 summary["errors"] += 1
                 await session.rollback()
+                u_run = await record_run_start(phase="retention_sweep", user_id=user.id)
+                await record_run_finish(
+                    u_run,
+                    status=STATUS_FAILED,
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
         await session.commit()
     finally:
         await session.close()
 
     summary["finished_at"] = datetime.now(tz=timezone.utc).isoformat()
     logger.info("Retention sweep done: %s", summary)
+    await record_run_finish(
+        global_run_id,
+        status=STATUS_SUCCESS if summary["errors"] == 0 else STATUS_FAILED,
+        meta={k: v for k, v in summary.items() if k not in {"started_at", "finished_at"}},
+    )
     return summary

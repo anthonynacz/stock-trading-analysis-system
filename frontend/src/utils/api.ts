@@ -458,3 +458,29 @@ export const downloadReport = async (date?: string) => {
   link.remove();
   window.URL.revokeObjectURL(url);
 };
+
+// ── Schedule ──────────────────────────────────────────────────────────────
+
+export interface ScheduleRun {
+  id: number;
+  phase: string;
+  user_id: number | null;
+  status: 'RUNNING' | 'SUCCESS' | 'FAILED';
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  error_message: string | null;
+  meta: Record<string, unknown> | null;
+}
+
+export interface ScheduleUpcoming {
+  job_id: string;
+  phase: string;
+  fires_at: string;
+}
+
+export const getScheduleRuns = (hours = 72) =>
+  api.get<ScheduleRun[]>('/schedule/runs', { params: { hours } }).then((r) => r.data);
+
+export const getScheduleUpcoming = (hours = 24) =>
+  api.get<ScheduleUpcoming[]>('/schedule/upcoming', { params: { hours } }).then((r) => r.data);

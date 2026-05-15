@@ -262,6 +262,14 @@ async def run_digest_dispatch() -> dict[str, Any]:
     """APScheduler entry. Iterate active users; for each user whose
     digest_config.send_time_utc falls in the past 30-min window, compose
     and dispatch."""
+    from services.run_log import (
+        STATUS_FAILED,
+        STATUS_SUCCESS,
+        record_run_finish,
+        record_run_start,
+    )
+
+    global_run_id = await record_run_start(phase="digest_dispatch", user_id=None)
     started = datetime.now(tz=timezone.utc)
     summary = {
         "started_at": started.isoformat(),
@@ -291,14 +299,32 @@ async def run_digest_dispatch() -> dict[str, Any]:
                     continue
                 _dispatch_email(payload)
                 summary["digests_sent"] += 1
-            except Exception:
+                # Per-user run row: only when we actually dispatched
+                u_run = await record_run_start(phase="digest_dispatch", user_id=user.id)
+                await record_run_finish(
+                    u_run,
+                    status=STATUS_SUCCESS,
+                    meta={"sections": list((payload.get("sections") or {}).keys())},
+                )
+            except Exception as exc:
                 logger.exception("digest dispatch failed for user %s", user.id)
                 summary["errors"] += 1
                 await session.rollback()
+                u_run = await record_run_start(phase="digest_dispatch", user_id=user.id)
+                await record_run_finish(
+                    u_run,
+                    status=STATUS_FAILED,
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
         await session.commit()
     finally:
         await session.close()
 
     summary["finished_at"] = datetime.now(tz=timezone.utc).isoformat()
     logger.info("Digest dispatch done: %s", summary)
+    await record_run_finish(
+        global_run_id,
+        status=STATUS_SUCCESS if summary["errors"] == 0 else STATUS_FAILED,
+        meta={k: v for k, v in summary.items() if k not in {"started_at", "finished_at"}},
+    )
     return summary

@@ -14,6 +14,7 @@ from db.models import (  # noqa: F401 — imported for metadata registration
     IndustryRecommendation,
     MultibaggerSnapshot,
     MultibaggerUniverse,
+    PipelineRunLog,
     Position,
     Sector,
     Subscription,

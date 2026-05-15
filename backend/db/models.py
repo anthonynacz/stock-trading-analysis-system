@@ -163,6 +163,41 @@ class AlertLog(Base):
     delivery_channel: Mapped[Optional[str]] = mapped_column(String(20))
 
 
+# ── Pipeline run log (scheduler observability) ─────────────────────────────
+
+class PipelineRunLog(Base):
+    """Append-only log of pipeline phase + worker invocations.
+
+    Rows are written by the scheduler wrapper around each phase / worker
+    invocation. Global phases (discovery, watchlist, ratings, ...) write a
+    single row with user_id NULL. Per-user workers (digest_dispatch,
+    alerts_scan) write one global summary row plus one row per user that
+    received meaningful work (digest sent, alerts fired).
+
+    Powers the /schedule frontend page. Pruning policy is TBD — for now the
+    table grows unbounded; expect a retention sweep job once volume
+    justifies it.
+    """
+
+    __tablename__ = "pipeline_run_log"
+    __table_args__ = (
+        Index("ix_pipeline_run_log_started", "started_at"),
+        Index("ix_pipeline_run_log_user_started", "user_id", "started_at"),
+        Index("ix_pipeline_run_log_phase_started", "phase", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    phase: Mapped[str] = mapped_column(String(50), nullable=False)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(String(20), nullable=False)  # RUNNING / SUCCESS / FAILED
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    # `meta` not `metadata` — the latter is reserved by SQLAlchemy's Base.
+    meta: Mapped[Optional[dict]] = mapped_column(JSON)
+
+
 # ── User preferences (personalization) ─────────────────────────────────────
 
 class UserPreferences(Base):

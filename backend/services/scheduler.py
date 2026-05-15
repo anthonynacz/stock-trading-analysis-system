@@ -7,14 +7,14 @@ Orchestrates all service phases on a market-hours cron schedule
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
 from db.connection import async_session
-from db.models import UniverseStock
+from db.models import PipelineRunLog, UniverseStock
 from services.analyst_tracker import AnalystTracker
 from services.earnings_calendar import EarningsCalendarService
 from services.news_scanner import NewsScanner
@@ -136,7 +136,16 @@ async def _inject_custom_universe(session) -> set[str]:
 
 async def run_pipeline_phase(phase: str) -> None:
     """Create a fresh DB session and data client, run the named phase, then clean up."""
+    from services.run_log import (
+        STATUS_FAILED,
+        STATUS_SUCCESS,
+        record_run_finish,
+        record_run_start,
+    )
+
     logger.info("Starting pipeline phase: %s", phase)
+    run_id = await record_run_start(phase=phase, user_id=None)
+    phase_error: str | None = None
     session = async_session()
     data_client = DataSourceClient()
     try:
@@ -228,12 +237,18 @@ async def run_pipeline_phase(phase: str) -> None:
         last_refresh[phase] = datetime.now(tz=EASTERN)
         logger.info("Pipeline phase '%s' completed successfully", phase)
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Pipeline phase '%s' failed", phase)
+        phase_error = f"{type(exc).__name__}: {exc}"
         await session.rollback()
     finally:
         data_client.close()
         await session.close()
+        await record_run_finish(
+            run_id,
+            status=STATUS_FAILED if phase_error else STATUS_SUCCESS,
+            error_message=phase_error,
+        )
 
 
 # ---------------------------------------------------------------------------
