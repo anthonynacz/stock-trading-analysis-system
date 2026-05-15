@@ -1,3 +1,4 @@
+import { useState, useCallback } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { fmtCount, useEntitlements } from '../contexts/EntitlementsContext';
@@ -48,36 +49,39 @@ function UserBadge() {
   // provider != 'legacy' even while LEGACY_MODE remains on for anonymous users.
   const isLegacySession = user.provider === 'legacy';
 
-  // Compact email display: drop domain on small screens
   const initials = user.email.charAt(0).toUpperCase();
   const tier = ent?.tier ?? user.role;
   const tierStyle = TIER_STYLES[tier] ?? TIER_STYLES.FREE;
   const tierLabel = ent?.tier_label ?? user.role;
 
   return (
-    <div className="ml-auto flex items-center gap-2">
-      {isLegacySession && (
+    <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+      {/* LEGACY / credit / tier chips: hidden on phones, shown sm+ to keep nav
+          row narrow on a 360px viewport. Same info is still on the Settings page. */}
+      <div className="hidden sm:flex items-center gap-2">
+        {isLegacySession && (
+          <span
+            className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-px rounded bg-amber-900/40 text-amber-300 border border-amber-500/30"
+            title="You are signed in as the legacy admin (auth bypass). Click Sign in to switch."
+          >
+            Legacy
+          </span>
+        )}
+        <CreditBadge />
         <span
-          className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-px rounded bg-amber-900/40 text-amber-300 border border-amber-500/30"
-          title="You are signed in as the legacy admin (auth bypass). Click Sign in to switch."
+          className={`text-[9px] font-bold tracking-wider uppercase px-1.5 py-px rounded ${tierStyle.bg} ${tierStyle.text} border ${tierStyle.border}`}
+          title={`Tier: ${tierLabel}`}
         >
-          Legacy
+          {tierLabel}
         </span>
-      )}
-      <CreditBadge />
+      </div>
       <span
-        className={`text-[9px] font-bold tracking-wider uppercase px-1.5 py-px rounded ${tierStyle.bg} ${tierStyle.text} border ${tierStyle.border}`}
-        title={`Tier: ${tierLabel}`}
-      >
-        {tierLabel}
-      </span>
-      <span
-        className="w-6 h-6 rounded-full bg-accent-700/60 text-white text-[11px] font-semibold flex items-center justify-center"
+        className="w-6 h-6 rounded-full bg-accent-700/60 text-white text-[11px] font-semibold flex items-center justify-center shrink-0"
         title={user.email}
       >
         {initials}
       </span>
-      <span className="text-xs text-text-secondary hidden sm:inline">{user.email}</span>
+      <span className="text-xs text-text-secondary hidden md:inline">{user.email}</span>
       <NavLink
         to="/settings"
         title="Settings"
@@ -98,7 +102,7 @@ function UserBadge() {
         <button
           onClick={logout}
           title="Sign out (returns to legacy admin in dev)"
-          className="text-[11px] text-text-secondary hover:text-text-primary px-2 py-1 rounded hover:bg-border/60 transition-colors"
+          className="text-[11px] text-text-secondary hover:text-text-primary px-1.5 sm:px-2 py-1 rounded hover:bg-border/60 transition-colors"
         >
           Sign out
         </button>
@@ -106,7 +110,7 @@ function UserBadge() {
         <NavLink
           to="/login"
           title="Sign in as a real user (legacy mode is on by default)"
-          className="text-[11px] font-semibold text-accent-300 hover:text-accent-200 px-2 py-1 rounded hover:bg-accent-900/30 transition-colors"
+          className="text-[11px] font-semibold text-accent-300 hover:text-accent-200 px-1.5 sm:px-2 py-1 rounded hover:bg-accent-900/30 transition-colors"
         >
           Sign in
         </NavLink>
@@ -116,30 +120,80 @@ function UserBadge() {
 }
 
 export default function AppNav() {
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
+
   return (
-    <nav className="bg-card border-b border-border px-4">
-      <div className="max-w-7xl mx-auto flex items-center h-10 gap-6">
-        <span className="text-sm font-bold text-text-primary tracking-wide mr-2">
+    <nav className="bg-card border-b border-border">
+      <div className="max-w-7xl mx-auto flex items-center h-10 gap-3 md:gap-6 px-3 sm:px-4">
+        {/* Hamburger toggle — phones only */}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-label={open ? 'Close navigation menu' : 'Open navigation menu'}
+          aria-expanded={open}
+          className="md:hidden p-1 -ml-1 text-text-secondary hover:text-text-primary rounded transition-colors"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            {open ? (
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            ) : (
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            )}
+          </svg>
+        </button>
+
+        <span className="text-sm font-bold text-text-primary tracking-wide">
           Vela
         </span>
-        {links.map((l) => (
-          <NavLink
-            key={l.to}
-            to={l.to}
-            end={l.to === '/'}
-            className={({ isActive }) =>
-              `text-sm transition-colors ${
-                isActive
-                  ? 'text-text-primary font-semibold border-b-2 border-accent-500'
-                  : 'text-text-secondary hover:text-text-primary'
-              }`
-            }
-          >
-            {l.label}
-          </NavLink>
-        ))}
+
+        {/* Horizontal links — md (768px) and up */}
+        <div className="hidden md:flex items-center gap-6">
+          {links.map((l) => (
+            <NavLink
+              key={l.to}
+              to={l.to}
+              end={l.to === '/'}
+              className={({ isActive }) =>
+                `text-sm transition-colors ${
+                  isActive
+                    ? 'text-text-primary font-semibold border-b-2 border-accent-500'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`
+              }
+            >
+              {l.label}
+            </NavLink>
+          ))}
+        </div>
+
         <UserBadge />
       </div>
+
+      {/* Mobile dropdown — only rendered when open, below the bar */}
+      {open && (
+        <div className="md:hidden border-t border-border bg-card shadow-lg">
+          <div className="flex flex-col py-1">
+            {links.map((l) => (
+              <NavLink
+                key={l.to}
+                to={l.to}
+                end={l.to === '/'}
+                onClick={close}
+                className={({ isActive }) =>
+                  `px-4 py-3 text-sm transition-colors min-h-[44px] flex items-center ${
+                    isActive
+                      ? 'text-text-primary font-semibold bg-border/40 border-l-2 border-accent-500'
+                      : 'text-text-secondary hover:text-text-primary hover:bg-border/30 border-l-2 border-transparent'
+                  }`
+                }
+              >
+                {l.label}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      )}
     </nav>
   );
 }
