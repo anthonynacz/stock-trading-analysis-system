@@ -106,15 +106,16 @@ export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggle
                     style={{ backgroundColor: indicatorColor }}
                   />
 
-                  {/* Top-right action buttons on hover */}
+                  {/* Top-right action buttons. Shown always on phones (no hover),
+                      desktop keeps the hover-to-reveal behavior. */}
                   {item.status !== 'REMOVED' && (
-                    <div className="absolute top-1 right-1 hidden group-hover:flex items-center gap-0.5">
+                    <div className="absolute top-1 right-1 flex md:hidden md:group-hover:flex items-center gap-0.5">
                       {onToggleLock && (
                         <span
                           role="button"
                           title={item.is_locked ? 'Unlock from rotation' : 'Lock from rotation'}
                           onClick={(e) => { e.stopPropagation(); onToggleLock(item.ticker); }}
-                          className={`flex items-center justify-center w-5 h-5 rounded-full text-[11px] leading-none transition-colors ${
+                          className={`flex items-center justify-center w-7 h-7 sm:w-5 sm:h-5 rounded-full text-[13px] sm:text-[11px] leading-none transition-colors ${
                             item.is_locked
                               ? 'bg-amber-900/60 text-amber-400 hover:bg-amber-800'
                               : 'bg-gray-800/80 text-text-secondary hover:bg-gray-700 hover:text-text-primary'
@@ -127,7 +128,7 @@ export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggle
                         <span
                           role="button"
                           onClick={(e) => { e.stopPropagation(); onRemove(item.ticker); }}
-                          className="flex items-center justify-center w-5 h-5 rounded-full bg-red-900/60 text-red-400 hover:bg-red-800 text-[10px] leading-none"
+                          className="flex items-center justify-center w-7 h-7 sm:w-5 sm:h-5 rounded-full bg-red-900/60 text-red-400 hover:bg-red-800 text-[14px] sm:text-[10px] leading-none"
                         >
                           ×
                         </span>

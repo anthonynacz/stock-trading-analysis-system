@@ -26,7 +26,7 @@ export default function NewsModeSelector({
           <button
             key={m.key}
             onClick={() => onModeChange(m.key)}
-            className={`px-2.5 py-1 text-[11px] font-semibold rounded transition-colors ${
+            className={`px-3 py-1.5 sm:px-2.5 sm:py-1 text-[11px] font-semibold rounded transition-colors ${
               mode === m.key
                 ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
                 : 'bg-card border border-border text-text-secondary hover:text-text-primary'

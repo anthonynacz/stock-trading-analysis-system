@@ -68,24 +68,25 @@ export default function StatusBar({
   const goToday = () => onDateChange(todayStr);
 
   return (
-    <div className="sticky top-0 z-50 bg-card border-b border-border px-4 py-3 flex items-center gap-4">
-      {/* Title */}
-      <h1 className="text-lg font-bold text-text-primary">EdgeFlow</h1>
+    <div className="sticky top-0 z-50 bg-card border-b border-border px-3 py-2 sm:px-4 sm:py-3 flex items-center gap-3 sm:gap-4">
+      {/* Title — redundant with the Vela logo in AppNav on phones */}
+      <h1 className="hidden sm:block text-lg font-bold text-text-primary">EdgeFlow</h1>
 
       {/* Date stepper */}
-      <div className="flex items-center gap-2 mx-auto">
+      <div className="flex items-center gap-1 sm:gap-2 mx-auto">
         <button
           onClick={goOlder}
           disabled={!canGoOlder}
-          className="p-1 rounded hover:bg-border/60 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          className="p-2 sm:p-1 rounded hover:bg-border/60 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           title="Previous day"
+          aria-label="Previous day"
         >
           <svg className="w-4 h-4 text-text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
           </svg>
         </button>
 
-        <span className={`text-sm select-none ${isToday ? 'text-text-secondary' : 'text-amber-400'}`}>
+        <span className={`text-xs sm:text-sm select-none ${isToday ? 'text-text-secondary' : 'text-amber-400'}`}>
           {formatDate(selectedDate)}
           {!isToday && (
             <span className="ml-1.5 text-[10px] uppercase tracking-wider opacity-70">
@@ -97,8 +98,9 @@ export default function StatusBar({
         <button
           onClick={goNewer}
           disabled={!canGoNewer}
-          className="p-1 rounded hover:bg-border/60 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          className="p-2 sm:p-1 rounded hover:bg-border/60 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           title="Next day"
+          aria-label="Next day"
         >
           <svg className="w-4 h-4 text-text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
@@ -108,7 +110,7 @@ export default function StatusBar({
         {!isToday && (
           <button
             onClick={goToday}
-            className="ml-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-900/60 text-new-entrant hover:bg-blue-800/60 transition-colors"
+            className="ml-1 px-2 py-1 sm:py-0.5 rounded text-[10px] font-semibold bg-blue-900/60 text-new-entrant hover:bg-blue-800/60 transition-colors"
           >
             Today
           </button>
@@ -116,30 +118,31 @@ export default function StatusBar({
       </div>
 
       {/* Status indicators */}
-      <div className="flex items-center gap-3">
-        {/* Export PDF */}
+      <div className="flex items-center gap-2 sm:gap-3">
+        {/* Export PDF — icon-only on phones */}
         <button
           onClick={handleExportPDF}
           disabled={downloading}
-          className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-border/60 text-text-primary hover:bg-border transition-colors disabled:opacity-40"
+          className="flex items-center gap-1 p-1.5 sm:px-2.5 sm:py-1 rounded text-xs font-medium bg-border/60 text-text-primary hover:bg-border transition-colors disabled:opacity-40"
           title={`Export PDF report for ${formatDate(selectedDate)}`}
+          aria-label="Export PDF report"
         >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className="w-4 h-4 sm:w-3.5 sm:h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
           </svg>
-          {downloading ? 'Generating...' : 'Export PDF'}
+          <span className="hidden sm:inline">{downloading ? 'Generating...' : 'Export PDF'}</span>
         </button>
 
-        {/* Last refresh */}
+        {/* Last refresh — hidden on phones; same info reachable via /api/status */}
         {lastRefresh && (
-          <span className="text-xs text-text-secondary">
+          <span className="hidden sm:inline text-xs text-text-secondary">
             Updated {new Date(lastRefresh).toLocaleTimeString()}
           </span>
         )}
 
-        {/* DB indicator */}
+        {/* DB indicator — hidden on phones */}
         {status && (
-          <div className="flex items-center gap-1" title={status.db_connected ? 'DB connected' : 'DB disconnected'}>
+          <div className="hidden sm:flex items-center gap-1" title={status.db_connected ? 'DB connected' : 'DB disconnected'}>
             <div
               className={`w-2 h-2 rounded-full ${status.db_connected ? 'bg-green-500' : 'bg-red-500'}`}
             />
@@ -147,9 +150,9 @@ export default function StatusBar({
           </div>
         )}
 
-        {/* Scheduler indicator */}
+        {/* Scheduler indicator — hidden on phones */}
         {status && (
-          <div className="flex items-center gap-1" title={status.scheduler_running ? 'Scheduler running' : 'Scheduler stopped'}>
+          <div className="hidden sm:flex items-center gap-1" title={status.scheduler_running ? 'Scheduler running' : 'Scheduler stopped'}>
             <div
               className={`w-2 h-2 rounded-full ${status.scheduler_running ? 'bg-green-500' : 'bg-red-500'}`}
             />
