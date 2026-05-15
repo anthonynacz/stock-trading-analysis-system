@@ -22,24 +22,29 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('research_results', sa.Column('news_summary', sa.Text(), nullable=True))
-    op.add_column('research_results', sa.Column('news_clusters', sa.JSON(), nullable=True))
-    op.add_column('research_results', sa.Column('sentiment_timeline', sa.JSON(), nullable=True))
-    op.add_column('research_results', sa.Column('top_headlines', sa.JSON(), nullable=True))
-    op.add_column('research_results', sa.Column('bull_case', sa.Text(), nullable=True))
-    op.add_column('research_results', sa.Column('bear_case', sa.Text(), nullable=True))
-    op.add_column('research_results', sa.Column('watch_text', sa.Text(), nullable=True))
-    op.add_column('research_results', sa.Column('enrichment_status', sa.String(length=20), nullable=True))
-    op.add_column('research_results', sa.Column('enrichment_error', sa.Text(), nullable=True))
+    # Idempotent: the baseline migration uses Base.metadata.create_all(),
+    # which on a fresh DB creates research_results with all current model
+    # columns already present. Use raw IF NOT EXISTS so this migration is
+    # a no-op in that case and only adds columns when stepping forward
+    # from an actual pre-enrichment schema.
+    op.execute("ALTER TABLE research_results ADD COLUMN IF NOT EXISTS news_summary TEXT")
+    op.execute("ALTER TABLE research_results ADD COLUMN IF NOT EXISTS news_clusters JSON")
+    op.execute("ALTER TABLE research_results ADD COLUMN IF NOT EXISTS sentiment_timeline JSON")
+    op.execute("ALTER TABLE research_results ADD COLUMN IF NOT EXISTS top_headlines JSON")
+    op.execute("ALTER TABLE research_results ADD COLUMN IF NOT EXISTS bull_case TEXT")
+    op.execute("ALTER TABLE research_results ADD COLUMN IF NOT EXISTS bear_case TEXT")
+    op.execute("ALTER TABLE research_results ADD COLUMN IF NOT EXISTS watch_text TEXT")
+    op.execute("ALTER TABLE research_results ADD COLUMN IF NOT EXISTS enrichment_status VARCHAR(20)")
+    op.execute("ALTER TABLE research_results ADD COLUMN IF NOT EXISTS enrichment_error TEXT")
 
 
 def downgrade() -> None:
-    op.drop_column('research_results', 'enrichment_error')
-    op.drop_column('research_results', 'enrichment_status')
-    op.drop_column('research_results', 'watch_text')
-    op.drop_column('research_results', 'bear_case')
-    op.drop_column('research_results', 'bull_case')
-    op.drop_column('research_results', 'top_headlines')
-    op.drop_column('research_results', 'sentiment_timeline')
-    op.drop_column('research_results', 'news_clusters')
-    op.drop_column('research_results', 'news_summary')
+    op.execute("ALTER TABLE research_results DROP COLUMN IF EXISTS enrichment_error")
+    op.execute("ALTER TABLE research_results DROP COLUMN IF EXISTS enrichment_status")
+    op.execute("ALTER TABLE research_results DROP COLUMN IF EXISTS watch_text")
+    op.execute("ALTER TABLE research_results DROP COLUMN IF EXISTS bear_case")
+    op.execute("ALTER TABLE research_results DROP COLUMN IF EXISTS bull_case")
+    op.execute("ALTER TABLE research_results DROP COLUMN IF EXISTS top_headlines")
+    op.execute("ALTER TABLE research_results DROP COLUMN IF EXISTS sentiment_timeline")
+    op.execute("ALTER TABLE research_results DROP COLUMN IF EXISTS news_clusters")
+    op.execute("ALTER TABLE research_results DROP COLUMN IF EXISTS news_summary")
