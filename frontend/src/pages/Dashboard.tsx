@@ -50,6 +50,19 @@ export default function Dashboard() {
   const [newsTicker, setNewsTicker] = useState('');
   const [newsIndustry, setNewsIndustry] = useState('');
 
+  // Lock body scroll while the TickerDetail mobile overlay is open. Desktop
+  // (lg+) still keeps the panel in-grid; this is purely a no-op there.
+  useEffect(() => {
+    if (!selectedTicker) return;
+    const prev = document.body.style.overflow;
+    if (window.matchMedia('(max-width: 1023px)').matches) {
+      document.body.style.overflow = 'hidden';
+    }
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [selectedTicker]);
+
   const pipelineDates = usePipelineDates();
   const watchlist = useWatchlist(undefined, selectedDate);
   const recommendations = useRecommendations(undefined, undefined, selectedDate);
@@ -248,16 +261,21 @@ export default function Dashboard() {
 
           <section className="lg:col-span-2">
             {selectedTicker ? (
-              <TickerDetail
-                ticker={selectedTicker}
-                companyName={selectedCompany}
-                selectedDate={selectedDate}
-                onClose={() => setSelectedTicker(null)}
-                rotationProtected={selectedItem?.rotation_protected}
-                protectionReasons={selectedItem?.protection_reasons}
-              />
+              <div
+                className="fixed inset-0 z-40 bg-page overflow-y-auto p-3
+                           lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:overflow-visible lg:p-0"
+              >
+                <TickerDetail
+                  ticker={selectedTicker}
+                  companyName={selectedCompany}
+                  selectedDate={selectedDate}
+                  onClose={() => setSelectedTicker(null)}
+                  rotationProtected={selectedItem?.rotation_protected}
+                  protectionReasons={selectedItem?.protection_reasons}
+                />
+              </div>
             ) : (
-              <div className="bg-card border border-border rounded-lg p-8 text-center text-text-secondary text-sm mt-9">
+              <div className="hidden lg:block bg-card border border-border rounded-lg p-8 text-center text-text-secondary text-sm mt-9">
                 Click a ticker to view details
               </div>
             )}
