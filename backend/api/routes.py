@@ -2501,6 +2501,65 @@ async def list_positions(
     return [_compute_position_fields(p, watchlist_tickers, rec_map) for p in positions]
 
 
+# NOTE: literal-path /positions routes (pnl-history, refresh-all) MUST be
+# declared before /positions/{id_} below; FastAPI matches in registration
+# order and "/positions/pnl-history" would otherwise be caught as id_.
+
+@router.get("/positions/pnl-history")
+async def get_pnl_history(
+    days: int = Query(90, ge=1, le=730),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Daily P&L snapshots for the current user, newest first.
+
+    Returns `{daily, monthly}` where:
+      - daily: per-day rows from portfolio_pnl_snapshot for the last N days
+      - monthly: aggregated realized P&L per calendar month (MM-YYYY ->
+        sum of realized_pnl_today + last unrealized snapshot of the month)
+    """
+    cutoff = date.today() - timedelta(days=days)
+    stmt = (
+        select(PortfolioPnlSnapshot)
+        .where(
+            PortfolioPnlSnapshot.user_id == user.id,
+            PortfolioPnlSnapshot.snapshot_date >= cutoff,
+        )
+        .order_by(PortfolioPnlSnapshot.snapshot_date.desc())
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+
+    daily = [
+        {
+            "date": r.snapshot_date.isoformat(),
+            "unrealized_pnl": float(r.unrealized_pnl),
+            "realized_pnl_today": float(r.realized_pnl_today),
+            "realized_pnl_cumulative": float(r.realized_pnl_cumulative),
+            "open_count": r.open_count,
+            "closed_count_today": r.closed_count_today,
+        }
+        for r in rows
+    ]
+
+    monthly_acc: dict[str, dict] = {}
+    for r in rows:
+        key = r.snapshot_date.strftime("%Y-%m")
+        if key not in monthly_acc:
+            monthly_acc[key] = {
+                "month": key,
+                "realized_pnl": 0.0,
+                "closed_count": 0,
+                "latest_unrealized": float(r.unrealized_pnl),  # rows ordered newest-first
+                "latest_open_count": r.open_count,
+            }
+        monthly_acc[key]["realized_pnl"] += float(r.realized_pnl_today)
+        monthly_acc[key]["closed_count"] += r.closed_count_today
+
+    monthly = sorted(monthly_acc.values(), key=lambda m: m["month"], reverse=True)
+
+    return {"daily": daily, "monthly": monthly}
+
+
 @router.get("/positions/{id_}", response_model=PositionResponse)
 async def get_position(
     id_: int,
@@ -2616,64 +2675,6 @@ async def refresh_position_price(
     return _compute_position_fields(pos, watchlist_tickers, rec_map)
 
 
-@router.get("/positions/pnl-history")
-async def get_pnl_history(
-    days: int = Query(90, ge=1, le=730),
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """Daily P&L snapshots for the current user, newest first.
-
-    Returns `{daily, monthly}` where:
-      - daily: per-day rows from portfolio_pnl_snapshot for the last N days
-      - monthly: aggregated realized P&L per calendar month (MM-YYYY ->
-        sum of realized_pnl_today + last unrealized snapshot of the month)
-    """
-    cutoff = date.today() - timedelta(days=days)
-    stmt = (
-        select(PortfolioPnlSnapshot)
-        .where(
-            PortfolioPnlSnapshot.user_id == user.id,
-            PortfolioPnlSnapshot.snapshot_date >= cutoff,
-        )
-        .order_by(PortfolioPnlSnapshot.snapshot_date.desc())
-    )
-    rows = (await db.execute(stmt)).scalars().all()
-
-    daily = [
-        {
-            "date": r.snapshot_date.isoformat(),
-            "unrealized_pnl": float(r.unrealized_pnl),
-            "realized_pnl_today": float(r.realized_pnl_today),
-            "realized_pnl_cumulative": float(r.realized_pnl_cumulative),
-            "open_count": r.open_count,
-            "closed_count_today": r.closed_count_today,
-        }
-        for r in rows
-    ]
-
-    # Monthly rollup: sum realized_pnl_today per (year, month).
-    # Unrealized is a state, not flow — take the LATEST snapshot's unrealized
-    # for the in-progress month so the user sees a meaningful "this month" line.
-    monthly_acc: dict[str, dict] = {}
-    for r in rows:
-        key = r.snapshot_date.strftime("%Y-%m")
-        if key not in monthly_acc:
-            monthly_acc[key] = {
-                "month": key,
-                "realized_pnl": 0.0,
-                "closed_count": 0,
-                "latest_unrealized": float(r.unrealized_pnl),  # rows ordered newest-first
-                "latest_open_count": r.open_count,
-            }
-        monthly_acc[key]["realized_pnl"] += float(r.realized_pnl_today)
-        monthly_acc[key]["closed_count"] += r.closed_count_today
-
-    monthly = sorted(monthly_acc.values(), key=lambda m: m["month"], reverse=True)
-
-    return {"daily": daily, "monthly": monthly}
-
-
 @router.post("/positions/refresh-all", response_model=list[PositionResponse])
 async def refresh_all_positions(
     db: AsyncSession = Depends(get_db),
@@ -2740,32 +2741,45 @@ async def refresh_all_positions(
                 pos.current_price = Decimal(str(round(price, 2)))
                 updated += 1
         else:
-            # CALL or PUT — find the contract on the spread chain.
-            ch = chains.get(pos.ticker, {})
-            chain_map = ch.get("chains", {}) if isinstance(ch, dict) else {}
-            if not chain_map or not pos.expiry or not pos.strike_price:
+            # CALL or PUT — try spread chain first, fall back to direct
+            # per-expiry lookup since the spread only returns 8 bucketed
+            # expirations and a user's contract may not be among them.
+            if not pos.expiry or not pos.strike_price:
                 continue
             expiry_str = pos.expiry.isoformat()
-            exp_chain = chain_map.get(expiry_str)
-            if not exp_chain:
-                continue
             side = "calls" if pos.position_type == "CALL" else "puts"
             target_strike = float(pos.strike_price)
-            match = None
-            for c in exp_chain.get(side, []):
-                strike = c.get("strike")
-                if strike is None:
-                    continue
-                if abs(float(strike) - target_strike) < 0.01:
-                    match = c
-                    break
-            if match is None:
-                continue
-            last = match.get("lastPrice")
-            if last is None or float(last) <= 0:
-                continue
-            pos.current_price = Decimal(str(round(float(last), 2)))
-            updated += 1
+            last_price: float | None = None
+
+            ch = chains.get(pos.ticker, {})
+            chain_map = ch.get("chains", {}) if isinstance(ch, dict) else {}
+            exp_chain = chain_map.get(expiry_str) if chain_map else None
+            if exp_chain:
+                for c in exp_chain.get(side, []):
+                    strike = c.get("strike")
+                    if strike is None:
+                        continue
+                    if abs(float(strike) - target_strike) < 0.01:
+                        lp = c.get("lastPrice")
+                        if lp is not None and float(lp) > 0:
+                            last_price = float(lp)
+                        break
+
+            if last_price is None:
+                # Targeted per-expiry yfinance lookup
+                fallback_client = DataSourceClient()
+                try:
+                    last_price = await loop.run_in_executor(
+                        None,
+                        fallback_client.get_option_contract_price,
+                        pos.ticker, expiry_str, target_strike, side,
+                    )
+                finally:
+                    fallback_client.close()
+
+            if last_price is not None and last_price > 0:
+                pos.current_price = Decimal(str(round(last_price, 2)))
+                updated += 1
 
     if updated > 0:
         await db.commit()

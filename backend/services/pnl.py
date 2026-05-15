@@ -77,25 +77,41 @@ async def _refresh_user_positions(
             price = stock_prices.get(pos.ticker)
             if price is not None:
                 pos.current_price = Decimal(str(round(price, 2)))
-        else:
-            ch = chains.get(pos.ticker, {})
-            chain_map = ch.get("chains", {}) if isinstance(ch, dict) else {}
-            if not chain_map or not pos.expiry or not pos.strike_price:
-                continue
-            exp_chain = chain_map.get(pos.expiry.isoformat())
-            if not exp_chain:
-                continue
-            side = "calls" if pos.position_type == "CALL" else "puts"
-            target = float(pos.strike_price)
+            continue
+        # CALL / PUT — spread chain first, per-expiry fallback.
+        if not pos.expiry or not pos.strike_price:
+            continue
+        expiry_str = pos.expiry.isoformat()
+        side = "calls" if pos.position_type == "CALL" else "puts"
+        target = float(pos.strike_price)
+        last_price: float | None = None
+
+        ch = chains.get(pos.ticker, {})
+        chain_map = ch.get("chains", {}) if isinstance(ch, dict) else {}
+        exp_chain = chain_map.get(expiry_str) if chain_map else None
+        if exp_chain:
             for c in exp_chain.get(side, []):
                 strike = c.get("strike")
                 if strike is None:
                     continue
                 if abs(float(strike) - target) < 0.01:
-                    last = c.get("lastPrice")
-                    if last is not None and float(last) > 0:
-                        pos.current_price = Decimal(str(round(float(last), 2)))
+                    lp = c.get("lastPrice")
+                    if lp is not None and float(lp) > 0:
+                        last_price = float(lp)
                     break
+
+        if last_price is None:
+            try:
+                last_price = await loop.run_in_executor(
+                    None,
+                    client.get_option_contract_price,
+                    pos.ticker, expiry_str, target, side,
+                )
+            except Exception:
+                logger.exception("pnl: contract lookup failed for %s %s %s", pos.ticker, expiry_str, target)
+
+        if last_price is not None and last_price > 0:
+            pos.current_price = Decimal(str(round(last_price, 2)))
 
 
 def _pnl_for_position(pos: Position) -> Decimal:

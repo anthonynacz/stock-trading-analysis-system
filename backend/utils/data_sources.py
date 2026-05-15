@@ -672,6 +672,48 @@ class DataSourceClient:
             logger.exception("get_options_chain failed for %s", ticker)
             return {"ticker": ticker, "expirations": [], "chains": {}}
 
+    def get_option_contract_price(
+        self, ticker: str, expiry: str, strike: float, side: str,
+    ) -> float | None:
+        """Fetch the last-traded price of a single specific option contract.
+
+        Used by the positions refresh path where we need the price for an
+        exact (ticker, expiry, strike, side) tuple — get_options_chain only
+        returns a curated subset of expirations, so a user's contract may
+        not be in the spread.
+
+        Returns the lastPrice if found and > 0, otherwise None. side must
+        be "calls" or "puts" (lowercase, matches yfinance .calls / .puts).
+        """
+        if side not in ("calls", "puts"):
+            return None
+        try:
+            self._wait_for_rate_limit("yfinance")
+            yticker = yf.Ticker(ticker)
+            expirations = yticker.options or ()
+            if expiry not in expirations:
+                return None
+            self._wait_for_rate_limit("yfinance")
+            chain = yticker.option_chain(expiry)
+            df = chain.calls if side == "calls" else chain.puts
+            for _, row in df.iterrows():
+                row_strike = row.get("strike")
+                if row_strike is None:
+                    continue
+                if abs(float(row_strike) - float(strike)) < 0.01:
+                    last = row.get("lastPrice")
+                    if last is None:
+                        return None
+                    val = float(last)
+                    return val if val > 0 else None
+            return None
+        except Exception:
+            logger.exception(
+                "get_option_contract_price failed for %s %s %s %s",
+                ticker, expiry, strike, side,
+            )
+            return None
+
     @staticmethod
     def _spread_expirations(expirations: tuple[str, ...]) -> list[str]:
         """Pick up to 8 expirations spread across DTE buckets.
