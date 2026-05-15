@@ -3119,10 +3119,12 @@ async def get_schedule_upcoming(
     for job in sched_mod.scheduler.get_jobs():
         trigger = job.trigger
         phase = _job_phase_label(job)
-        # Walk consecutive fires within the window
-        prev = None
-        for _ in range(200):  # hard cap on iterations
-            next_fire = trigger.get_next_fire_time(prev, now)
+        # APScheduler's get_next_fire_time(previous, now) ignores `previous`
+        # once it's past `now` — so to enumerate future fires we advance the
+        # "now" cursor past each fire and re-query with previous=None.
+        cursor = now
+        for _ in range(200):  # hard cap
+            next_fire = trigger.get_next_fire_time(None, cursor)
             if next_fire is None or next_fire > end:
                 break
             out.append({
@@ -3130,7 +3132,7 @@ async def get_schedule_upcoming(
                 "phase": phase,
                 "fires_at": next_fire.isoformat(),
             })
-            prev = next_fire
+            cursor = next_fire + timedelta(microseconds=1)
 
     out.sort(key=lambda x: x["fires_at"])
     return out
