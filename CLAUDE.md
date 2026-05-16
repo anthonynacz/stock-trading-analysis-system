@@ -40,18 +40,29 @@ Production is deployed on a Hetzner VPS at `204.168.198.65`. Services are expose
 - **Frontend**: http://204.168.198.65:3000
 - **Backend API**: http://204.168.198.65:8000
 
-SSH into the server to manage the deployment:
+Project lives at `/root/edgeflow` on the server. Git remote is `origin = https://github.com/anthonynacz/stock-trading-analysis-system.git`. The server's local branch is `master` but tracks `origin/main` (local dev pushes `master:main`, so prod pulls `main`).
+
+### Deploy workflow
+
+After `git push` from local lands on `origin/main`:
 ```bash
 ssh root@204.168.198.65
+cd /root/edgeflow
+git pull                                # fast-forwards master from origin/main
+docker compose up -d --build            # rebuilds backend + frontend, restarts
 ```
+The backend's `entrypoint.sh` runs `alembic upgrade head` before uvicorn starts, so DB migrations apply automatically on container restart — no manual step needed. The frontend Dockerfile is multi-stage and bakes the compiled bundle in at build time, so a rebuild (not just a restart) is required for any frontend change to be visible.
 
-Useful server-side commands:
+### Useful server-side commands
 ```bash
 docker compose ps                       # Check container status
 docker compose logs --tail=200 -f       # All logs, follow
 docker compose logs --tail=200 -f backend
-docker compose up --build -d            # Full rebuild and restart
+docker compose up -d --build frontend   # Frontend-only rebuild
 ```
+
+### Single-replica constraint
+APScheduler runs in-process inside the backend container. Multiple backend replicas would cause duplicate pipeline runs and upsert races on shared tables (`recommendations`, `watchlist_daily_snapshot`, etc.). Keep `docker-compose.yml` at one backend instance until the scheduler moves to a dedicated worker (or an external lock, e.g. a Postgres advisory lock keyed on phase, is introduced).
 
 ## Maintaining these files
 

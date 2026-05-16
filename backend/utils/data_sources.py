@@ -10,7 +10,7 @@ import logging
 import math
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -782,9 +782,12 @@ class DataSourceClient:
     ) -> list[dict]:
         try:
             if ticker:
+                # 3-day window so Monday's premarket pulls Sat/Sun articles, and
+                # Tuesday-after-Monday-holiday still catches the holiday. URL
+                # dedup in scan_news() absorbs the overlap with prior runs.
                 now = datetime.now(tz=timezone.utc)
-                from_date = now.strftime("%Y-%m-%d")
-                to_date = from_date
+                to_date = now.strftime("%Y-%m-%d")
+                from_date = (now - timedelta(days=3)).strftime("%Y-%m-%d")
                 raw = self._finnhub_get(
                     "/api/v1/company-news",
                     params={"symbol": ticker, "from": from_date, "to": to_date},

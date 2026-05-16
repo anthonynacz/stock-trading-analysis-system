@@ -36,6 +36,7 @@ These columns were added via `ALTER TABLE` and may need to be re-added if the da
 - `watchlist_daily_snapshot` — `UNIQUE(snapshot_date, ticker)` (`uq_snapshot_date_ticker`)
 - `options_snapshots.atm_iv` — `NUMERIC(6,4)` — persisted near-ATM IV for historical IV rank (`utils/iv_history.py`)
 - `recommendations.prior_action / prior_conviction_score / revision_number / revised_at / revision_reason` — same-day revision tracking. `revision_reason` is populated by the intraday news rescore path with the headline that triggered the revision; daily pipeline revisions leave it NULL.
+- `market_news.content_hash` — `VARCHAR(64)`, SHA-256 of normalized `(headline + summary)`. Indexed (`ix_news_content_hash`). Sentiment cache key in `NewsScanner.scan_news`: same hash → reuse existing `sentiment_score` instead of re-running FinBERT. Catches wire-story reprints that share text but differ in `source_url`. Backward-compatible NULL on rows predating the column.
 - **All user-owned tables** — `user_id INTEGER REFERENCES users(id)` added by `_ensure_user_id_columns()` in `init_db.py` on first startup after the retrofit. Idempotent.
 
 ## Known Schema Caveats

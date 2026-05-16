@@ -438,6 +438,7 @@ class MarketNews(Base):
     __table_args__ = (
         Index("ix_news_ticker", "ticker"),
         Index("ix_news_published", "published_at"),
+        Index("ix_news_content_hash", "content_hash"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -451,6 +452,11 @@ class MarketNews(Base):
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     source_url: Mapped[Optional[str]] = mapped_column(Text)
+    # SHA-256 of normalized (headline + summary). Used as a sentiment cache key:
+    # before calling FinBERT in scan_news(), we look up any existing row with
+    # the same hash and reuse its sentiment_score. Catches wire-story reprints
+    # and verbatim aggregations that defeat source_url dedup.
+    content_hash: Mapped[Optional[str]] = mapped_column(String(64))
 
     ticker_relevances: Mapped[list["NewsTickerRelevance"]] = relationship(
         back_populates="news", cascade="all, delete-orphan"

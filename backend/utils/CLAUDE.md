@@ -16,7 +16,7 @@ Unified in `utils/data_sources.py` with rate limiting and fallback chains:
 - **Earnings calendar**: FMP (primary, provides EPS estimates) → yfinance
 - **Insider trades**: FMP (primary) → Finnhub
 - **Prices/fundamentals/options**: yfinance (primary, no key needed)
-- **News**: Finnhub → FMP → NewsAPI
+- **News**: Finnhub → FMP → NewsAPI. Per-ticker Finnhub uses a **3-day rolling window** (`from=today-3,to=today`) so Monday's premarket scan catches Sat/Sun articles and Tuesday-after-holiday catches the holiday's news. URL + content-hash dedup in `scan_news` absorbs the overlap with prior runs at no cost.
 
 ## yfinance Data Quality
 

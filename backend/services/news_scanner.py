@@ -6,6 +6,7 @@ Fetches, classifies, scores, and persists market news for tracked tickers.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -21,6 +22,19 @@ from utils.finbert import score_batch
 from utils.scoring import assign_impact_level, classify_news_category, compute_ticker_relevance
 
 logger = logging.getLogger(__name__)
+
+
+def _content_hash(headline: str, summary: str | None) -> str:
+    """SHA-256 of normalized (headline + summary).
+
+    Normalization: lowercase, strip, collapse internal whitespace. Conservative
+    enough that two genuinely different articles won't collide; aggressive
+    enough that wire-story reprints with trailing whitespace differences match.
+    """
+    text = f"{headline or ''} {summary or ''}".strip().lower()
+    # Collapse runs of whitespace to a single space
+    text = " ".join(text.split())
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 class NewsScanner:
@@ -161,17 +175,67 @@ class NewsScanner:
                 await self._session.commit()
             return []
 
-        # Batch score sentiment with FinBERT -----------------------------------
-        texts = [
-            f"{item.get('headline', '')} {item.get('summary', '')}"
+        # Compute content hashes for every candidate, then look up any rows in
+        # market_news that already have a sentiment score for that hash. This
+        # short-circuits FinBERT when wire-story reprints or verbatim
+        # aggregations arrive under a different source_url (URL dedup misses
+        # those — same text, different URL).
+        candidate_hashes = [
+            _content_hash(item.get("headline", ""), item.get("summary", ""))
             for _, item in candidates
         ]
-        sentiment_scores = await loop.run_in_executor(None, score_batch, texts)
+        unique_hashes = list({h for h in candidate_hashes if h})
+        hash_to_cached_score: dict[str, float] = {}
+        if unique_hashes:
+            cache_result = await self._session.execute(
+                select(MarketNews.content_hash, MarketNews.sentiment_score).where(
+                    MarketNews.content_hash.in_(unique_hashes),
+                    MarketNews.sentiment_score.isnot(None),
+                )
+            )
+            # Multiple rows may share a hash; first one wins (all should be
+                # equal since the same text → same FinBERT score).
+            for h, s in cache_result.all():
+                if h and h not in hash_to_cached_score:
+                    hash_to_cached_score[h] = float(s)
+
+        # Partition: which candidates need FinBERT, which can reuse a score
+        need_score_indices: list[int] = []
+        need_score_texts: list[str] = []
+        for i, (_, item) in enumerate(candidates):
+            h = candidate_hashes[i]
+            if h in hash_to_cached_score:
+                continue
+            need_score_indices.append(i)
+            need_score_texts.append(
+                f"{item.get('headline', '')} {item.get('summary', '')}"
+            )
+
+        # Score only the uncached subset. Within this batch two candidates may
+        # share a hash (two outlets republishing the same wire story in the
+        # same run) — score once, apply to both via the hash_to_cached_score
+        # map we update as we go.
+        sentiment_scores: list[float | None] = [None] * len(candidates)
+        if need_score_texts:
+            fresh_scores = await loop.run_in_executor(None, score_batch, need_score_texts)
+            for idx, score in zip(need_score_indices, fresh_scores):
+                h = candidate_hashes[idx]
+                hash_to_cached_score[h] = float(score)
+
+        for i in range(len(candidates)):
+            sentiment_scores[i] = hash_to_cached_score[candidate_hashes[i]]
+
+        cache_hits = len(candidates) - len(need_score_texts)
+        if cache_hits:
+            logger.info(
+                "Sentiment cache: %d/%d candidates reused (FinBERT scored %d)",
+                cache_hits, len(candidates), len(need_score_texts),
+            )
 
         # Build ORM objects ----------------------------------------------------
         new_items: list[MarketNews] = []
 
-        for (searched_ticker, item), sentiment_score in zip(candidates, sentiment_scores):
+        for i, ((searched_ticker, item), sentiment_score) in enumerate(zip(candidates, sentiment_scores)):
             headline = item.get("headline", "")
             summary = item.get("summary", "")
             api_related = item.get("related_tickers", [])
@@ -191,6 +255,7 @@ class NewsScanner:
                 impact_level=impact_level,
                 published_at=published_at,
                 source_url=item.get("url") or None,
+                content_hash=candidate_hashes[i],
             )
 
             # Compute relevance for all watchlist tickers
