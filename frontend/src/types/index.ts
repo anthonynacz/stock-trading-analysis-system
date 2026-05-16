@@ -96,6 +96,7 @@ export interface Recommendation {
   prior_conviction_score: number | null;
   revision_number: number;
   revised_at: string | null;
+  revision_reason: string | null;
   suggested_options: SuggestedOption[];
 }
 

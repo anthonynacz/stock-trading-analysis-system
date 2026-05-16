@@ -673,13 +673,19 @@ async def get_recommendations(
     action: str | None = Query(None),
     min_conviction: float | None = Query(None, ge=0, le=100),
     target_date: date | None = Query(None, alias="date"),
+    sort: str = Query("conviction", pattern="^(conviction|revised_at)$"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Returns today's (or given-date) recommendations. Each row is also
     re-weighted by the caller's signal_group_weights — `weighted_conviction_score`
     and `weighted_action` reflect the personalization, while raw
-    `conviction_score` / `action` preserve the engine's neutral output."""
+    `conviction_score` / `action` preserve the engine's neutral output.
+
+    `sort=conviction` (default) orders by weighted conviction desc.
+    `sort=revised_at` orders by revision recency desc, conviction as tiebreaker;
+    the weighted re-sort is suppressed so recently-rewritten recs stay on top.
+    """
     from services.preferences import (
         ensure_preferences,
         get_signal_group_weights,
@@ -690,8 +696,14 @@ async def get_recommendations(
         select(Recommendation)
         .options(selectinload(Recommendation.suggested_options))
         .where(Recommendation.recommendation_date == effective_date)
-        .order_by(Recommendation.conviction_score.desc())
     )
+    if sort == "revised_at":
+        stmt = stmt.order_by(
+            Recommendation.revised_at.desc().nulls_last(),
+            Recommendation.conviction_score.desc(),
+        )
+    else:
+        stmt = stmt.order_by(Recommendation.conviction_score.desc())
     if action:
         stmt = stmt.where(Recommendation.action == action.upper())
     if min_conviction is not None:
@@ -707,11 +719,13 @@ async def get_recommendations(
     weights = get_signal_group_weights(pref)
     for resp in out:
         _apply_signal_weights_to_response(resp, weights)
-    # Re-sort by weighted conviction so UI's "top picks" reflect personalization
-    out.sort(
-        key=lambda r: float(r.weighted_conviction_score or r.conviction_score or 0),
-        reverse=True,
-    )
+    # Personalized weighted re-sort only applies to conviction-mode. In
+    # revised_at-mode the user wants recency, so leave SQL order intact.
+    if sort == "conviction":
+        out.sort(
+            key=lambda r: float(r.weighted_conviction_score or r.conviction_score or 0),
+            reverse=True,
+        )
     return out
 
 

@@ -11,6 +11,7 @@ import {
   getUniverse,
   getDiscoveryCandidates,
   getPositions,
+  type RecommendationSort,
 } from '../utils/api';
 import type {
   WatchlistItem,
@@ -66,6 +67,7 @@ export function useRecommendations(
   action?: string,
   minConviction?: number,
   date?: string,
+  sort?: RecommendationSort,
 ): HookResult<Recommendation[]> {
   const [data, setData] = useState<Recommendation[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -75,7 +77,7 @@ export function useRecommendations(
   const refetch = useCallback(async () => {
     try {
       setLoading(true);
-      const result = await getRecommendations(action, minConviction, date);
+      const result = await getRecommendations(action, minConviction, date, sort);
       setData(result);
       setError(null);
     } catch (e) {
@@ -85,7 +87,7 @@ export function useRecommendations(
     } finally {
       setLoading(false);
     }
-  }, [action, minConviction, date]);
+  }, [action, minConviction, date, sort]);
 
   useEffect(() => {
     refetch();

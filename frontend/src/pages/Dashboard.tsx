@@ -49,6 +49,13 @@ export default function Dashboard() {
   const [newsMode, setNewsMode] = useState<'general' | 'watchlist' | 'ticker'>('general');
   const [newsTicker, setNewsTicker] = useState('');
   const [newsIndustry, setNewsIndustry] = useState('');
+  const [recSort, setRecSort] = useState<'conviction' | 'revised_at'>(() => {
+    const stored = localStorage.getItem('vela.rec_sort');
+    return stored === 'revised_at' ? 'revised_at' : 'conviction';
+  });
+  useEffect(() => {
+    localStorage.setItem('vela.rec_sort', recSort);
+  }, [recSort]);
 
   // Lock body scroll while the TickerDetail mobile overlay is open. Desktop
   // (lg+) still keeps the panel in-grid; this is purely a no-op there.
@@ -65,7 +72,7 @@ export default function Dashboard() {
 
   const pipelineDates = usePipelineDates();
   const watchlist = useWatchlist(undefined, selectedDate);
-  const recommendations = useRecommendations(undefined, undefined, selectedDate);
+  const recommendations = useRecommendations(undefined, undefined, selectedDate, recSort);
   const watchlistChanges = useWatchlistChanges(selectedDate);
   const news = useNews({
     mode: newsMode,
@@ -284,7 +291,34 @@ export default function Dashboard() {
 
         {/* Recommendations */}
         <section>
-          <h2 className="text-xl font-bold text-text-primary mb-4">Recommendations</h2>
+          <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+            <h2 className="text-xl font-bold text-text-primary">Recommendations</h2>
+            <div className="inline-flex rounded-md border border-border overflow-hidden text-xs">
+              <button
+                type="button"
+                onClick={() => setRecSort('conviction')}
+                className={`px-3 py-1.5 transition-colors ${
+                  recSort === 'conviction'
+                    ? 'bg-border text-text-primary'
+                    : 'bg-card text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                Top conviction
+              </button>
+              <button
+                type="button"
+                onClick={() => setRecSort('revised_at')}
+                className={`px-3 py-1.5 transition-colors border-l border-border ${
+                  recSort === 'revised_at'
+                    ? 'bg-border text-text-primary'
+                    : 'bg-card text-text-secondary hover:text-text-primary'
+                }`}
+                title="Sort by most recently rescored (intraday news triggers)"
+              >
+                Recently revised
+              </button>
+            </div>
+          </div>
           {recommendations.loading ? (
             <SectionLoading />
           ) : recommendations.error ? (

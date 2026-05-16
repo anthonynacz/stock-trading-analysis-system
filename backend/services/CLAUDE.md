@@ -1,0 +1,91 @@
+# Services — Pipeline & Domain Logic
+
+The daily workflow runs as a phased pipeline orchestrated by APScheduler in `scheduler.py`. All times US Eastern (intent; container is UTC — see `backend/CLAUDE.md`).
+
+## Pipeline Phases
+
+0. **universe_discoverer.py** — Scans FMP market lists (most active, gainers, losers) and news-trending tickers to surface candidates for user approval into the universe. Runs at 05:00 EST before watchlist rotation. Candidates go to `discovery_candidates` table with `PENDING` status; user approves/dismisses via `/api/universe/candidates/{id}/approve|dismiss`.
+1. **watchlist_manager.py** — Scores stocks from `universe_stocks` DB table (not hardcoded config) across 5 sectors, applies liquidity filters (≥$5B cap, ≥2M vol, ≥1K options vol, ≥5 analysts), rotates watchlist (max 30 active, max 5 changes/day). Manual (`is_manual`), locked (`is_locked`), and **unusual options activity** entries are protected from rotation. Unusual options = today's call volume ≥3x the 20-day historical average (queried from `options_snapshots`); toxic tickers override this protection. Uses delete-before-insert for idempotent daily snapshots. Composite score includes `recommendation_conviction` (15% weight) — feeds the recommendation engine's output back into watchlist ranking so SELL/STRONG_SELL stocks are deprioritized. Toxic removal: tickers with 3+ consecutive SELL/STRONG_SELL recommendations are flagged for removal regardless of composite score (`TOXIC_CONVICTION_DAYS` in config).
+2. **analyst_tracker.py** — Detects rating changes since prior close, classifies as TIER_CHANGE/PT_CHANGE/INITIATION/REITERATION, scores by firm tier (T1=bulge bracket, T2=mid-tier, T3=boutique)
+3. **earnings_calendar.py** — Tracks earnings dates, manages catalyst windows (T-7 to T+10). Sanitizes yfinance garbage in `earnings_time` (float values → null) and `fiscal_quarter` (revenue estimates → null).
+4. **news_scanner.py** — Fetches/categorizes news into 7 categories (EARNINGS, ANALYST, MACRO, SECTOR, INSIDER, PRODUCT, GEOPOLITICAL), scores sentiment via **FinBERT** (ProsusAI/finbert) using batch inference. FinBERT returns continuous scores in [-1.0, 1.0] with financial domain understanding. Model loads once (singleton in `utils/finbert.py`) and persists in memory. Tracks per-ticker relevance via `news_ticker_relevance` junction table (many-to-many). Relevance scored by text matching: HEADLINE=1.0, SUMMARY=0.7, API_RELATED=0.5, SEARCHED=0.3. Duplicate articles (same URL) skip MarketNews creation but backfill relevance rows for newly-relevant tickers. **Per-ticker fetches run concurrently** via `asyncio.gather` bounded by `settings.NEWS_FETCH_CONCURRENCY` (default 10) — the general-market fetch is folded into the same gather so it overlaps with per-ticker work. Tune the env var down if upstream 429s appear, up if you've moved to a paid Finnhub/FMP tier.
+5. **options_analyzer.py** — Pulls chains via yfinance, persists `atm_iv` and computes IV rank via `utils/iv_history.compute_iv_rank_and_percentile` (historical rank over last ~year of snapshots when ≥20 data points, stabilized cross-sectional fallback otherwise — never raw chain min/max, which is unstable). Detects unusual activity (>1.5x avg volume). Includes **strike recommender** (`recommend_strikes` / `recommend_strikes_all`) with three risk profiles (conservative/moderate/aggressive) and budget-filtered contract selection.
+5a. **deep_options_analyzer.py** — Expert-level single-ticker options report. Consumes a DTE-spread chain (`DataSourceClient.get_options_chain(ticker, mode="spread")` returns up to 8 expirations bucketed 0-7/7-21/21-45/45-90/90-180/180+d). Computes: ATM greeks table with Rho/Vanna/Charm/Vomma, IV rank + percentile, vol term structure (contango/backwardation), 25-delta skew, expected moves, max pain per expiry, signed gamma exposure (GEX), pin magnets, P/C OI by expiry, liquidity rating. Outputs a strategy verdict (LONG_CALL / LONG_PUT / BULL_CALL_SPREAD / BEAR_PUT_SPREAD / BULL_PUT_SPREAD / BEAR_CALL_SPREAD / IRON_CONDOR / LONG_STRADDLE / NO_TRADE) selected by bias × IV bucket × earnings proximity, plus a `hidden_risks` list (IV_CRUSH, THETA_BURN, VEGA_EXPOSURE, PIN_RISK, LIQUIDITY, NEGATIVE_GEX, BACKWARDATION, PUT_SKEW, ASSIGNMENT_RISK). ATM IV falls back to median of valid near-ATM strikes when direct-ATM contract has stale weekend quotes.
+6. **recommendation_engine.py** — Stacks signals into conviction scores (-100 to +100), generates rationale text, selects optimal options contracts, classifies STRONG_BUY through STRONG_SELL. Each day's recommendation is stored independently (`uq_rec_date_ticker` constraint). `analyze_single(ticker)` runs the same pipeline but returns a data dict without persisting — used by the Research feature **and** the intraday news rescore path. `persist_revision(ticker, result, reason=, min_conviction_delta=)` writes that dict back to `recommendations`, bumping `revision_number` / `revised_at` / `revision_reason`; when `min_conviction_delta` is set, the write is skipped if action is unchanged and |Δconviction| is below it (used by intraday news to suppress cosmetic churn).
+7. **intraday_news.py** — Hourly news poll + targeted rescore. Runs 08:15–16:15 ET, Mon–Fri (9 ticks/day). Each tick: scans news for last ~75min (15min overlap absorbs upstream lag, `source_url` dedup makes it free) → runs `filter_material_news()` → for each affected ticker with a rec today, calls `engine.analyze_single()` + `persist_revision(reason=..., min_conviction_delta=5.0)`. Materiality (any of): `impact_level == HIGH`, OR `relevance ≥ 0.7 AND |sentiment| ≥ 0.4`, OR `category ∈ {EARNINGS, ANALYST, GEOPOLITICAL} AND |sentiment| ≥ 0.3` — the `|sentiment|` threshold is **symmetric** so negative shocks trigger rescores equally with positive surprises. Skipped if main pipeline is mid-run.
+
+## Signal Stacking (conviction scoring)
+
+Signals are stacked across eight categories. Classification thresholds: ≥60 STRONG_BUY, 30-59 BUY, -15 to 29 HOLD, -30 to -16 SELL, ≤-31 STRONG_SELL.
+
+**Analyst signals**: T1/T2/T3 upgrades (+15 to +40) / downgrades (-15 to -40), PT raises (+10/+15) / cuts (-10/-15). **Analyst Revision Cluster** (+10/+15 or -10/-15): ≥2 distinct T1/T2 firms acting bullish (or bearish) within the last 14 days — captures sustained positioning shifts rather than single-firm reactions.
+**Earnings signals**: Beat (+20), Beat+Raised (+30), Miss (-20), Miss+Lowered (-30), Active Catalyst Window (+5). Window spans **T-14 to T+10** (ACTIVE) — extended from T-7 to get ahead of IV expansion / institutional positioning typically seen 10-14 days pre-earnings.
+**Technical signals**: RSI oversold/overbought (±10/±15), price vs 50d SMA (±10), price vs 200d SMA (±5), 5d/20d momentum (±10), volume-confirmed moves (±10), short squeeze setup (+15), high short interest (-5).
+**Drawdown signals**: Sharp 1d drop >5% (-15), rapid 2d drawdown >7% (-20), rapid 3d drawdown >10% (-15), distribution/heavy selling volume (-10). These fire independently and stack.
+**Reversal signals**: Oversold Bounce Setup (+15/+20) and Strong Reversal Setup (+20/+25) fire only when drawdown is active AND RSI <30 AND price near support (200d SMA or 52w low). Selling exhaustion (low down-day volume) adds confidence.
+**52-week & value signals (context-gated)**: Near 52w high (+5), deep pullback (+10 normally, +5 if actively declining). Below consensus PT (+10 normally, +5 if actively declining). Gating prevents value traps during falling-knife scenarios.
+**Relative strength**: Stock vs SPY 5d momentum comparison. Outperforming (+10), underperforming (-10). SPY data fetched once per pipeline via `get_market_benchmark()`.
+**OHLC candlestick signals**: Gap-Down After Up Day (-12), Upper Wick Rejection (-8), Close Near Low (-5), Close Near High (+5). Derived from Open/High/Low in yfinance 2-month history. Silently skip when OHLC unavailable — all close-only signals unaffected.
+**Options signals**: Unusual call volume (+15) / put volume (-15) vs 20-day historical avg, put/call OI skew (±10), high IV rank (-10). **Smart Money Positioning** (+12): fires when 3-day trailing avg call volume ≥2x 20d baseline AND IV rank has risen >10pp over last ~5 days — institutional accumulation ahead of a catalyst.
+**Greek signals**: Computed from Black-Scholes (`utils/greeks.py`) using yfinance IV per contract. Heavy Theta Decay (-8 if ATM theta >3% premium/day, -5 if >2%). IV Crush Risk (-12 if earnings within 7 days AND vega >8% premium per 1% IV). Favorable Theta (+5 if theta <1%, near-term DTE ≤14, and score >30). Greeks replace the crude moneyness-based delta estimate with proper BS delta. Gamma, theta, vega are computed on-the-fly (not persisted — too ephemeral).
+**News signals**: FinBERT sentiment scaled by magnitude and article count (±5 to ±15), sector tailwind/headwind (±10). **When geopolitical signals fire, news sentiment points are halved** to reduce double-counting (same articles drive both signals).
+**Geopolitical signals**: Keyword-detected events (MILITARY_CONFLICT, TRADE_WAR, SANCTIONS, DIPLOMATIC_BREAKTHROUGH, OIL_DISRUPTION, REGULATION) from MACRO/SECTOR/GEOPOLITICAL news. Sector-specific impact mapping — same event has different points per EdgeFlow sector (e.g., military conflict: Energy +18, Semis -12). Points scaled by FinBERT sentiment magnitude (0.6x–1.0x of base), clamped ±20 per signal. One signal per event type (deduplicated). **Total geopolitical contribution capped at ±20** to prevent correlated events (e.g., MILITARY_CONFLICT + OIL_DISRUPTION) from stacking beyond a single event's impact. Detection in `utils/geopolitical.py`.
+**Other**: Insider buying (+5) / selling (-5), stock already moved (-5). **Insider Buy Cluster** (+8/+12) supersedes the generic "Insider Buying" signal when ≥2 distinct insiders bought in the last 30 days AND buy count > sell count — convergent accumulation is a stronger pre-position trigger than raw dollar value.
+
+## Entry strategy (PRE_POSITION) triggers
+
+`_determine_entry_strategy()` marks a rec as `PRE_POSITION` when EITHER:
+- Catalyst window is ACTIVE (T-14 to T-0) AND conviction ≥ 30, OR
+- A leading pre-position signal is present AND conviction ≥ 25. Leading signals: **Analyst Revision Cluster**, **Smart Money Positioning**, **Insider Buy Cluster**. This lets PRE_POSITION fire weeks before an earnings catalyst when institutional positioning clusters. Rationale text names the leading signal instead of "catalyst window active" when it triggers this branch.
+
+Technical indicators (RSI-14, 5d/20d momentum, volume ratio, drawdown metrics, consecutive down days, down-day volume ratio, OHLC candlestick metrics) are computed from yfinance 2-month price history via `DataSourceClient.get_technical_indicators()`. Moving averages (50d, 200d), short interest, and 52-week range come from yfinance `.info` via `get_stock_data()`. SPY benchmark comes from `get_market_benchmark()`.
+
+## Strike Recommender
+
+Three risk profiles control delta ranges, DTE windows, and contract filtering:
+- **Conservative**: delta 0.50-0.80, DTE 7-30 — ITM/ATM, high probability
+- **Moderate**: delta 0.30-0.55, DTE 14-50 — ATM to slightly OTM, balanced
+- **Aggressive**: delta 0.10-0.35, DTE 21-75 — OTM, maximum leverage
+
+Filters: OI ≥ 10, bid-ask spread ≤ 1.50, premium * 100 ≤ budget. Delta computed via Black-Scholes using yfinance IV per contract (`utils/greeks.py`). Gamma, theta, vega also returned per contract. Contracts with heavy theta (>3% premium/day) are scored lower. Explanation text includes greek warnings (HIGH THETA, HIGH VEGA). The `/strikes/all` endpoint fetches the options chain once and returns all three profiles in a single response.
+
+## Industry (Sector-level) Recommendations
+
+Separate analyzer in `services/industry_analyzer.py` produces one BUY/HOLD/SELL recommendation per industry as its own unit — not an aggregation of ticker convictions. Runs as final pipeline phase `industries` after ticker-level `recommendations`. UI: card grid on Dashboard + full detail view at `/industries` with 30d conviction sparkline.
+
+- **Signals** (7): Breadth (% bullish members, % above 50d SMA), Cap-Weighted Conviction (large caps matter more), Sector ETF technicals (RSI-14 + 20d momentum of SOXX/XLF/XLE/XLV/XLK/ITA/XLU/XLC per `config.SECTOR_ETFS`), Aggregated News Sentiment (FinBERT avg across sector-relevant articles), Geopolitical Impact (via `utils/geopolitical.py` — sector map extended to 8 sectors), Catalyst Density (sector earnings in next 14d).
+- **Scoring**: composite clamped [-100, +100]. Same classification bands as ticker recs: ≥60 STRONG_BUY, ≥30 BUY, ≥-15 HOLD, ≥-30 SELL, ≤-31 STRONG_SELL.
+- **Table**: `industry_recommendations` with `uq_ind_rec_date_industry`. Re-runs same-day replace via delete-before-insert. Stores raw observations + JSON signals array + top-3 representative tickers.
+- **ETF RSI/momentum**: fetched via yfinance `history(period="3mo")`; RSI computed with Wilder's method inline.
+- **Geopolitical sector impact map**: `_SECTOR_IMPACT` in `utils/geopolitical.py` now covers all 8 sectors across 6 event types. Net geopolitical contribution is capped at ±25 per industry per run to prevent correlated events from dominating.
+
+## Charts (dynamic visualization builder)
+
+Dataset-first BI in `services/chart_builder.py`, UI at `/charts`. Three curated datasets — picked over universal pivot to avoid nonsensical column combinations on a heterogeneous schema:
+
+- **ticker_time_series**: one ticker, multi-metric line chart over date range. Metrics span recommendations (price, conviction, signal_count, target/stop), options snapshots (iv_rank, iv_percentile, put_call_ratio, atm_iv, volumes), and aggregated news (avg sentiment, article count). Optional SMA smoothing window.
+- **signal_breakdown**: bar chart of recommendation signal occurrences. Aggregations: count / sum / avg / min / max over signal points. Filters: tickers, actions, date range. Top-N limit.
+- **industry_comparison**: industry-level metric across industries. Two views — `trend` (line per industry over date range) or `snapshot` (bar at latest date). Metrics from `industry_recommendations` columns (conviction, breadth %, ETF RSI/momentum, news sentiment, geopolitical, catalysts).
+
+Each dataset has its own handler that builds parametrized SQL (no string concat). Standardized response: `{dataset, x_label, y_label, chart_type, series: [{name, data: [{x, y}], ...}], meta}`. Frontend uses Recharts (`LineChart` / `BarChart`) with `unifyRows` to merge multi-series across a shared X axis. Form state syncs to URL params (`useSearchParams`) so charts are shareable / bookmarkable.
+
+To add a new dataset: define a handler method in `ChartBuilder.query()` dispatch and add the dataset entry to `/api/charts/datasets`. Frontend form picks up new metric keys automatically; new dataset shapes need a new form component in `ChartsPage.tsx`.
+
+## Multi-bagger Scanner (positional, separate from tactical engine)
+
+Separate universe + separate signal stack in `services/multibagger_scanner.py`, UI at `/scanner`. Targets 3–12 month horizon "shooting stars" (SNDK/NVDA/SMCI-type multi-baggers) rather than tactical 2-week setups. Do **not** mix this into the recommendation engine — the horizons are incompatible.
+
+- **Universe**: `multibagger_universe` table, ~95 growth candidates seeded from `services/multibagger_seed.py` grouped by theme (AI_MEMORY, AI_COMPUTE, AI_APPS, POWER_NUCLEAR, ROBOTICS_SPACE, AUTONOMY_MOBILITY, FINTECH_CRYPTO, BIOTECH_GLP1, QUANTUM, SAAS_GROWTH, RECENT_IPO_SPINOFF). Extendable via `POST /api/scanner/universe` or the page UI.
+- **Signals** (6): Revenue Growth Accelerating (YoY Q-latest vs Q-prior in pp, up to +25), Margin Expansion (gross margin YoY Δ in pp, up to +20), Top-Decile 12m Momentum (percentile rank of 12m return vs scanner universe, up to +25), Analysts Chasing (price ≥ avg PT, up to +15), Recent IPO/Spinoff (stock age ≤24mo via `firstTradeDateEpochUtc`, up to +15), Revision Cluster (90d count of bullish actions from `analyst_ratings`, up to +20).
+- **Scoring / tier**: composite clamped [0, 120]. Tier: HOT (≥4 signals fired AND composite ≥60), WATCH (≥3 signals OR composite ≥40), MONITOR (≥2 signals), IGNORE otherwise.
+- **Data sources** (added in `utils/data_sources.py`): `get_income_statement_quarterly` (FMP quarterly income statements, 5 periods), `get_long_horizon_returns` (yfinance 1y history → 3m/6m/12m returns), `get_stock_age_months` (yfinance `firstTradeDateEpochUtc`).
+- **Run cadence**: Manual via `POST /api/scanner/run` (background task; ~3–5 min for 95 tickers on cold cache). Not yet wired to APScheduler — eventually runs weekly. Each run replaces same-date rows via delete-before-insert; `uq_mbs_date_ticker` prevents duplicates.
+- **Numeric column widths**: Ratios (`rev_growth_*`, `pt_chase_ratio`, margins) use `Numeric(10–12, 4)` to accommodate small-denominator blowups (a company going from $1M → $500M revenue produces a 500.0 YoY ratio that overflows narrower types).
+
+## Sector Universe
+
+8 sectors with ~10-17 stocks each (~100 total universe, stored in `universe_stocks` table). Seeded from `config.SECTORS` on first init; expandable via Universe page (manual add or discovery approval). Active watchlist is max 60 (12 per sector). Sectors: AI/Semiconductors, Fintech/Payments, Energy/Commodities, Healthcare/Biotech, Consumer/Cloud/Enterprise, Industrials/Defense, Power/Utilities/Nuclear, Communications/Media.
+
+## Maintaining this file
+
+This file is the source of truth for pipeline phases, signal scoring, and scanner logic. Update it whenever you change signal point values, add/remove signals, alter phase ordering, tweak scoring thresholds, add datasets, or revise scanner tiers — these are the things that drift fastest and are hardest to recover from code. Full rules in the root `CLAUDE.md` § Maintaining these files. Surface what you changed in your reply.

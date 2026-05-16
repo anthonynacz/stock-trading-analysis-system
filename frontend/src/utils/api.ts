@@ -79,14 +79,17 @@ const OPT_NUMERIC = [
   'strike', 'premium_estimate', 'delta_estimate', 'breakeven_price',
 ];
 
+export type RecommendationSort = 'conviction' | 'revised_at';
+
 export const getRecommendations = (
   action?: string,
   minConviction?: number,
   date?: string,
+  sort?: RecommendationSort,
 ) =>
   api
     .get<Recommendation[]>('/recommendations', {
-      params: { action, min_conviction: minConviction, date },
+      params: { action, min_conviction: minConviction, date, sort },
     })
     .then((r) =>
       r.data.map((rec) => ({

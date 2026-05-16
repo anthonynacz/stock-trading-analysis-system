@@ -22,6 +22,13 @@ function formatDate(iso: string): string {
   });
 }
 
+function formatRelative(iso: string): string {
+  const diffMin = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  return `${Math.round(diffMin / 60)}h ago`;
+}
+
 export default function StatusBar({
   status,
   onComplete,
@@ -31,6 +38,7 @@ export default function StatusBar({
 }: StatusBarProps) {
   const [downloading, setDownloading] = useState(false);
   const lastRefresh = status?.last_refresh?.recommendations;
+  const lastIntradayNews = status?.last_refresh?.intraday_news;
   const todayStr = new Date().toISOString().slice(0, 10);
   const isToday = selectedDate === todayStr;
 
@@ -137,6 +145,16 @@ export default function StatusBar({
         {lastRefresh && (
           <span className="hidden sm:inline text-xs text-text-secondary">
             Updated {new Date(lastRefresh).toLocaleTimeString()}
+          </span>
+        )}
+
+        {/* Intraday news poll — shows freshness of the hourly news scan */}
+        {lastIntradayNews && (
+          <span
+            className="hidden md:inline text-[11px] text-text-secondary"
+            title={`Last intraday news scan: ${new Date(lastIntradayNews).toLocaleString()}`}
+          >
+            News {formatRelative(lastIntradayNews)}
           </span>
         )}
 

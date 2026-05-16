@@ -238,6 +238,136 @@ class RecommendationEngine:
         }
 
     # ------------------------------------------------------------------
+    # Persist a result dict as a Recommendation revision
+    # ------------------------------------------------------------------
+
+    async def persist_revision(
+        self,
+        ticker: str,
+        result: dict[str, Any],
+        *,
+        reason: str | None = None,
+        min_conviction_delta: float | None = None,
+    ) -> Recommendation | None:
+        """Upsert today's Recommendation for *ticker* from an ``analyze_single``
+        result dict.
+
+        Captures prior action/conviction, bumps ``revision_number``, sets
+        ``revised_at = now()`` and records *reason* in ``revision_reason``.
+
+        When *min_conviction_delta* is provided, the write is skipped if the
+        new action is unchanged AND |Δconviction| < min_conviction_delta.
+        Returns None in that case. Used by the intraday news rescore path to
+        avoid churning ``revised_at`` for cosmetic refreshes.
+        """
+        today = date.today()
+        new_action = result["action"]
+        new_conviction = float(result["conviction_score"] or 0)
+
+        existing_q = await self._session.execute(
+            select(Recommendation).where(
+                Recommendation.recommendation_date == today,
+                Recommendation.ticker == ticker,
+            )
+        )
+        existing = existing_q.scalars().first()
+
+        if existing is not None:
+            old_conviction = float(existing.conviction_score or 0)
+            if (
+                min_conviction_delta is not None
+                and existing.action == new_action
+                and abs(new_conviction - old_conviction) < min_conviction_delta
+            ):
+                logger.info(
+                    "Skipping persist_revision for %s: action unchanged (%s) "
+                    "and |Δconviction|=%.2f < %.2f",
+                    ticker, new_action,
+                    abs(new_conviction - old_conviction), min_conviction_delta,
+                )
+                return None
+
+            prior_action = existing.action
+            prior_conviction = existing.conviction_score
+            revision_number = (existing.revision_number or 0) + 1
+            revised_at = datetime.now(tz=timezone.utc)
+        else:
+            prior_action = None
+            prior_conviction = None
+            revision_number = 0
+            revised_at = None
+
+        await self._session.execute(
+            delete(SuggestedOption).where(
+                SuggestedOption.recommendation_id.in_(
+                    select(Recommendation.id).where(
+                        Recommendation.recommendation_date == today,
+                        Recommendation.ticker == ticker,
+                    )
+                )
+            )
+        )
+        await self._session.execute(
+            delete(Recommendation).where(
+                Recommendation.recommendation_date == today,
+                Recommendation.ticker == ticker,
+            )
+        )
+
+        current_price = result.get("current_price")
+        target_price = result.get("target_price")
+        stop_loss_price = result.get("stop_loss_price")
+
+        rec = Recommendation(
+            recommendation_date=today,
+            ticker=ticker,
+            action=new_action,
+            conviction_score=Decimal(str(round(new_conviction, 2))),
+            signal_count=result.get("signal_count") or 0,
+            signals=result.get("signals"),
+            rationale=result.get("rationale") or "",
+            catalyst_type=result.get("catalyst_type"),
+            entry_strategy=result.get("entry_strategy"),
+            risk_level=result.get("risk_level"),
+            current_price=(
+                Decimal(str(current_price)) if current_price is not None else None
+            ),
+            target_price=(
+                Decimal(str(target_price)) if target_price is not None else None
+            ),
+            stop_loss_price=(
+                Decimal(str(stop_loss_price))
+                if stop_loss_price is not None
+                else None
+            ),
+            prior_action=prior_action,
+            prior_conviction_score=prior_conviction,
+            revision_number=revision_number,
+            revised_at=revised_at,
+            revision_reason=reason,
+        )
+        self._session.add(rec)
+        await self._session.flush()
+
+        for contract in result.get("suggested_contracts") or []:
+            opt = SuggestedOption(
+                recommendation_id=rec.id,
+                contract_type=contract["contract_type"],
+                strike=contract["strike"],
+                expiry=contract["expiry"],
+                premium_estimate=contract.get("premium_estimate"),
+                delta_estimate=contract.get("delta_estimate"),
+                strategy=contract.get("strategy"),
+                strategy_rationale=contract.get("strategy_rationale"),
+                days_to_expiry=contract.get("days_to_expiry"),
+                breakeven_price=contract.get("breakeven_price"),
+            )
+            self._session.add(opt)
+
+        await self._session.commit()
+        return rec
+
+    # ------------------------------------------------------------------
     # Single-ticker pipeline
     # ------------------------------------------------------------------
 

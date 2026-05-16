@@ -61,6 +61,18 @@ function RiskBadge({ level }: { level: string }) {
   );
 }
 
+function formatRelativeTime(iso: string): string {
+  const now = Date.now();
+  const ts = new Date(iso).getTime();
+  if (Number.isNaN(ts)) return '';
+  const diffMin = Math.max(0, Math.round((now - ts) / 60000));
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffH = Math.round(diffMin / 60);
+  if (diffH < 24) return `${diffH}h ago`;
+  return `${Math.round(diffH / 24)}d ago`;
+}
+
 function RevisionBadge({ rec }: { rec: Recommendation }) {
   if (!rec.revision_number || rec.revision_number === 0) return null;
   const priorConv = rec.prior_conviction_score;
@@ -69,6 +81,9 @@ function RevisionBadge({ rec }: { rec: Recommendation }) {
     priorConv != null && currConv != null ? currConv - priorConv : null;
   const actionFlipped =
     rec.prior_action != null && rec.prior_action !== rec.action;
+  const isRecent = rec.revised_at
+    ? Date.now() - new Date(rec.revised_at).getTime() < 4 * 60 * 60 * 1000
+    : false;
 
   return (
     <span className="relative group inline-flex">
@@ -80,6 +95,11 @@ function RevisionBadge({ rec }: { rec: Recommendation }) {
           <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </svg>
         REV{rec.revision_number > 1 ? ` ${rec.revision_number}` : ''}
+        {isRecent && rec.revised_at && (
+          <span className="font-normal normal-case opacity-80">
+            · {formatRelativeTime(rec.revised_at)}
+          </span>
+        )}
       </span>
       {/* Hover tooltip with diff */}
       <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 hidden group-hover:block z-50 pointer-events-none">
@@ -109,6 +129,11 @@ function RevisionBadge({ rec }: { rec: Recommendation }) {
           {rec.revised_at && (
             <div className="text-text-secondary">
               {new Date(rec.revised_at).toLocaleTimeString()}
+            </div>
+          )}
+          {rec.revision_reason && (
+            <div className="text-text-secondary max-w-xs whitespace-normal pt-1 border-t border-accent-500/30 mt-1">
+              {rec.revision_reason}
             </div>
           )}
         </div>
@@ -249,6 +274,11 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
                 <span className="text-text-secondary ml-auto">
                   {new Date(rec.revised_at).toLocaleTimeString()}
                 </span>
+              )}
+              {rec.revision_reason && (
+                <div className="w-full text-text-secondary italic leading-snug">
+                  {rec.revision_reason}
+                </div>
               )}
             </div>
           )}

@@ -180,6 +180,7 @@ class RecommendationResponse(BaseModel):
     prior_conviction_score: Optional[Decimal] = None
     revision_number: int = 0
     revised_at: Optional[datetime] = None
+    revision_reason: Optional[str] = None
     suggested_options: list[SuggestedOptionResponse] = []
 
 

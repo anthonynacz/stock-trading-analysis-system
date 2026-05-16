@@ -41,6 +41,7 @@ last_refresh: dict[str, datetime | None] = {
     "options": None,
     "recommendations": None,
     "industries": None,
+    "intraday_news": None,
 }
 
 EASTERN = pytz.timezone("US/Eastern")
@@ -468,6 +469,16 @@ def start_scheduler() -> None:
     scheduler.add_job(
         run_pnl_snapshot, "cron",
         hour=16, minute=45, day_of_week=weekdays, id="pnl_snapshot",
+    )
+
+    # Intraday news polling — hourly 08:15–16:15 ET, Mon–Fri (9 ticks/day).
+    # Fetches new headlines, filters to material (impact/sentiment/category),
+    # and reruns analyze_single() + persist_revision() only for tickers
+    # whose news moved the calculus. Skips when the main pipeline is running.
+    from services.intraday_news import run_intraday_news_scan
+    scheduler.add_job(
+        run_intraday_news_scan, "cron",
+        hour="8-16", minute=15, day_of_week=weekdays, id="intraday_news_scan",
     )
 
     scheduler.start()

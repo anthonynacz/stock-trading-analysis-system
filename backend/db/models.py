@@ -535,6 +535,7 @@ class Recommendation(Base):
     prior_conviction_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     revision_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     revised_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    revision_reason: Mapped[Optional[str]] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
