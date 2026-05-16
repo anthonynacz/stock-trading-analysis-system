@@ -29,6 +29,82 @@ function formatRelative(iso: string): string {
   return `${Math.round(diffMin / 60)}h ago`;
 }
 
+function SystemHealthPill({ status }: { status: SystemStatus | null }) {
+  if (!status) return null;
+
+  const lastRefresh = status.last_refresh?.recommendations;
+  const lastNews = status.last_refresh?.intraday_news;
+  const db = status.db_connected;
+  const sched = status.scheduler_running;
+
+  // Aggregate: green if both core systems up, amber if partial, red if both down.
+  const healthy = db && sched;
+  const degraded = (db && !sched) || (!db && sched);
+  const tone = healthy
+    ? { dot: 'bg-green-500', text: 'text-green-400', label: 'OK' }
+    : degraded
+      ? { dot: 'bg-amber-500', text: 'text-amber-400', label: 'DEGRADED' }
+      : { dot: 'bg-red-500', text: 'text-red-400', label: 'DOWN' };
+
+  // Tooltip rows: aligned label / value pairs. Each row degrades gracefully
+  // when the underlying value is null (haven't run yet).
+  const rows: { label: string; value: string; ok: boolean }[] = [
+    {
+      label: 'Updated',
+      value: lastRefresh ? new Date(lastRefresh).toLocaleTimeString() : '—',
+      ok: lastRefresh != null,
+    },
+    {
+      label: 'News scan',
+      value: lastNews ? formatRelative(lastNews) : '—',
+      ok: lastNews != null,
+    },
+    {
+      label: 'Database',
+      value: db ? 'connected' : 'disconnected',
+      ok: db,
+    },
+    {
+      label: 'Scheduler',
+      value: sched ? 'running' : 'stopped',
+      ok: sched,
+    },
+  ];
+
+  return (
+    <span className="relative group inline-flex items-center">
+      <span
+        className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-border/40 hover:bg-border/70 cursor-default transition-colors`}
+        aria-label={`System status: ${tone.label}`}
+      >
+        <span className={`w-2 h-2 rounded-full ${tone.dot}`} />
+        <span className={`hidden sm:inline text-[10px] font-bold tracking-wider ${tone.text}`}>
+          {tone.label}
+        </span>
+      </span>
+
+      {/* Hover tooltip — same pattern used elsewhere (RecommendationCard) */}
+      <div className="absolute top-full right-0 mt-2 hidden group-hover:block z-50 pointer-events-none">
+        <div className="bg-gray-900 border border-border text-text-primary text-[11px] px-3 py-2 rounded shadow-lg min-w-[200px]">
+          <div className="text-text-secondary uppercase tracking-wider text-[9px] mb-1.5">
+            System status
+          </div>
+          <div className="space-y-1">
+            {rows.map((r) => (
+              <div key={r.label} className="flex items-center justify-between gap-3">
+                <span className="text-text-secondary">{r.label}</span>
+                <span className={`font-mono ${r.ok ? 'text-text-primary' : 'text-amber-400'}`}>
+                  {r.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </span>
+  );
+}
+
 export default function StatusBar({
   status,
   onComplete,
@@ -37,8 +113,6 @@ export default function StatusBar({
   onDateChange,
 }: StatusBarProps) {
   const [downloading, setDownloading] = useState(false);
-  const lastRefresh = status?.last_refresh?.recommendations;
-  const lastIntradayNews = status?.last_refresh?.intraday_news;
   const todayStr = new Date().toISOString().slice(0, 10);
   const isToday = selectedDate === todayStr;
 
@@ -76,12 +150,10 @@ export default function StatusBar({
   const goToday = () => onDateChange(todayStr);
 
   return (
-    <div className="sticky top-0 z-50 bg-card border-b border-border px-3 py-2 sm:px-4 sm:py-3 flex items-center gap-3 sm:gap-4">
-      {/* Title — redundant with the Vela logo in AppNav on phones */}
-      <h1 className="hidden sm:block text-lg font-bold text-text-primary">EdgeFlow</h1>
-
-      {/* Date stepper */}
-      <div className="flex items-center gap-1 sm:gap-2 mx-auto">
+    <div className="sticky top-0 z-50 bg-card border-b border-border px-3 py-2 sm:px-4 sm:py-2.5 flex items-center gap-3 sm:gap-4">
+      {/* LEFT: Date stepper — anchors left, was previously centered with EdgeFlow */}
+      {/*       chrome competing for the left edge. */}
+      <div className="flex items-center gap-1 sm:gap-2">
         <button
           onClick={goOlder}
           disabled={!canGoOlder}
@@ -94,7 +166,7 @@ export default function StatusBar({
           </svg>
         </button>
 
-        <span className={`text-xs sm:text-sm select-none ${isToday ? 'text-text-secondary' : 'text-amber-400'}`}>
+        <span className={`text-xs sm:text-sm select-none ${isToday ? 'text-text-primary font-medium' : 'text-amber-400'}`}>
           {formatDate(selectedDate)}
           {!isToday && (
             <span className="ml-1.5 text-[10px] uppercase tracking-wider opacity-70">
@@ -125,9 +197,11 @@ export default function StatusBar({
         )}
       </div>
 
-      {/* Status indicators */}
+      {/* Spacer pushes the action zone to the right edge */}
+      <div className="flex-1" />
+
+      {/* RIGHT: Action zone — Export, Run, then a single grouped health pill. */}
       <div className="flex items-center gap-2 sm:gap-3">
-        {/* Export PDF — icon-only on phones */}
         <button
           onClick={handleExportPDF}
           disabled={downloading}
@@ -141,45 +215,9 @@ export default function StatusBar({
           <span className="hidden sm:inline">{downloading ? 'Generating...' : 'Export PDF'}</span>
         </button>
 
-        {/* Last refresh — hidden on phones; same info reachable via /api/status */}
-        {lastRefresh && (
-          <span className="hidden sm:inline text-xs text-text-secondary">
-            Updated {new Date(lastRefresh).toLocaleTimeString()}
-          </span>
-        )}
-
-        {/* Intraday news poll — shows freshness of the hourly news scan */}
-        {lastIntradayNews && (
-          <span
-            className="hidden md:inline text-[11px] text-text-secondary"
-            title={`Last intraday news scan: ${new Date(lastIntradayNews).toLocaleString()}`}
-          >
-            News {formatRelative(lastIntradayNews)}
-          </span>
-        )}
-
-        {/* DB indicator — hidden on phones */}
-        {status && (
-          <div className="hidden sm:flex items-center gap-1" title={status.db_connected ? 'DB connected' : 'DB disconnected'}>
-            <div
-              className={`w-2 h-2 rounded-full ${status.db_connected ? 'bg-green-500' : 'bg-red-500'}`}
-            />
-            <span className="text-[10px] text-text-secondary">DB</span>
-          </div>
-        )}
-
-        {/* Scheduler indicator — hidden on phones */}
-        {status && (
-          <div className="hidden sm:flex items-center gap-1" title={status.scheduler_running ? 'Scheduler running' : 'Scheduler stopped'}>
-            <div
-              className={`w-2 h-2 rounded-full ${status.scheduler_running ? 'bg-green-500' : 'bg-red-500'}`}
-            />
-            <span className="text-[10px] text-text-secondary">Sched</span>
-          </div>
-        )}
-
-        {/* Pipeline runner */}
         {isToday && <PipelineRunner onComplete={onComplete} />}
+
+        <SystemHealthPill status={status} />
       </div>
     </div>
   );
