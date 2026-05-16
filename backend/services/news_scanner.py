@@ -199,22 +199,24 @@ class NewsScanner:
                 if h and h not in hash_to_cached_score:
                     hash_to_cached_score[h] = float(s)
 
-        # Partition: which candidates need FinBERT, which can reuse a score
+        # Partition: which candidates need FinBERT, which can reuse a score.
+        # Within this batch two candidates may share a hash (two outlets
+        # republishing the same wire story in the same run) — score once and
+        # use queued_hashes to skip the duplicate so FinBERT gets each unique
+        # text exactly once.
+        queued_hashes: set[str] = set()
         need_score_indices: list[int] = []
         need_score_texts: list[str] = []
         for i, (_, item) in enumerate(candidates):
             h = candidate_hashes[i]
-            if h in hash_to_cached_score:
+            if h in hash_to_cached_score or h in queued_hashes:
                 continue
+            queued_hashes.add(h)
             need_score_indices.append(i)
             need_score_texts.append(
                 f"{item.get('headline', '')} {item.get('summary', '')}"
             )
 
-        # Score only the uncached subset. Within this batch two candidates may
-        # share a hash (two outlets republishing the same wire story in the
-        # same run) — score once, apply to both via the hash_to_cached_score
-        # map we update as we go.
         sentiment_scores: list[float | None] = [None] * len(candidates)
         if need_score_texts:
             fresh_scores = await loop.run_in_executor(None, score_batch, need_score_texts)
