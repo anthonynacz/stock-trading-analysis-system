@@ -288,7 +288,6 @@ async def run_intraday_news_scan() -> dict:
             except Exception:
                 logger.exception("Intraday rescore failed for %s", ticker)
 
-        last_refresh["intraday_news"] = datetime.now(tz=timezone.utc)
         logger.info(
             "Intraday news scan complete: %d new news, %d triggers, "
             "%d rescored, %d persisted, %d skipped(no-rec), %d skipped(delta)",
@@ -309,6 +308,12 @@ async def run_intraday_news_scan() -> dict:
     finally:
         data_client.close()
         await session.close()
+        # Bump the freshness indicator on every successful run, not just when
+        # rows were persisted. The point of last_refresh.intraday_news is
+        # "scan ran successfully" — an empty-result scan is still a success
+        # (the upstream APIs answered, we just didn't find new material).
+        if error is None:
+            last_refresh["intraday_news"] = datetime.now(tz=timezone.utc)
         await record_run_finish(
             run_id,
             status=STATUS_FAILED if error else STATUS_SUCCESS,
