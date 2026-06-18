@@ -38,6 +38,64 @@ class WatchlistChangesResponse(BaseModel):
     exiters: list[WatchlistChangeItem] = []
 
 
+# ── Watchlist rotate-out ─────────────────────────────────────────────────────
+
+class RotationGate(BaseModel):
+    blocked: bool = False
+    reasons: list[str] = []
+
+
+class RotationCandidate(BaseModel):
+    ticker: str
+    company_name: Optional[str] = None
+    sector_name: Optional[str] = None
+    composite_score: float
+    reasons: list[str] = []
+    cross_sector: bool = False
+
+
+class RotationPreviewItem(BaseModel):
+    ticker: str
+    gate: RotationGate
+    candidate: Optional[RotationCandidate] = None
+
+
+class RotationPreviewRequest(BaseModel):
+    tickers: list[str]
+
+
+class RotationPreviewResponse(BaseModel):
+    items: list[RotationPreviewItem] = []
+
+
+class RotationCommitPair(BaseModel):
+    remove: str
+    add: str
+
+
+class RotationCommitRequest(BaseModel):
+    pairs: list[RotationCommitPair]
+
+
+class RotationBlockedItem(BaseModel):
+    ticker: str
+    reasons: list[str] = []
+
+
+class RotationCommitResponse(BaseModel):
+    status: str  # committed / already_running / no_op
+    committed: list[RotationCommitPair] = []
+    blocked: list[RotationBlockedItem] = []
+    analysis_started: bool = False
+
+
+class RotationStatusResponse(BaseModel):
+    running: bool = False
+    started_at: Optional[str] = None
+    tickers: dict[str, str] = {}  # ticker -> pending|analyzing|done|error
+    errors: dict[str, str] = {}
+
+
 class PipelineDatesResponse(BaseModel):
     dates: list[date] = []
 

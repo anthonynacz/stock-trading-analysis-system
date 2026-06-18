@@ -8,6 +8,10 @@ interface WatchlistGridProps {
   onToggleLock?: (ticker: string) => void;
   selectedTicker?: string | null;
   recommendations?: Map<string, Recommendation>;
+  /** Tickers checked for rotate-out (shared with the recommendations list). */
+  selected?: Set<string>;
+  /** Toggle a ticker's rotate-out selection. Enables the per-card checkbox. */
+  onToggleSelect?: (ticker: string) => void;
 }
 
 /** Numeric rank for sorting: higher = more bullish (sorted first / left). */
@@ -51,7 +55,7 @@ function StatusBadge({ status }: { status: WatchlistItem['status'] }) {
   return null;
 }
 
-export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggleLock, selectedTicker, recommendations }: WatchlistGridProps) {
+export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggleLock, selectedTicker, recommendations, selected, onToggleSelect }: WatchlistGridProps) {
   if (items.length === 0) {
     return (
       <p className="text-text-secondary text-sm text-center py-8">
@@ -94,12 +98,39 @@ export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggle
               const isSelected = selectedTicker === item.ticker;
               const rec = recommendations?.get(item.ticker);
               const indicatorColor = rec ? (ACTION_COLORS[rec.action] ?? '#21262d') : '#21262d';
+              const isChecked = selected?.has(item.ticker) ?? false;
+              const canSelect =
+                !!onToggleSelect && item.status !== 'REMOVED' && !item.is_locked;
+              const ringClass = isChecked
+                ? 'border-amber-500 ring-2 ring-amber-500/50'
+                : isSelected
+                  ? 'border-new-entrant ring-1 ring-new-entrant/40'
+                  : item.rotation_protected
+                    ? 'border-cyan-700/60 ring-1 ring-cyan-500/20'
+                    : statusClasses(item.status);
               return (
                 <button
                   key={item.id}
                   onClick={() => onTickerClick?.(item.ticker)}
-                  className={`bg-card border ${isSelected ? 'border-new-entrant ring-1 ring-new-entrant/40' : item.rotation_protected && !isSelected ? 'border-cyan-700/60 ring-1 ring-cyan-500/20' : statusClasses(item.status)} rounded-lg p-3 text-left hover:bg-border/40 transition-colors relative group`}
+                  className={`bg-card border ${ringClass} rounded-lg p-3 text-left hover:bg-border/40 transition-colors relative group`}
                 >
+                  {/* Rotate-out selection checkbox */}
+                  {canSelect && (
+                    <span
+                      role="checkbox"
+                      aria-checked={isChecked}
+                      title={isChecked ? 'Unselect for rotation' : 'Select to rotate out'}
+                      onClick={(e) => { e.stopPropagation(); onToggleSelect?.(item.ticker); }}
+                      className={`absolute top-1 left-1 z-10 flex items-center justify-center w-4 h-4 rounded border text-[10px] leading-none transition-opacity ${
+                        isChecked
+                          ? 'bg-amber-500 border-amber-500 text-black'
+                          : 'bg-card/80 border-text-secondary/50 text-transparent opacity-60 md:opacity-0 md:group-hover:opacity-100'
+                      }`}
+                    >
+                      ✓
+                    </span>
+                  )}
+
                   {/* Conviction indicator bar */}
                   <div
                     className="absolute top-0 left-2.5 w-8 h-[3px] rounded-br rounded-bl"

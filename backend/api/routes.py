@@ -7,7 +7,7 @@ from io import BytesIO
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import Date, Float, cast, select, func
+from sqlalchemy import Date, Float, cast, delete, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -63,6 +63,16 @@ from utils.schemas import (
     PositionUpdateRequest,
     RecommendationResponse,
     ResearchResultResponse,
+    RotationBlockedItem,
+    RotationCandidate,
+    RotationCommitPair,
+    RotationCommitRequest,
+    RotationCommitResponse,
+    RotationGate,
+    RotationPreviewItem,
+    RotationPreviewRequest,
+    RotationPreviewResponse,
+    RotationStatusResponse,
     ChartQueryRequest,
     ChartResponse,
     IndustryDetailResponse,
@@ -519,6 +529,365 @@ async def toggle_lock(
     wl.is_locked = not wl.is_locked
     await db.commit()
     return {"ticker": ticker.upper(), "is_locked": wl.is_locked}
+
+
+# ── Watchlist rotate-out (manual swap + on-demand recommendation) ───────────
+
+# Module-level state for the background recommendation-generation worker.
+# Mutated in place (never reassigned) so polling reads stay coherent — same
+# pattern as `_scanner_run_state`. ``tickers``: ticker -> pending|analyzing|
+# done|error; ``errors``: ticker -> message.
+_rotation_run_state: dict = {
+    "running": False,
+    "started_at": None,
+    "tickers": {},
+    "errors": {},
+}
+
+
+async def _run_rotation_analysis_background(added_tickers: list[str]):
+    """Generate a fresh recommendation for each rotated-in ticker.
+
+    Mirrors the /research refresh chain (ratings → earnings → news → options →
+    analyze_single) but persists to the shared ``recommendations`` table via
+    ``persist_revision`` instead of ``research_results``. One DataSourceClient
+    is reused; each ticker gets its own session so a single failure doesn't
+    abort the batch.
+    """
+    from db.connection import async_session
+    from services.analyst_tracker import AnalystTracker
+    from services.earnings_calendar import EarningsCalendarService
+    from services.news_scanner import NewsScanner
+    from services.options_analyzer import OptionsAnalyzer
+    from services.recommendation_engine import RecommendationEngine
+
+    _rotation_run_state["running"] = True
+    _rotation_run_state["started_at"] = datetime.utcnow().isoformat()
+    client = DataSourceClient()
+    try:
+        for ticker in added_tickers:
+            _rotation_run_state["tickers"][ticker] = "analyzing"
+            try:
+                async with async_session() as session:
+                    tracker = AnalystTracker(session, client)
+                    earnings_svc = EarningsCalendarService(session, client)
+                    scanner = NewsScanner(session, client)
+                    analyzer = OptionsAnalyzer(session, client)
+
+                    # Company name for news relevance scoring (best-effort).
+                    cn_res = await session.execute(
+                        select(UniverseStock.company_name).where(
+                            UniverseStock.ticker == ticker
+                        )
+                    )
+                    company_name = cn_res.scalar_one_or_none()
+
+                    # Refresh per-ticker data — each step is non-fatal so the
+                    # recommendation can still be generated from existing data.
+                    try:
+                        await tracker.scan_ratings([ticker])
+                    except Exception:
+                        logger.exception("Rotation: ratings refresh failed for %s", ticker)
+                    try:
+                        await earnings_svc.refresh_calendar([ticker])
+                    except Exception:
+                        logger.exception("Rotation: earnings refresh failed for %s", ticker)
+                    try:
+                        cmap = {ticker: company_name} if company_name else {}
+                        await scanner.scan_news([ticker], cmap)
+                    except Exception:
+                        logger.exception("Rotation: news refresh failed for %s", ticker)
+                    try:
+                        await analyzer.analyze_ticker(ticker)
+                    except Exception:
+                        logger.exception("Rotation: options refresh failed for %s", ticker)
+
+                    await session.commit()
+
+                    engine = RecommendationEngine(
+                        session, client, tracker, earnings_svc, scanner, analyzer,
+                    )
+                    result = await engine.analyze_single(ticker)
+                    # persist_revision commits its own session internally.
+                    await engine.persist_revision(
+                        ticker, result, reason="watchlist_rotation"
+                    )
+                _rotation_run_state["tickers"][ticker] = "done"
+            except Exception as e:
+                logger.exception("Rotation analysis failed for %s", ticker)
+                _rotation_run_state["tickers"][ticker] = "error"
+                _rotation_run_state["errors"][ticker] = str(e)
+    finally:
+        client.close()
+        _rotation_run_state["running"] = False
+
+
+@router.post("/watchlist/rotate-out/preview", response_model=RotationPreviewResponse)
+async def rotate_out_preview(
+    body: RotationPreviewRequest,
+    user: User = Depends(get_current_user),
+):
+    """Preview a manual rotate-out.
+
+    For each selected ticker: evaluate the 'strong imminent potential' gate
+    (hard block) and propose the strongest next-in-line replacement candidate.
+    Read-only — runs in its own session that is never committed, so the
+    ``score_candidates`` call's lazy ``company_name`` backfill is discarded
+    on session close.
+    """
+    from db.connection import async_session
+    from services.earnings_calendar import EarningsCalendarService
+    from services.watchlist_manager import WatchlistManager
+
+    requested = list(dict.fromkeys(
+        t.strip().upper() for t in body.tickers if t and t.strip()
+    ))
+    if not requested:
+        return RotationPreviewResponse(items=[])
+
+    client = DataSourceClient()
+    try:
+        async with async_session() as session:
+            manager = WatchlistManager(session, client)
+            earnings_svc = EarningsCalendarService(session, client)
+
+            active = {w.ticker for w in await manager.get_active_watchlist()}
+            valid = [t for t in requested if t in active]
+
+            unusual = await manager._get_unusual_options_tickers()
+            proposals = await manager.propose_replacements(valid) if valid else {}
+
+            items: list[RotationPreviewItem] = []
+            for t in requested:
+                if t not in active:
+                    items.append(RotationPreviewItem(
+                        ticker=t,
+                        gate=RotationGate(
+                            blocked=True, reasons=["Not on the active watchlist"]
+                        ),
+                        candidate=None,
+                    ))
+                    continue
+                gate = await manager.evaluate_rotation_gate(
+                    t, unusual_tickers=unusual, earnings_service=earnings_svc,
+                )
+                cand = (proposals.get(t) or [None])[0]
+                items.append(RotationPreviewItem(
+                    ticker=t,
+                    gate=RotationGate(blocked=gate["blocked"], reasons=gate["reasons"]),
+                    candidate=RotationCandidate(**cand) if cand else None,
+                ))
+            return RotationPreviewResponse(items=items)
+    finally:
+        client.close()
+
+
+@router.post("/watchlist/rotate-out/commit", response_model=RotationCommitResponse)
+async def rotate_out_commit(
+    body: RotationCommitRequest,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+):
+    """Commit a manual rotate-out.
+
+    Re-validates the imminent-potential gate server-side (hard block — never
+    trust the client), then for each allowed pair: removes the outgoing ticker
+    (auto or manual — its own logic, unlike ``DELETE /watchlist/{ticker}``
+    which only removes manual entries), adds the candidate as a grace-locked
+    entry (``is_locked=True`` so the next daily rotation won't evict it),
+    records scoped daily snapshots, and kicks off background recommendation
+    generation for the new tickers.
+    """
+    import asyncio
+
+    from db.connection import async_session
+    from services.earnings_calendar import EarningsCalendarService
+    from services.universe_discoverer import YFINANCE_SECTOR_MAP
+    from services.watchlist_manager import WatchlistManager
+
+    if _rotation_run_state["running"]:
+        return RotationCommitResponse(status="already_running")
+
+    # Normalize + de-dup: first add wins per remove, and an add is used once.
+    pairs: list[tuple[str, str]] = []
+    seen_remove: set[str] = set()
+    seen_add: set[str] = set()
+    for p in body.pairs:
+        rem = (p.remove or "").strip().upper()
+        add = (p.add or "").strip().upper()
+        if not rem or not add or add == rem:
+            continue
+        if rem in seen_remove or add in seen_add:
+            continue
+        seen_remove.add(rem)
+        seen_add.add(add)
+        pairs.append((rem, add))
+
+    if not pairs:
+        return RotationCommitResponse(status="no_op")
+
+    # Claim the rotation lock atomically — there is no `await` between the
+    # `running` guard above and this assignment, so two concurrent commits
+    # cannot both pass. Released in `finally` unless we hand off to the worker
+    # (which clears it when it finishes).
+    _rotation_run_state["running"] = True
+    analysis_started = False
+
+    today = date.today()
+    client = DataSourceClient()
+    committed: list[RotationCommitPair] = []
+    blocked: list[RotationBlockedItem] = []
+    try:
+        async with async_session() as session:
+            manager = WatchlistManager(session, client)
+            earnings_svc = EarningsCalendarService(session, client)
+            unusual = await manager._get_unusual_options_tickers()
+
+            active_rows = await manager.get_active_watchlist()
+            active_map = {w.ticker: w for w in active_rows}
+            active_set = set(active_map)
+
+            for rem, add in pairs:
+                if rem not in active_set:
+                    blocked.append(RotationBlockedItem(
+                        ticker=rem, reasons=["Not on the active watchlist"]
+                    ))
+                    continue
+                if add in active_set:
+                    blocked.append(RotationBlockedItem(
+                        ticker=rem, reasons=[f"{add} is already on the watchlist"]
+                    ))
+                    continue
+
+                gate = await manager.evaluate_rotation_gate(
+                    rem, unusual_tickers=unusual, earnings_service=earnings_svc,
+                )
+                if gate["blocked"]:
+                    blocked.append(RotationBlockedItem(
+                        ticker=rem, reasons=gate["reasons"]
+                    ))
+                    continue
+
+                # ---- removal (handles auto entries too) ----
+                rem_row = active_map[rem]
+                rem_row.is_active = False
+                rem_row.removed_date = today
+                rem_row.exit_reason = "rotated out (manual)"
+                rem_sector = rem_row.sector.name if rem_row.sector else None
+
+                # ---- resolve company + sector for the incoming ticker ----
+                us_res = await session.execute(
+                    select(UniverseStock)
+                    .options(selectinload(UniverseStock.sector))
+                    .where(UniverseStock.ticker == add)
+                )
+                us = us_res.scalar_one_or_none()
+                company_name = us.company_name if us else None
+                sector_id = us.sector_id if us else None
+                add_sector = us.sector.name if us and us.sector else None
+
+                # Fallback to yfinance if the ticker isn't in the universe.
+                if sector_id is None or not company_name:
+                    loop = asyncio.get_event_loop()
+                    stock_data = await loop.run_in_executor(
+                        None, client.get_stock_data, add
+                    )
+                    if stock_data:
+                        company_name = company_name or stock_data.get("company_name") or add
+                        if sector_id is None:
+                            yf_sector = stock_data.get("sector") or ""
+                            yf_industry = (stock_data.get("industry") or "").lower()
+                            ef_sector = YFINANCE_SECTOR_MAP.get(yf_sector)
+                            if "semiconductor" in yf_industry or "chip" in yf_industry:
+                                ef_sector = "AI/Semiconductors"
+                            if ef_sector:
+                                srow = await session.execute(
+                                    select(Sector).where(Sector.name == ef_sector)
+                                )
+                                sobj = srow.scalar_one_or_none()
+                                if sobj:
+                                    sector_id = sobj.id
+                                    add_sector = sobj.name
+
+                # ---- addition (resurrect-or-insert, grace-locked) ----
+                entry_reason = "rotated in (manual; grace-locked)"
+                dup_res = await session.execute(
+                    select(Watchlist).where(
+                        Watchlist.ticker == add,
+                        Watchlist.added_date == today,
+                    )
+                )
+                dup = dup_res.scalar_one_or_none()
+                if dup:
+                    dup.is_active = True
+                    dup.removed_date = None
+                    dup.is_locked = True
+                    dup.entry_reason = entry_reason
+                    if sector_id is not None:
+                        dup.sector_id = sector_id
+                    if company_name:
+                        dup.company_name = company_name
+                else:
+                    session.add(Watchlist(
+                        ticker=add,
+                        company_name=company_name,
+                        sector_id=sector_id,
+                        added_date=today,
+                        is_active=True,
+                        is_locked=True,
+                        entry_reason=entry_reason,
+                    ))
+
+                # ---- daily snapshot (scoped delete — never clobber pipeline rows) ----
+                await session.execute(
+                    delete(WatchlistDailySnapshot).where(
+                        WatchlistDailySnapshot.snapshot_date == today,
+                        WatchlistDailySnapshot.ticker.in_([rem, add]),
+                    )
+                )
+                session.add(WatchlistDailySnapshot(
+                    snapshot_date=today, ticker=rem, status="REMOVED",
+                    sector=rem_sector,
+                ))
+                session.add(WatchlistDailySnapshot(
+                    snapshot_date=today, ticker=add, status="NEW_ENTRANT",
+                    sector=add_sector,
+                ))
+
+                committed.append(RotationCommitPair(remove=rem, add=add))
+
+            await session.commit()
+
+        if committed:
+            added = [c.add for c in committed]
+            # Seed per-ticker state so the status poller sees the new run.
+            _rotation_run_state["tickers"] = {t: "pending" for t in added}
+            _rotation_run_state["errors"] = {}
+            background_tasks.add_task(_run_rotation_analysis_background, added)
+            analysis_started = True
+    finally:
+        client.close()
+        # If we never handed off to the worker, release the lock we claimed.
+        if not analysis_started:
+            _rotation_run_state["running"] = False
+
+    return RotationCommitResponse(
+        status="committed" if committed else "no_op",
+        committed=committed,
+        blocked=blocked,
+        analysis_started=analysis_started,
+    )
+
+
+@router.get("/watchlist/rotate-out/status", response_model=RotationStatusResponse)
+async def rotate_out_status():
+    """Poll the rotate-out background analysis state."""
+    return RotationStatusResponse(
+        running=_rotation_run_state["running"],
+        started_at=_rotation_run_state["started_at"],
+        tickers=dict(_rotation_run_state["tickers"]),
+        errors=dict(_rotation_run_state["errors"]),
+    )
 
 
 # ── Watchlist history ───────────────────────────────────────────────────────

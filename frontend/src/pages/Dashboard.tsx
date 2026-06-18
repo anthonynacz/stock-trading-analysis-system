@@ -15,6 +15,8 @@ import WatchlistChanges from '../components/WatchlistChanges';
 import WatchlistGrid from '../components/WatchlistGrid';
 import TickerDetail from '../components/TickerDetail';
 import RecommendationCard from '../components/RecommendationCard';
+import SelectionActionBar from '../components/SelectionActionBar';
+import RotationPreviewModal from '../components/RotationPreviewModal';
 import NewsTimeline from '../components/NewsTimeline';
 import NewsModeSelector from '../components/NewsModeSelector';
 import CatalystCalendar from '../components/CatalystCalendar';
@@ -43,6 +45,10 @@ export default function Dashboard() {
     new Date().toISOString().slice(0, 10),
   );
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  // Rotate-out selection — a set of tickers checked across the watchlist grid
+  // and the recommendations list (keyed by ticker so the two views stay in sync).
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [rotateModalTickers, setRotateModalTickers] = useState<string[] | null>(null);
   const [addTickerInput, setAddTickerInput] = useState('');
   const [addingTicker, setAddingTicker] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
@@ -120,6 +126,28 @@ export default function Dashboard() {
     }
     return map;
   }, [recommendations.data]);
+
+  // Tickers eligible for rotate-out selection: on the active watchlist, not
+  // removed, and not locked. Drives the checkbox on both the watchlist grid
+  // and the recommendation cards.
+  const selectableTickers = useMemo(() => {
+    const s = new Set<string>();
+    for (const w of watchlist.data ?? []) {
+      if (w.status !== 'REMOVED' && !w.is_locked) s.add(w.ticker);
+    }
+    return s;
+  }, [watchlist.data]);
+
+  const toggleSelect = useCallback((ticker: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(ticker)) next.delete(ticker);
+      else next.add(ticker);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelected(new Set()), []);
 
   const handlePipelineComplete = useCallback(() => {
     watchlist.refetch();
@@ -262,6 +290,8 @@ export default function Dashboard() {
                 onToggleLock={handleToggleLock}
                 selectedTicker={selectedTicker}
                 recommendations={recMap}
+                selected={selected}
+                onToggleSelect={toggleSelect}
               />
             )}
           </section>
@@ -326,7 +356,13 @@ export default function Dashboard() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
               {(recommendations.data ?? []).map((rec) => (
-                <RecommendationCard key={rec.id} recommendation={rec} />
+                <RecommendationCard
+                  key={rec.id}
+                  recommendation={rec}
+                  selectable={selectableTickers.has(rec.ticker)}
+                  selected={selected.has(rec.ticker)}
+                  onToggleSelect={toggleSelect}
+                />
               ))}
               {recommendations.data?.length === 0 && (
                 <p className="text-text-secondary text-sm text-center py-6 col-span-2">
@@ -387,6 +423,26 @@ export default function Dashboard() {
           </section>
         </div>
       </div>
+
+      {/* Rotate-out selection bar + preview/confirm modal */}
+      <SelectionActionBar
+        count={selected.size}
+        onRotateOut={() => setRotateModalTickers([...selected])}
+        onClear={clearSelection}
+      />
+      {rotateModalTickers && (
+        <RotationPreviewModal
+          tickers={rotateModalTickers}
+          onClose={() => setRotateModalTickers(null)}
+          onCommitted={() => {
+            setRotateModalTickers(null);
+            clearSelection();
+            watchlist.refetch();
+            recommendations.refetch();
+            watchlistChanges.refetch();
+          }}
+        />
+      )}
     </div>
   );
 }

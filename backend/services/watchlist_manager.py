@@ -25,6 +25,7 @@ from config import (
     TOXIC_CONVICTION_DAYS,
 )
 from db.models import OptionsSnapshot, Recommendation, Sector, UniverseStock, Watchlist, WatchlistDailySnapshot
+from services.earnings_calendar import EarningsCalendarService
 from utils.data_sources import DataSourceClient
 from utils.scoring import calculate_composite_score
 
@@ -48,7 +49,6 @@ class WatchlistManager:
         Reads the active universe from ``universe_stocks``, falling back
         to ``config.SECTORS`` if the table is empty (first run before seed).
         """
-        loop = asyncio.get_event_loop()
         scored: list[dict] = []
 
         # Load universe from DB
@@ -78,79 +78,128 @@ class WatchlistManager:
         us_map = {us.ticker: us for us in universe} if universe else {}
 
         for ticker, sector_name in ticker_sector_pairs:
-            try:
-                stock = await loop.run_in_executor(
-                    None, self._data_client.get_stock_data, ticker
-                )
-
-                # Lazy-fill company_name on UniverseStock if missing
-                us_row = us_map.get(ticker)
-                if us_row and not us_row.company_name and stock.get("company_name"):
-                    us_row.company_name = stock["company_name"]
-
-                # Fetch earnings calendar for catalyst proximity
-                earnings_list = await loop.run_in_executor(
-                    None, self._data_client.get_earnings_calendar, [ticker]
-                )
-
-                # Fetch analyst ratings for momentum / rating-change detection
-                ratings = await loop.run_in_executor(
-                    None, self._data_client.get_analyst_ratings, ticker
-                )
-
-                # --- Sub-scores (0-100) --------------------------------
-
-                catalyst_proximity = self._score_catalyst_proximity(earnings_list)
-                analyst_momentum = self._score_analyst_momentum(stock, ratings)
-                options_liquidity = self._score_options_liquidity(stock)
-                sector_momentum = self._score_sector_momentum(stock)
-                volatility_profile = self._score_volatility_profile(stock)
-                institutional_flow = 50.0  # hard to get freely
-                price_vs_consensus_pt = self._score_price_vs_pt(stock)
-
-                # Map conviction (-100..+100) → sub-score (0..100)
-                # No prior recommendation → neutral (50)
-                raw_conviction = conviction_map.get(ticker)
-                if raw_conviction is not None:
-                    recommendation_conviction = (raw_conviction + 100.0) / 2.0
-                else:
-                    recommendation_conviction = 50.0
-
-                sub_scores: dict[str, float] = {
-                    "catalyst_proximity": catalyst_proximity,
-                    "analyst_momentum": analyst_momentum,
-                    "recommendation_conviction": recommendation_conviction,
-                    "options_liquidity": options_liquidity,
-                    "sector_momentum": sector_momentum,
-                    "volatility_profile": volatility_profile,
-                    "institutional_flow": institutional_flow,
-                    "price_vs_consensus_pt": price_vs_consensus_pt,
-                }
-
-                composite = calculate_composite_score(sub_scores)
-
-                scored.append(
-                    {
-                        "ticker": ticker,
-                        "sector_name": sector_name,
-                        "company_name": stock.get("company_name"),
-                        "market_cap": stock.get("market_cap"),
-                        "avg_volume": stock.get("avg_volume"),
-                        "price": stock.get("price"),
-                        "beta": stock.get("beta"),
-                        "analyst_count": stock.get("analyst_count"),
-                        "avg_analyst_target": stock.get("avg_analyst_target"),
-                        "composite_score": composite,
-                        "has_catalyst_14d": catalyst_proximity >= 70,
-                        "has_recent_rating_change": self._has_recent_rating_change(ratings),
-                        **sub_scores,
-                    }
-                )
-
-            except Exception:
-                logger.exception("Failed to score ticker %s — skipping", ticker)
+            row = await self._score_one(ticker, sector_name, conviction_map, us_map)
+            if row is not None:
+                scored.append(row)
 
         return scored
+
+    async def score_candidates(self) -> list[dict]:
+        """Score only universe stocks NOT currently on the active watchlist.
+
+        Used by the manual rotate-out preview to pick the next-in-line
+        replacement. Scoring just the (typically small) non-watchlist set —
+        concurrently, bounded by a semaphore — keeps the preview interactive
+        instead of re-scoring the entire universe like ``score_universe`` does
+        for the daily batch rotation.
+        """
+        us_result = await self._session.execute(
+            select(UniverseStock)
+            .where(UniverseStock.is_active.is_(True))
+            .options(selectinload(UniverseStock.sector))
+        )
+        universe = list(us_result.scalars().all())
+        if not universe:
+            return []
+
+        active = {w.ticker for w in await self.get_active_watchlist()}
+        conviction_map = await self._get_latest_convictions()
+        us_map = {us.ticker: us for us in universe}
+        pairs = [
+            (us.ticker, us.sector.name)
+            for us in universe
+            if us.ticker not in active and us.sector is not None
+        ]
+
+        # Bound concurrency — DataSourceClient is already used concurrently by
+        # the news scanner, so parallel get_stock_data calls are safe.
+        sem = asyncio.Semaphore(8)
+
+        async def _worker(t: str, s: str):
+            async with sem:
+                return await self._score_one(t, s, conviction_map, us_map)
+
+        results = await asyncio.gather(*(_worker(t, s) for t, s in pairs))
+        return [r for r in results if r is not None]
+
+    async def _score_one(
+        self,
+        ticker: str,
+        sector_name: str,
+        conviction_map: dict[str, float],
+        us_map: dict,
+    ) -> dict | None:
+        """Score a single universe ticker. Returns the scored dict or None on error."""
+        loop = asyncio.get_event_loop()
+        try:
+            stock = await loop.run_in_executor(
+                None, self._data_client.get_stock_data, ticker
+            )
+
+            # Lazy-fill company_name on UniverseStock if missing
+            us_row = us_map.get(ticker)
+            if us_row and not us_row.company_name and stock.get("company_name"):
+                us_row.company_name = stock["company_name"]
+
+            # Fetch earnings calendar for catalyst proximity
+            earnings_list = await loop.run_in_executor(
+                None, self._data_client.get_earnings_calendar, [ticker]
+            )
+
+            # Fetch analyst ratings for momentum / rating-change detection
+            ratings = await loop.run_in_executor(
+                None, self._data_client.get_analyst_ratings, ticker
+            )
+
+            # --- Sub-scores (0-100) --------------------------------
+
+            catalyst_proximity = self._score_catalyst_proximity(earnings_list)
+            analyst_momentum = self._score_analyst_momentum(stock, ratings)
+            options_liquidity = self._score_options_liquidity(stock)
+            sector_momentum = self._score_sector_momentum(stock)
+            volatility_profile = self._score_volatility_profile(stock)
+            institutional_flow = 50.0  # hard to get freely
+            price_vs_consensus_pt = self._score_price_vs_pt(stock)
+
+            # Map conviction (-100..+100) → sub-score (0..100)
+            # No prior recommendation → neutral (50)
+            raw_conviction = conviction_map.get(ticker)
+            if raw_conviction is not None:
+                recommendation_conviction = (raw_conviction + 100.0) / 2.0
+            else:
+                recommendation_conviction = 50.0
+
+            sub_scores: dict[str, float] = {
+                "catalyst_proximity": catalyst_proximity,
+                "analyst_momentum": analyst_momentum,
+                "recommendation_conviction": recommendation_conviction,
+                "options_liquidity": options_liquidity,
+                "sector_momentum": sector_momentum,
+                "volatility_profile": volatility_profile,
+                "institutional_flow": institutional_flow,
+                "price_vs_consensus_pt": price_vs_consensus_pt,
+            }
+
+            composite = calculate_composite_score(sub_scores)
+
+            return {
+                "ticker": ticker,
+                "sector_name": sector_name,
+                "company_name": stock.get("company_name"),
+                "market_cap": stock.get("market_cap"),
+                "avg_volume": stock.get("avg_volume"),
+                "price": stock.get("price"),
+                "beta": stock.get("beta"),
+                "analyst_count": stock.get("analyst_count"),
+                "avg_analyst_target": stock.get("avg_analyst_target"),
+                "composite_score": composite,
+                "has_catalyst_14d": catalyst_proximity >= 70,
+                "has_recent_rating_change": self._has_recent_rating_change(ratings),
+                **sub_scores,
+            }
+        except Exception:
+            logger.exception("Failed to score ticker %s — skipping", ticker)
+            return None
 
     # ------------------------------------------------------------------
     # Sub-score helpers
@@ -393,6 +442,170 @@ class WatchlistManager:
         ]
 
         return additions, removals, existing
+
+    # ------------------------------------------------------------------
+    # Manual rotate-out: replacement proposal + imminent-potential gate
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_candidate(cand: dict, *, cross_sector: bool) -> dict:
+        """Shape a scored-universe entry into a replacement-candidate dict."""
+        reasons: list[str] = []
+        if cand.get("has_catalyst_14d"):
+            reasons.append("catalyst within 14 days")
+        if cand.get("has_recent_rating_change"):
+            reasons.append("recent rating change")
+        reasons.append(f"composite_score={cand['composite_score']:.1f}")
+        return {
+            "ticker": cand["ticker"],
+            "company_name": cand.get("company_name"),
+            "sector_name": cand.get("sector_name"),
+            "composite_score": round(float(cand["composite_score"]), 2),
+            "reasons": reasons,
+            "cross_sector": cross_sector,
+        }
+
+    async def propose_replacements(
+        self, remove_tickers: list[str], n_per: int = 1
+    ) -> dict[str, list[dict]]:
+        """Propose the strongest next-in-line candidate(s) per removed ticker.
+
+        For each ticker being rotated out, picks the highest-composite-score
+        universe candidate NOT already on the active watchlist, preferring a
+        stock in the SAME sector as the removed ticker (keeps the
+        sector-balanced watchlist intact). Falls back to the globally highest
+        candidate (flagged ``cross_sector``) when the sector is exhausted.
+
+        Candidates are de-duplicated across removals so two simultaneous
+        removals never resolve to the same replacement.
+
+        Returns ``{remove_ticker: [candidate_dict, ...]}`` — an empty list
+        when no eligible candidate remains.
+        """
+        # Score only non-watchlist stocks (fast) rather than the whole universe.
+        scored = await self.score_candidates()
+        filtered = await self.apply_filters(scored)
+
+        active_rows = await self.get_active_watchlist()
+        active_tickers = {w.ticker for w in active_rows}
+        sector_of: dict[str, str | None] = {
+            w.ticker: (w.sector.name if w.sector else None) for w in active_rows
+        }
+
+        # Candidates not already active, best-first, grouped by sector.
+        eligible = [c for c in filtered if c["ticker"] not in active_tickers]
+        eligible.sort(key=lambda x: x["composite_score"], reverse=True)
+        by_sector: dict[str | None, list[dict]] = {}
+        for c in eligible:
+            by_sector.setdefault(c["sector_name"], []).append(c)
+
+        chosen: set[str] = set()
+        proposals: dict[str, list[dict]] = {}
+
+        for ticker in remove_tickers:
+            picks: list[dict] = []
+            sector_name = sector_of.get(ticker)
+
+            # Same-sector candidates first.
+            for cand in by_sector.get(sector_name, []):
+                if len(picks) >= n_per:
+                    break
+                if cand["ticker"] in chosen:
+                    continue
+                picks.append(self._build_candidate(cand, cross_sector=False))
+                chosen.add(cand["ticker"])
+
+            # Global fallback when the sector is exhausted.
+            if len(picks) < n_per:
+                for cand in eligible:
+                    if len(picks) >= n_per:
+                        break
+                    if cand["ticker"] in chosen:
+                        continue
+                    picks.append(self._build_candidate(cand, cross_sector=True))
+                    chosen.add(cand["ticker"])
+
+            proposals[ticker] = picks
+
+        return proposals
+
+    async def evaluate_rotation_gate(
+        self,
+        ticker: str,
+        *,
+        unusual_tickers: set[str] | None = None,
+        earnings_service: EarningsCalendarService | None = None,
+    ) -> dict:
+        """Evaluate whether *ticker* has 'strong imminent potential'.
+
+        Hard-blocks rotation when ANY composite condition holds:
+          1. latest recommendation ``entry_strategy == PRE_POSITION``
+          2. a leading positioning signal fired (Smart Money Positioning /
+             Analyst Revision Cluster / Insider Buy Cluster, points > 0)
+          3. an active earnings catalyst window (T-14..T-0)
+          4. unusual options activity (today's call vol >= 3x 20d avg)
+          5. bullish high conviction (BUY/STRONG_BUY with conviction >= 40)
+
+        Returns ``{ticker, blocked, reasons}``. ``unusual_tickers`` and
+        ``earnings_service`` may be supplied by a batch caller to avoid
+        recomputing them per ticker.
+        """
+        reasons: list[str] = []
+
+        rec_result = await self._session.execute(
+            select(Recommendation)
+            .where(Recommendation.ticker == ticker)
+            .order_by(Recommendation.recommendation_date.desc())
+            .limit(1)
+        )
+        rec = rec_result.scalar_one_or_none()
+
+        if rec is not None:
+            if (rec.entry_strategy or "").strip() == "PRE_POSITION":
+                reasons.append("active PRE_POSITION entry strategy")
+
+            # Leading positioning signals — import locally to avoid any
+            # import-order coupling with the recommendation engine module.
+            from services.recommendation_engine import LEADING_PRE_POSITION_SIGNALS
+
+            signals = rec.signals if isinstance(rec.signals, list) else []
+            leading = [
+                s.get("signal")
+                for s in signals
+                if isinstance(s, dict)
+                and s.get("signal") in LEADING_PRE_POSITION_SIGNALS
+                and (s.get("points") or 0) > 0
+            ]
+            if leading:
+                reasons.append(f"leading signal: {', '.join(leading)}")
+
+            conviction = (
+                float(rec.conviction_score)
+                if rec.conviction_score is not None
+                else 0.0
+            )
+            if rec.action in ("BUY", "STRONG_BUY") and conviction >= 40:
+                reasons.append(
+                    f"bullish high conviction ({rec.action} @ {conviction:.0f})"
+                )
+
+        # Active earnings catalyst window.
+        if earnings_service is None:
+            earnings_service = EarningsCalendarService(self._session, self._data_client)
+        try:
+            window = await earnings_service.get_catalyst_window(ticker)
+            if window and window.get("window_status") == "ACTIVE":
+                reasons.append("active earnings catalyst window")
+        except Exception:
+            logger.exception("Gate: catalyst window lookup failed for %s", ticker)
+
+        # Unusual options activity.
+        if unusual_tickers is None:
+            unusual_tickers = await self._get_unusual_options_tickers()
+        if ticker in unusual_tickers:
+            reasons.append("unusual options activity")
+
+        return {"ticker": ticker, "blocked": len(reasons) > 0, "reasons": reasons}
 
     async def _get_open_recommendation_tickers(self) -> set[str]:
         """Return tickers with a recent (last 7 days) recommendation."""

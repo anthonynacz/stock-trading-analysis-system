@@ -12,6 +12,9 @@ GET  /api/watchlist/changes            # Entrants/exiters for a date; ?date=
 POST /api/watchlist                    # Add manual ticker { "ticker": "AAPL" }
 DELETE /api/watchlist/{ticker}         # Remove manual ticker
 PUT  /api/watchlist/{ticker}/lock      # Toggle lock (protected from rotation)
+POST /api/watchlist/rotate-out/preview # Preview manual rotate-out { tickers: [] } → per-ticker { gate{blocked,reasons}, candidate|null }. Read-only; scores universe for next-in-line. Gate = "strong imminent potential" (PRE_POSITION / leading signal / active catalyst / unusual options / bullish high conviction)
+POST /api/watchlist/rotate-out/commit  # Commit swap { pairs:[{remove,add}] }. Re-validates gate server-side (hard block → blocked[]); removes outgoing (auto OR manual — unlike DELETE which only removes is_manual), adds candidate grace-locked (is_locked=true), then spawns background rec generation. → { status, committed, blocked, analysis_started }
+GET  /api/watchlist/rotate-out/status  # Poll background analysis state → { running, started_at, tickers{ticker:pending|analyzing|done|error}, errors }
 GET  /api/pipeline-dates               # Distinct snapshot dates (last 90 days)
 GET  /api/recommendations              # Recs; ?action=&min_conviction=&date=&sort=conviction|revised_at  (default conviction; revised_at suppresses the personalized weighted re-sort)
 GET  /api/recommendations/{ticker}     # Ticker rec history (last 30 days)

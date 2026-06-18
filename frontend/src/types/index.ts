@@ -106,6 +106,57 @@ export interface SignalDetail {
   detail: string;
 }
 
+// ── Watchlist rotate-out ──────────────────────────────────────────────────
+export interface RotationGate {
+  blocked: boolean;
+  reasons: string[];
+}
+
+export interface RotationCandidate {
+  ticker: string;
+  company_name: string | null;
+  sector_name: string | null;
+  composite_score: number;
+  reasons: string[];
+  cross_sector: boolean;
+}
+
+export interface RotationPreviewItem {
+  ticker: string;
+  gate: RotationGate;
+  candidate: RotationCandidate | null;
+}
+
+export interface RotationPreviewResponse {
+  items: RotationPreviewItem[];
+}
+
+export interface RotationCommitPair {
+  remove: string;
+  add: string;
+}
+
+export interface RotationBlockedItem {
+  ticker: string;
+  reasons: string[];
+}
+
+export interface RotationCommitResponse {
+  status: string; // committed | already_running | no_op
+  committed: RotationCommitPair[];
+  blocked: RotationBlockedItem[];
+  analysis_started: boolean;
+}
+
+export type RotationTickerState = 'pending' | 'analyzing' | 'done' | 'error';
+
+export interface RotationStatus {
+  running: boolean;
+  started_at: string | null;
+  tickers: Record<string, RotationTickerState>;
+  errors: Record<string, string>;
+}
+
 export interface NewsTickerRelevance {
   ticker: string;
   relevance_score: number;

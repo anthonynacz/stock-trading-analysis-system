@@ -11,6 +11,7 @@ import {
   getUniverse,
   getDiscoveryCandidates,
   getPositions,
+  getRotationStatus,
   type RecommendationSort,
 } from '../utils/api';
 import type {
@@ -25,6 +26,7 @@ import type {
   UniverseSummary,
   DiscoveryCandidate,
   Position,
+  RotationStatus,
 } from '../types';
 
 interface HookResult<T> {
@@ -186,6 +188,53 @@ export function useStatus(): HookResult<SystemStatus> {
     const interval = setInterval(refetch, 30_000);
     return () => clearInterval(interval);
   }, [refetch]);
+
+  return { data, loading, error, refetch };
+}
+
+/**
+ * Polls the rotate-out background analysis state every ~2s while `active`,
+ * and stops once every rotated-in ticker reaches a terminal state
+ * (`done`/`error`) and the worker is no longer running.
+ */
+export function useRotationStatus(active: boolean): HookResult<RotationStatus> {
+  const [data, setData] = useState<RotationStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refetch = useCallback(async () => {
+    try {
+      const s = await getRotationStatus();
+      setData(s);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to fetch rotation status');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!active) return;
+    let interval: ReturnType<typeof setInterval>;
+    const poll = async () => {
+      try {
+        const s = await getRotationStatus();
+        setData(s);
+        setError(null);
+        const states = Object.values(s.tickers);
+        const allTerminal =
+          states.length > 0 && states.every((st) => st === 'done' || st === 'error');
+        if (!s.running && allTerminal) clearInterval(interval);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to fetch rotation status');
+      } finally {
+        setLoading(false);
+      }
+    };
+    setLoading(true);
+    poll();
+    interval = setInterval(poll, 2_000);
+    return () => clearInterval(interval);
+  }, [active]);
 
   return { data, loading, error, refetch };
 }

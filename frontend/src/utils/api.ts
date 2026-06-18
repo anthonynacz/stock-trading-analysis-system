@@ -33,6 +33,10 @@ import type {
   ChartResponse,
   ChartDatasetsResponse,
   ChartDatasetKey,
+  RotationPreviewResponse,
+  RotationCommitResponse,
+  RotationCommitPair,
+  RotationStatus,
 } from '../types';
 
 export const TOKEN_STORAGE_KEY = 'vela.access_token';
@@ -165,6 +169,27 @@ export const removeFromWatchlist = (ticker: string) =>
 
 export const toggleLockTicker = (ticker: string) =>
   api.put(`/watchlist/${ticker}/lock`).then((r) => r.data);
+
+// ── Watchlist rotate-out ──────────────────────────────────────────────────
+export const previewRotateOut = (tickers: string[]) =>
+  api
+    .post<RotationPreviewResponse>('/watchlist/rotate-out/preview', { tickers })
+    .then((r) => ({
+      items: r.data.items.map((it) => ({
+        ...it,
+        candidate: it.candidate
+          ? parseNumericFields(it.candidate, ['composite_score'])
+          : null,
+      })),
+    }));
+
+export const commitRotateOut = (pairs: RotationCommitPair[]) =>
+  api
+    .post<RotationCommitResponse>('/watchlist/rotate-out/commit', { pairs })
+    .then((r) => r.data);
+
+export const getRotationStatus = () =>
+  api.get<RotationStatus>('/watchlist/rotate-out/status').then((r) => r.data);
 
 export const getStrikeRecommendations = (
   ticker: string,

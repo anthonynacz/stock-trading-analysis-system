@@ -7,6 +7,10 @@ import OptionsTable from './OptionsTable';
 
 interface RecommendationCardProps {
   recommendation: Recommendation;
+  /** When true, render a rotate-out selection checkbox in the header. */
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (ticker: string) => void;
 }
 
 function ConvictionBar({ score }: { score: number }) {
@@ -142,7 +146,7 @@ function RevisionBadge({ rec }: { rec: Recommendation }) {
   );
 }
 
-export default function RecommendationCard({ recommendation: rec }: RecommendationCardProps) {
+export default function RecommendationCard({ recommendation: rec, selectable, selected, onToggleSelect }: RecommendationCardProps) {
   const [expanded, setExpanded] = useState(false);
   const borderColor = ACTION_COLORS[rec.action] ?? '#21262d';
   const navigate = useNavigate();
@@ -169,7 +173,11 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
   return (
     <div
       className={`bg-card rounded-lg border overflow-hidden cursor-pointer transition-colors hover:border-text-secondary/30 ${
-        isRevised ? 'border-accent-500/40 ring-1 ring-accent-500/20' : 'border-border'
+        selected
+          ? 'border-amber-500 ring-2 ring-amber-500/50'
+          : isRevised
+            ? 'border-accent-500/40 ring-1 ring-accent-500/20'
+            : 'border-border'
       }`}
       style={{ borderLeftWidth: '3px', borderLeftColor: borderColor }}
       onClick={() => setExpanded((v) => !v)}
@@ -177,6 +185,21 @@ export default function RecommendationCard({ recommendation: rec }: Recommendati
       {/* Collapsed view */}
       <div className="px-3 py-2 space-y-1.5">
         <div className="flex items-center gap-2">
+          {selectable && (
+            <span
+              role="checkbox"
+              aria-checked={selected}
+              title={selected ? 'Unselect for rotation' : 'Select to rotate out'}
+              onClick={(e) => { e.stopPropagation(); onToggleSelect?.(rec.ticker); }}
+              className={`flex items-center justify-center w-4 h-4 rounded border text-[10px] leading-none shrink-0 transition-colors ${
+                selected
+                  ? 'bg-amber-500 border-amber-500 text-black'
+                  : 'bg-card border-text-secondary/50 text-transparent hover:border-amber-500'
+              }`}
+            >
+              ✓
+            </span>
+          )}
           <span
             className={demotion.isDemoted ? 'px-1.5 py-0.5 rounded text-[10px] font-bold uppercase cursor-help' : 'px-1.5 py-0.5 rounded text-[10px] font-bold uppercase'}
             style={{ backgroundColor: borderColor + '22', color: borderColor }}

@@ -34,6 +34,17 @@ from utils.geopolitical import detect_and_score
 logger = logging.getLogger(__name__)
 
 
+# Leading signals that justify PRE_POSITION even without an active earnings
+# catalyst window. Module-level so other services (e.g. the watchlist rotation
+# "strong imminent potential" gate) can import it without reaching into the
+# RecommendationEngine class internals.
+LEADING_PRE_POSITION_SIGNALS = frozenset({
+    "Analyst Revision Cluster",
+    "Smart Money Positioning",
+    "Insider Buy Cluster",
+})
+
+
 class RecommendationEngine:
     """Aggregates signals from all services and produces daily recommendations."""
 
@@ -1749,12 +1760,8 @@ class RecommendationEngine:
     # ------------------------------------------------------------------
 
     # Leading signals that justify PRE_POSITION even without an active
-    # earnings catalyst window.
-    _LEADING_PRE_POSITION_SIGNALS = frozenset({
-        "Analyst Revision Cluster",
-        "Smart Money Positioning",
-        "Insider Buy Cluster",
-    })
+    # earnings catalyst window. Aliases the module-level constant.
+    _LEADING_PRE_POSITION_SIGNALS = LEADING_PRE_POSITION_SIGNALS
 
     def _determine_entry_strategy(
         self,
