@@ -30,6 +30,10 @@ services:
       DEV_TOKEN_ENABLED: "true"
       JWT_HS256_SECRET: "vela-dev-secret-rotate-before-production"
       JWT_ISSUER: "vela-dev"
+      # Persist the HuggingFace/FinBERT cache (see volume below) so the ~500MB
+      # model isn't re-downloaded on every container restart — a cold load can
+      # push the first research/news call past the proxy timeout.
+      HF_HOME: /root/.cache/huggingface
     env_file:
       - .env
     depends_on:
@@ -37,6 +41,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - hf_cache:/root/.cache/huggingface
 
   frontend:
     restart: unless-stopped
@@ -48,3 +53,4 @@ services:
 
 volumes:
   pgdata:
+  hf_cache:
