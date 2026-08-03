@@ -258,6 +258,15 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
       if (stopLoss) data.stop_loss = parseFloat(stopLoss);
       if (targetPrice) data.target_price = parseFloat(targetPrice);
       if (notes.trim()) data.notes = notes.trim();
+      // Carried from the "Open Position" deep-link — links this position to
+      // the recommendation that prompted it (outcome attribution). Dropped
+      // if the user typed a different ticker than the rec's.
+      if (
+        initial?.recommendation_id != null &&
+        ticker.trim().toUpperCase() === (initial.ticker ?? '').toUpperCase()
+      ) {
+        data.recommendation_id = initial.recommendation_id;
+      }
       await onSubmit(data);
     } finally {
       setSubmitting(false);
@@ -905,8 +914,10 @@ export default function PositionsPage() {
       const strike = searchParams.get('strike');
       const expiry = searchParams.get('expiry');
       const premium = searchParams.get('premium');
+      const recId = searchParams.get('rec');
 
       if (ticker) prefill.ticker = ticker;
+      if (recId) prefill.recommendation_id = parseInt(recId, 10);
       if (price) prefill.entry_price = parseFloat(price);
       if (type && (type === 'CALL' || type === 'PUT' || type === 'STOCK')) prefill.position_type = type;
       if (strike) prefill.strike_price = parseFloat(strike);

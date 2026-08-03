@@ -491,6 +491,15 @@ def start_scheduler() -> None:
         hour="8-16", minute=15, day_of_week=weekdays, id="intraday_news_scan",
     )
 
+    # Nightly recommendation outcome scoring at 18:00 ET — marks T+1/5/20
+    # trading-day forward returns for every rec so per-signal hit rates can
+    # be aggregated (GET /api/outcomes/summary).
+    from services.outcome_tracker import run_outcome_scoring
+    scheduler.add_job(
+        run_outcome_scoring, "cron",
+        hour=18, minute=0, day_of_week=weekdays, id="outcome_scoring",
+    )
+
     # Weekly multibagger scan — Friday 17:30 ET, after the post-market chain,
     # so the week's closing data is fresh (weekend runs get stale yfinance
     # quotes). Shares its single-flight guard with POST /api/scanner/run.

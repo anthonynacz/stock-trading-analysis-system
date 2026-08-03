@@ -17,6 +17,7 @@ import ChartsPage from './pages/ChartsPage';
 import LoginPage from './pages/LoginPage';
 import SettingsPage from './pages/SettingsPage';
 import SchedulePage from './pages/SchedulePage';
+import PerformancePage from './pages/PerformancePage';
 
 function ProtectedShell({ children }: { children: React.ReactNode }) {
   return (
@@ -44,6 +45,7 @@ function App() {
               <Route path="/industries" element={<ProtectedShell><IndustriesPage /></ProtectedShell>} />
               <Route path="/charts" element={<ProtectedShell><ChartsPage /></ProtectedShell>} />
               <Route path="/positions" element={<ProtectedShell><PositionsPage /></ProtectedShell>} />
+              <Route path="/performance" element={<ProtectedShell><PerformancePage /></ProtectedShell>} />
               <Route path="/knowledge" element={<ProtectedShell><KnowledgePage /></ProtectedShell>} />
               <Route path="/schedule" element={<ProtectedShell><SchedulePage /></ProtectedShell>} />
               <Route path="/settings" element={<ProtectedShell><SettingsPage /></ProtectedShell>} />

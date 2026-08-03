@@ -4,7 +4,7 @@ PostgreSQL 16. `db/models.py` is the source of truth; Alembic owns schema migrat
 
 ## Table Groups
 
-**Shared / pipeline-owned** (no `user_id`): `sectors`, `universe_stocks`, `discovery_candidates`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `news_ticker_relevance`, `options_snapshots`, `suggested_options`, `recommendations`, `multibagger_snapshot`, `industry_recommendations`. Written by the daily APScheduler pipeline; read by every user.
+**Shared / pipeline-owned** (no `user_id`): `sectors`, `universe_stocks`, `discovery_candidates`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `news_ticker_relevance`, `options_snapshots`, `suggested_options`, `recommendations`, `recommendation_outcomes`, `multibagger_snapshot`, `industry_recommendations`. Written by the daily APScheduler pipeline; read by every user. `recommendation_outcomes` (one row per rec, T+1/5/20 forward returns) is written by the nightly outcome_scoring worker; `positions.recommendation_id` is a nullable FK linking a position to the rec that prompted it.
 
 **User-owned** (have `user_id` FK to `users`): `watchlist`, `positions`, `strike_snapshots`, `research_results`, `deep_options_analyses`, `multibagger_universe`, `chart_configs`. Routes scope reads/writes by `current_user.id`. **Note:** `watchlist` and `multibagger_universe` carry the column but per-user route scoping is deferred to the Custom Universe Slots feature — the daily pipeline still writes them globally.
 

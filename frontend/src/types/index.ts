@@ -567,6 +567,7 @@ export interface PositionCreateRequest {
   stop_loss?: number;
   target_price?: number;
   notes?: string;
+  recommendation_id?: number;
 }
 
 // ── Multi-bagger scanner ────────────────────────────────────────────────

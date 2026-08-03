@@ -540,3 +540,38 @@ export const getScheduleRuns = (hours = 72) =>
 
 export const getScheduleUpcoming = (hours = 24) =>
   api.get<ScheduleUpcoming[]>('/schedule/upcoming', { params: { hours } }).then((r) => r.data);
+
+// ── Recommendation outcomes (performance) ────────────────────────────────
+
+export interface OutcomeBucket {
+  n: number;
+  avg_return_pct: number | null;
+  directional_n: number;
+  hit_rate: number | null;
+  avg_adj_return_pct: number | null;
+}
+
+export interface OutcomeSignalHorizon {
+  n: number;
+  hit_rate: number | null;
+  avg_adj_return_pct: number | null;
+}
+
+export interface OutcomeSignalRow {
+  name: string;
+  count: number;
+  avg_points: number;
+  t5: OutcomeSignalHorizon;
+  t20: OutcomeSignalHorizon;
+}
+
+export interface OutcomesSummary {
+  window_days: number;
+  rows: number;
+  overall: Record<string, OutcomeBucket>;
+  by_action: Record<string, Record<string, OutcomeBucket>>;
+  signals: OutcomeSignalRow[];
+}
+
+export const getOutcomesSummary = (days = 90) =>
+  api.get<OutcomesSummary>('/outcomes/summary', { params: { days } }).then((r) => r.data);

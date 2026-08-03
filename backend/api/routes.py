@@ -41,6 +41,7 @@ from db.models import (
     PortfolioPnlSnapshot,
     Position,
     Recommendation,
+    RecommendationOutcome,
     ResearchResult,
     Sector,
     StrikeSnapshot,
@@ -2834,6 +2835,15 @@ async def create_position(
     if body.position_type == "STOCK" and stock_price is not None:
         current_price = Decimal(str(stock_price))
 
+    # Validate the rec link quietly — a stale/bogus id degrades to unlinked
+    # rather than failing the create.
+    rec_id = None
+    if body.recommendation_id is not None:
+        rec_exists = await db.execute(
+            select(Recommendation.id).where(Recommendation.id == body.recommendation_id)
+        )
+        rec_id = rec_exists.scalar()
+
     pos = Position(
         user_id=user.id,
         ticker=ticker,
@@ -2849,6 +2859,7 @@ async def create_position(
         target_price=body.target_price,
         status="OPEN",
         notes=body.notes,
+        recommendation_id=rec_id,
     )
     db.add(pos)
     await db.commit()
@@ -3624,6 +3635,133 @@ async def get_schedule_runs(
     ]
 
 
+# ── Recommendation outcomes (performance feedback loop) ─────────────────────
+
+_OUTCOME_HORIZONS = (1, 5, 20)
+_BULLISH_ACTIONS = {"BUY", "STRONG_BUY"}
+_BEARISH_ACTIONS = {"SELL", "STRONG_SELL"}
+
+
+def _outcome_bucket() -> dict:
+    return {"n": 0, "sum_ret": 0.0, "dir_n": 0, "hits": 0, "sum_adj_ret": 0.0}
+
+
+def _finalize_bucket(b: dict) -> dict:
+    return {
+        "n": b["n"],
+        "avg_return_pct": round(b["sum_ret"] / b["n"], 2) if b["n"] else None,
+        "directional_n": b["dir_n"],
+        "hit_rate": round(b["hits"] / b["dir_n"], 3) if b["dir_n"] else None,
+        "avg_adj_return_pct": round(b["sum_adj_ret"] / b["dir_n"], 2) if b["dir_n"] else None,
+    }
+
+
+@router.get("/outcomes/summary")
+async def outcomes_summary(
+    days: int = Query(90, ge=7, le=365),
+    min_signal_n: int = Query(3, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Aggregate forward-return performance of scored recommendations.
+
+    `overall` / `by_action`: per-horizon sample size, average raw return,
+    and direction-adjusted hit rate (HOLD rows count toward returns but not
+    hit rate). `signals`: per-signal attribution — a signal is "right" at a
+    horizon when the forward return has the same sign as its points, so both
+    bullish and bearish signals are scored fairly. Signals below
+    `min_signal_n` samples at T+5 are omitted as noise.
+    """
+    cutoff = date.today() - timedelta(days=days)
+    rows = await db.execute(
+        select(RecommendationOutcome, Recommendation.signals)
+        .join(Recommendation, Recommendation.id == RecommendationOutcome.recommendation_id)
+        .where(RecommendationOutcome.recommendation_date >= cutoff)
+    )
+
+    overall = {n: _outcome_bucket() for n in _OUTCOME_HORIZONS}
+    by_action: dict[str, dict] = {}
+    sig_stats: dict[str, dict] = {}
+    scored_rows = 0
+
+    for outcome, signals in rows.all():
+        scored_rows += 1
+        direction = 1 if outcome.action in _BULLISH_ACTIONS else (
+            -1 if outcome.action in _BEARISH_ACTIONS else 0)
+        action_buckets = by_action.setdefault(
+            outcome.action, {n: _outcome_bucket() for n in _OUTCOME_HORIZONS})
+
+        rets: dict[int, float] = {}
+        for n in _OUTCOME_HORIZONS:
+            ret = getattr(outcome, f"return_t{n}_pct")
+            if ret is None:
+                continue
+            ret = float(ret)
+            rets[n] = ret
+            for b in (overall[n], action_buckets[n]):
+                b["n"] += 1
+                b["sum_ret"] += ret
+                if direction != 0:
+                    b["dir_n"] += 1
+                    adj = direction * ret
+                    b["sum_adj_ret"] += adj
+                    if adj > 0:
+                        b["hits"] += 1
+
+        # Per-signal attribution (T+5 / T+20 only — T+1 is mostly noise)
+        for sig in (signals or []):
+            points = sig.get("points") if isinstance(sig, dict) else None
+            name = sig.get("name") if isinstance(sig, dict) else None
+            if not name or not points:
+                continue
+            sign = 1 if points > 0 else -1
+            st = sig_stats.setdefault(name, {
+                "count": 0, "sum_points": 0.0,
+                5: {"n": 0, "hits": 0, "sum_adj": 0.0},
+                20: {"n": 0, "hits": 0, "sum_adj": 0.0},
+            })
+            st["count"] += 1
+            st["sum_points"] += float(points)
+            for n in (5, 20):
+                if n not in rets:
+                    continue
+                adj = sign * rets[n]
+                st[n]["n"] += 1
+                st[n]["sum_adj"] += adj
+                if adj > 0:
+                    st[n]["hits"] += 1
+
+    signals_out = []
+    for name, st in sig_stats.items():
+        if st[5]["n"] < min_signal_n:
+            continue
+        entry = {
+            "name": name,
+            "count": st["count"],
+            "avg_points": round(st["sum_points"] / st["count"], 1),
+        }
+        for n in (5, 20):
+            h = st[n]
+            entry[f"t{n}"] = {
+                "n": h["n"],
+                "hit_rate": round(h["hits"] / h["n"], 3) if h["n"] else None,
+                "avg_adj_return_pct": round(h["sum_adj"] / h["n"], 2) if h["n"] else None,
+            }
+        signals_out.append(entry)
+    signals_out.sort(key=lambda s: (s["t5"]["hit_rate"] or 0), reverse=True)
+
+    return {
+        "window_days": days,
+        "rows": scored_rows,
+        "overall": {f"t{n}": _finalize_bucket(overall[n]) for n in _OUTCOME_HORIZONS},
+        "by_action": {
+            act: {f"t{n}": _finalize_bucket(bs[n]) for n in _OUTCOME_HORIZONS}
+            for act, bs in sorted(by_action.items())
+        },
+        "signals": signals_out,
+    }
+
+
 def _job_phase_label(job) -> str:
     """Map an APScheduler job to its phase name as stored in pipeline_run_log."""
     func_name = getattr(job.func, "__name__", str(job.func))
@@ -3642,6 +3780,8 @@ def _job_phase_label(job) -> str:
         return "intraday_news"
     if func_name == "run_multibagger_scan":
         return "multibagger_scan"
+    if func_name == "run_outcome_scoring":
+        return "outcome_scoring"
     return func_name
 
 

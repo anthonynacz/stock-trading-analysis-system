@@ -48,7 +48,7 @@ GET  /api/universe/candidates          # List pending discovery candidates
 POST /api/universe/candidates/{id}/approve  # Approve candidate into sector { sector }
 POST /api/universe/candidates/{id}/dismiss  # Dismiss candidate
 POST /api/universe/discover            # Trigger discovery manually
-POST /api/positions                    # Create position { ticker, position_type, quantity, entry_price, ... }
+POST /api/positions                    # Create position { ticker, position_type, quantity, entry_price, recommendation_id?, ... } (rec link validated quietly; bogus id → unlinked)
 GET  /api/positions                    # List positions; ?status=OPEN/CLOSED, ?ticker=
 GET  /api/positions/{id}               # Single position with P&L + recommendation
 PUT  /api/positions/{id}               # Update mutable fields (stop_loss, target, notes, current_price)
@@ -64,6 +64,7 @@ POST /api/scanner/run                  # Trigger scanner run (background; poll /
 GET  /api/scanner/status               # Poll run state (running, started_at, last_result)
 GET  /api/industries                   # Latest industry recommendations (one row per sector); ?date=
 GET  /api/industries/{name}            # Industry detail: latest + 30d history + today's member recs (uses :path so AI/Semiconductors works)
+GET  /api/outcomes/summary             # Recommendation performance aggregates; ?days=90&min_signal_n=3 → overall / by_action / per-signal hit rates
 GET  /api/charts/datasets              # List available chart datasets + their metric/aggregation options (drives form rendering)
 POST /api/charts/query                 # Run chart query — { dataset, spec } → { series, x_label, y_label, chart_type, meta }
 ```

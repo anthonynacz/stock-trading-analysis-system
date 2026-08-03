@@ -10,7 +10,7 @@ import logging
 import math
 import time
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -264,6 +264,29 @@ class DataSourceClient:
         except Exception:
             logger.debug("get_long_horizon_returns failed for %s", ticker, exc_info=True)
             return out
+
+    # ------------------------------------------------------------------ #
+
+    def get_daily_closes(self, ticker: str, period: str = "9mo") -> list[tuple[date, float]]:
+        """Daily close series as [(date, close)], ascending. Used by the
+        outcome-scoring worker to mark recommendations at trading-day
+        horizons. Cached 6h (one fetch covers all pending recs per ticker)."""
+        cache_key = f"daily_closes:{ticker}:{period}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            self._wait_for_rate_limit("yfinance")
+            hist = yf.Ticker(ticker).history(period=period, auto_adjust=True)
+            if hist is None or len(hist) == 0:
+                return []
+            closes = hist["Close"].dropna()
+            out = [(idx.date(), float(v)) for idx, v in closes.items()]
+            self._set_cached(cache_key, out, 6 * 60 * 60)
+            return out
+        except Exception:
+            logger.debug("get_daily_closes failed for %s", ticker, exc_info=True)
+            return []
 
     # ------------------------------------------------------------------ #
 

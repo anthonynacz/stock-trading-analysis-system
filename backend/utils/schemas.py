@@ -448,6 +448,7 @@ class PositionCreateRequest(BaseModel):
     stop_loss: Optional[Decimal] = None
     target_price: Optional[Decimal] = None
     notes: Optional[str] = None
+    recommendation_id: Optional[int] = None  # rec that prompted this position
 
 
 class PositionUpdateRequest(BaseModel):
@@ -483,6 +484,7 @@ class PositionResponse(BaseModel):
     close_price: Optional[Decimal] = None
     realized_pnl: Optional[Decimal] = None
     notes: Optional[str] = None
+    recommendation_id: Optional[int] = None
     # Computed fields (not in DB)
     unrealized_pnl: Optional[Decimal] = None
     unrealized_pnl_pct: Optional[float] = None

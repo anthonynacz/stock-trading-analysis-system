@@ -18,6 +18,10 @@ const PHASE_LABEL: Record<string, string> = {
   digest_dispatch: 'AM Digest',
   alerts_scan: 'Alerts Scan',
   retention_sweep: 'Retention Sweep',
+  pnl_snapshot: 'P&L Snapshot',
+  intraday_news: 'Intraday News',
+  multibagger_scan: 'Multibagger Scan',
+  outcome_scoring: 'Outcome Scoring',
 };
 
 const STATUS_STYLES: Record<string, string> = {

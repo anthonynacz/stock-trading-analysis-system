@@ -389,6 +389,7 @@ export default function TickerDetail({ ticker, companyName, selectedDate, onClos
             <button
               onClick={() => {
                 const params = new URLSearchParams({ open: 'true', ticker });
+                if (rec?.id != null) params.set('rec', String(rec.id));
                 if (rec?.current_price != null) params.set('price', String(rec.current_price));
                 const opt = rec?.suggested_options?.[0];
                 if (opt) {

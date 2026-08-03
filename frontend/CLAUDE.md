@@ -34,7 +34,7 @@ cd frontend && npx tsc --noEmit             # type check
 
 ## Dashboard Layout
 
-The app uses react-router-dom with routes: `/` (Dashboard), `/universe` (Universe), `/research` (Research), `/options-lab` (Options Lab), `/scanner` (Scanner), `/industries` (Industries), `/charts` (Charts), `/positions` (Positions), `/knowledge` (Knowledge), `/login` (public). A top nav bar (`AppNav`) links all protected pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
+The app uses react-router-dom with routes: `/` (Dashboard), `/universe` (Universe), `/research` (Research), `/options-lab` (Options Lab), `/scanner` (Scanner), `/industries` (Industries), `/charts` (Charts), `/positions` (Positions), `/performance` (Performance), `/schedule` (Schedule), `/settings` (Settings), `/knowledge` (Knowledge), `/login` (public). A top nav bar (`AppNav`) links all protected pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
 
 The Dashboard has the following sections:
 1. **StatusBar** — Date stepper (left/right arrows to navigate pipeline days), refresh button, system status
@@ -66,6 +66,10 @@ Layout: ticker input + "Analyze" button at top, 3:2 grid-to-detail layout below.
 ## Positions Page
 
 Portfolio tracking at `/positions`. Informational only — no broker integration. Supports CALL, PUT, and STOCK position types. Summary bar shows open count, total unrealized P&L, win/loss counts. Open/Closed tabs filter positions. 3:2 grid layout: position cards (left) with P&L-colored borders, detail panel (right) with recommendation overlay for watchlist tickers or "Run Analysis" button for non-watchlist tickers. Inline AddPositionForm with conditional fields (strike/premium/expiry for options). Dashboard integration: TickerDetail's "Open Position" button navigates to `/positions?open=true&ticker=X&...` with pre-filled form data. P&L: STOCK = (current - entry) * qty; CALL/PUT = (current - premium) * qty * 100.
+
+## Performance Page
+
+Recommendation outcome analytics at `/performance` (backed by `GET /api/outcomes/summary`, data from the nightly outcome_scoring job). Window selector (30/90/180d). Sections: overall hit-rate tiles per horizon (T+1/5/20), by-action table, and a per-signal hit-rate table (sortable by hit rate / avg adjusted return / sample size) meant to inform Signal Weights tuning in Settings. Empty state explains the 18:00 ET scoring job. The "Open Position" deep-link from TickerDetail now carries `rec=<id>` which PositionsPage forwards as `recommendation_id` on create (dropped if the user changes the ticker in the form).
 
 ## Knowledge Page
 

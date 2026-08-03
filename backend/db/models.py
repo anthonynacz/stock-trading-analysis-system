@@ -568,6 +568,50 @@ class SuggestedOption(Base):
     recommendation: Mapped["Recommendation"] = relationship(back_populates="suggested_options")
 
 
+# ── Recommendation outcomes (forward-return scoring) ────────────────────────
+
+class RecommendationOutcome(Base):
+    """One row per recommendation — spot forward returns at T+1/5/20 trading
+    days, filled by the nightly outcome_scoring worker as each horizon
+    matures. `hit_*` is direction-adjusted (BUY family wants return > 0,
+    SELL family < 0; HOLD rows keep returns but hit stays NULL). Action /
+    conviction are denormalized from the rec at scoring time so aggregation
+    doesn't depend on later revisions."""
+
+    __tablename__ = "recommendation_outcomes"
+    __table_args__ = (
+        UniqueConstraint("recommendation_id", name="uq_outcome_rec"),
+        Index("ix_outcome_date", "recommendation_date"),
+        Index("ix_outcome_ticker", "ticker"),
+        Index("ix_outcome_matured", "matured"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recommendation_id: Mapped[int] = mapped_column(ForeignKey("recommendations.id"), nullable=False)
+    recommendation_date: Mapped[date] = mapped_column(Date, nullable=False)
+    ticker: Mapped[str] = mapped_column(String(10), nullable=False)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    conviction_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    entry_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+
+    price_t1: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    return_t1_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 2))
+    hit_t1: Mapped[Optional[bool]] = mapped_column(Boolean)
+    price_t5: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    return_t5_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 2))
+    hit_t5: Mapped[Optional[bool]] = mapped_column(Boolean)
+    price_t20: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
+    return_t20_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 2))
+    hit_t20: Mapped[Optional[bool]] = mapped_column(Boolean)
+
+    # True once t20 is filled (or the rec aged out without data) — the
+    # nightly worker's cheap "nothing left to do" filter.
+    matured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+
+
 # ── Strike snapshots ─────────────────────────────────────────────────────────
 
 class StrikeSnapshot(Base):
@@ -703,6 +747,10 @@ class Position(Base):
     close_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 2))
     realized_pnl: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
     notes: Mapped[Optional[str]] = mapped_column(Text)
+    # Hard link to the recommendation that prompted this position (set when
+    # opened via "Open Position" on a rec) — enables realized-P&L attribution.
+    # The display join in GET /positions/{id} stays ticker+date based.
+    recommendation_id: Mapped[Optional[int]] = mapped_column(ForeignKey("recommendations.id"))
 
 
 # ── Multi-bagger scanner (positional, 3-12mo horizon) ──────────────────────
