@@ -432,3 +432,55 @@ def _safe(v: Any) -> float | None:
         return f
     except (TypeError, ValueError):
         return None
+
+
+# ── Shared run state + entry point ──────────────────────────────────────────
+
+# Single-flight guard and status payload, shared by the weekly cron job and
+# POST /api/scanner/run so a scheduled and a manual run can't overlap (both
+# delete-then-insert the same run_date rows).
+scanner_run_state: dict = {"running": False, "started_at": None, "last_result": None}
+
+
+async def run_multibagger_scan() -> dict:
+    """Run the scanner end-to-end with its own session/client.
+
+    Entry point for both the weekly APScheduler job and the API background
+    task. Records a pipeline_run_log row under phase "multibagger_scan".
+    """
+    from db.connection import async_session
+    from services.run_log import (
+        STATUS_FAILED,
+        STATUS_SUCCESS,
+        record_run_finish,
+        record_run_start,
+    )
+
+    if scanner_run_state["running"]:
+        return {"status": "already_running"}
+
+    scanner_run_state["running"] = True
+    scanner_run_state["started_at"] = datetime.now(tz=timezone.utc).isoformat()
+    run_id = await record_run_start(phase="multibagger_scan", user_id=None)
+    client = DataSourceClient()
+    error: str | None = None
+    try:
+        async with async_session() as session:
+            scanner = MultibaggerScanner(session, client)
+            summary = await scanner.run_and_persist()
+            scanner_run_state["last_result"] = summary
+            return summary
+    except Exception as exc:
+        logger.exception("multibagger scan failed")
+        error = f"{type(exc).__name__}: {exc}"
+        scanner_run_state["last_result"] = {"status": "error", "error": str(exc)}
+        return scanner_run_state["last_result"]
+    finally:
+        client.close()
+        scanner_run_state["running"] = False
+        await record_run_finish(
+            run_id,
+            status=STATUS_FAILED if error else STATUS_SUCCESS,
+            error_message=error,
+            meta=scanner_run_state["last_result"] if not error else None,
+        )

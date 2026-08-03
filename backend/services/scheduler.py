@@ -411,6 +411,12 @@ def start_scheduler() -> None:
         run_pipeline_phase, "cron", args=["ratings"],
         hour=11, minute=0, day_of_week=weekdays, id="intraday_ratings_midday",
     )
+    # Industries reads today's recommendations — run after the 10:30 rec
+    # generation has had time to finish.
+    scheduler.add_job(
+        run_pipeline_phase, "cron", args=["industries"],
+        hour=11, minute=15, day_of_week=weekdays, id="midday_industries",
+    )
     scheduler.add_job(
         run_pipeline_phase, "cron", args=["ratings"],
         hour=14, minute=0, day_of_week=weekdays, id="intraday_ratings_afternoon",
@@ -432,6 +438,10 @@ def start_scheduler() -> None:
     scheduler.add_job(
         run_pipeline_phase, "cron", args=["earnings"],
         hour=17, minute=0, day_of_week=weekdays, id="postmarket_earnings",
+    )
+    scheduler.add_job(
+        run_pipeline_phase, "cron", args=["industries"],
+        hour=17, minute=15, day_of_week=weekdays, id="postmarket_industries",
     )
 
     # -- Personalization workers ---------------------------------------------
@@ -479,6 +489,15 @@ def start_scheduler() -> None:
     scheduler.add_job(
         run_intraday_news_scan, "cron",
         hour="8-16", minute=15, day_of_week=weekdays, id="intraday_news_scan",
+    )
+
+    # Weekly multibagger scan — Friday 17:30 ET, after the post-market chain,
+    # so the week's closing data is fresh (weekend runs get stale yfinance
+    # quotes). Shares its single-flight guard with POST /api/scanner/run.
+    from services.multibagger_scanner import run_multibagger_scan
+    scheduler.add_job(
+        run_multibagger_scan, "cron",
+        day_of_week="fri", hour=17, minute=30, id="weekly_multibagger_scan",
     )
 
     scheduler.start()

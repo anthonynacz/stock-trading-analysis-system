@@ -1,10 +1,11 @@
 """AM digest service.
 
-Composes a personalized morning summary email for each user and dispatches
-it via the delivery layer. Currently the delivery is a structured-log stub
-because the deployment doesn't have SMTP credentials wired — the swap point
-is `_dispatch_email`, which can be replaced with a Postmark / SES / SMTP
-client without touching the composer.
+Composes a personalized morning summary for each user and dispatches it via
+the delivery layer. Delivery goes to the user's Discord webhook when
+`alerts_config.channel == "discord"` and `discord_webhook_url` is set (same
+routing rule as alerts — see services/delivery.py); otherwise it falls back
+to `_dispatch_email`, a structured-log stub until SMTP/Postmark credentials
+are wired.
 
 Cron model (in services/scheduler.py): runs every 30 min between 06:00–13:00
 ET on weekdays. Each tick examines `digest_config.send_time_utc` for active
@@ -38,6 +39,7 @@ from db.models import (
     UserPreferences,
     Watchlist,
 )
+from services.delivery import send_discord
 from services.entitlements import (
     UNLIMITED,
     get_entitlements_for,
@@ -229,6 +231,57 @@ async def compose_digest(session: AsyncSession, user: User) -> dict[str, Any] | 
 
 # ── Delivery ────────────────────────────────────────────────────────────────
 
+def _format_digest(payload: dict[str, Any]) -> str:
+    """Render the digest payload as Discord-flavored markdown."""
+    sections = payload.get("sections", {})
+    lines: list[str] = [f"☀️ **Vela AM Digest** — {payload.get('as_of', '')[:10]}"]
+
+    picks = sections.get("top_picks")
+    if picks:
+        lines.append("\n**Top picks**")
+        for p in picks:
+            lines.append(
+                f"• **{p['ticker']}** {p['action']} ({p['conviction']:+}) — {p['rationale']}"
+            )
+
+    health = sections.get("position_health")
+    if health:
+        lines.append("\n**Position health**")
+        for h in health:
+            lines.append(f"• **{h['ticker']}** {h['type']} ×{h['qty']} — {', '.join(h['flags'])}")
+
+    cats = sections.get("catalysts_3d")
+    if cats:
+        lines.append("\n**Catalysts (3d)**")
+        for c in cats:
+            held = " (held)" if c.get("is_held") else ""
+            lines.append(f"• **{c['ticker']}** earnings {c['date']} (T-{c['days_until']}){held}")
+
+    ind = sections.get("industry_summary")
+    if ind:
+        lines.append(
+            f"\n**Sectors**: {ind['buy_count']} buy / {ind['hold_count']} hold / "
+            f"{ind['sell_count']} sell — top: {ind['top_industry']} "
+            f"{ind['top_industry_action']} ({ind['top_industry_conviction']:+})"
+        )
+
+    return "\n".join(lines)
+
+
+async def _dispatch(payload: dict[str, Any], alerts_cfg: dict[str, Any]) -> str:
+    """Deliver the digest; returns the channel used ("discord" or
+    "email_log_stub"). Failed Discord sends fall back to the log stub so
+    the digest is never silently lost."""
+    webhook = (
+        alerts_cfg.get("discord_webhook_url")
+        if alerts_cfg.get("channel") == "discord" else None
+    )
+    if webhook and await send_discord(webhook, _format_digest(payload)):
+        return "discord"
+    _dispatch_email(payload)
+    return "email_log_stub"
+
+
 def _dispatch_email(payload: dict[str, Any]) -> None:
     """Stub: log structured payload. Swap with Postmark/SES when SMTP creds
     are wired. Logging is structured (single line per delivery) so log
@@ -297,14 +350,15 @@ async def run_digest_dispatch() -> dict[str, Any]:
                 payload = await compose_digest(session, user)
                 if payload is None:
                     continue
-                _dispatch_email(payload)
+                channel = await _dispatch(payload, pref.alerts_config or {})
                 summary["digests_sent"] += 1
                 # Per-user run row: only when we actually dispatched
                 u_run = await record_run_start(phase="digest_dispatch", user_id=user.id)
                 await record_run_finish(
                     u_run,
                     status=STATUS_SUCCESS,
-                    meta={"sections": list((payload.get("sections") or {}).keys())},
+                    meta={"sections": list((payload.get("sections") or {}).keys()),
+                          "channel": channel},
                 )
             except Exception as exc:
                 logger.exception("digest dispatch failed for user %s", user.id)

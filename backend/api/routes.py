@@ -535,7 +535,7 @@ async def toggle_lock(
 
 # Module-level state for the background recommendation-generation worker.
 # Mutated in place (never reassigned) so polling reads stay coherent — same
-# pattern as `_scanner_run_state`. ``tickers``: ticker -> pending|analyzing|
+# pattern as multibagger_scanner.scanner_run_state. ``tickers``: ticker -> pending|analyzing|
 # done|error; ``errors``: ticker -> message.
 _rotation_run_state: dict = {
     "running": False,
@@ -3276,45 +3276,29 @@ async def scanner_results(
     return result.scalars().all()
 
 
-_scanner_run_state: dict = {"running": False, "started_at": None, "last_result": None}
-
-
-async def _run_scanner_background():
-    """Background worker that runs the scanner and updates shared state."""
-    from services.multibagger_scanner import MultibaggerScanner
-    from db.connection import async_session
-
-    _scanner_run_state["running"] = True
-    _scanner_run_state["started_at"] = datetime.utcnow().isoformat()
-    client = DataSourceClient()
-    try:
-        async with async_session() as session:
-            scanner = MultibaggerScanner(session, client)
-            summary = await scanner.run_and_persist()
-            _scanner_run_state["last_result"] = summary
-    except Exception as e:
-        _scanner_run_state["last_result"] = {"status": "error", "error": str(e)}
-    finally:
-        client.close()
-        _scanner_run_state["running"] = False
-
-
 @router.post("/scanner/run", response_model=ScannerRunResponse)
 async def scanner_run(background_tasks: BackgroundTasks):
-    """Trigger a scanner run. Runs in the background — poll /scanner/status."""
-    if _scanner_run_state["running"]:
+    """Trigger a scanner run. Runs in the background — poll /scanner/status.
+
+    Run state lives in services.multibagger_scanner so the weekly scheduled
+    scan and manual runs share one single-flight guard."""
+    from services.multibagger_scanner import run_multibagger_scan, scanner_run_state
+
+    if scanner_run_state["running"]:
         return ScannerRunResponse(status="already_running")
-    background_tasks.add_task(_run_scanner_background)
+    background_tasks.add_task(run_multibagger_scan)
     return ScannerRunResponse(status="started")
 
 
 @router.get("/scanner/status")
 async def scanner_status():
     """Poll scanner run state."""
+    from services.multibagger_scanner import scanner_run_state
+
     return {
-        "running": _scanner_run_state["running"],
-        "started_at": _scanner_run_state["started_at"],
-        "last_result": _scanner_run_state["last_result"],
+        "running": scanner_run_state["running"],
+        "started_at": scanner_run_state["started_at"],
+        "last_result": scanner_run_state["last_result"],
     }
 
 
@@ -3652,6 +3636,12 @@ def _job_phase_label(job) -> str:
         return "digest_dispatch"
     if func_name == "run_alerts_scan":
         return "alerts_scan"
+    if func_name == "run_pnl_snapshot":
+        return "pnl_snapshot"
+    if func_name == "run_intraday_news_scan":
+        return "intraday_news"
+    if func_name == "run_multibagger_scan":
+        return "multibagger_scan"
     return func_name
 
 

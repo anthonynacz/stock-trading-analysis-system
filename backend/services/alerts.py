@@ -1,8 +1,10 @@
 """Alerts worker.
 
 Periodic scanner that detects per-user trigger conditions, dedups via
-`alert_log`, and dispatches via the delivery layer (currently a structured-
-log stub at `_dispatch_alert`). Cron runs every 30 minutes during market
+`alert_log`, and dispatches via the delivery layer. Delivery goes to the
+user's Discord webhook when `alerts_config.channel == "discord"` and
+`discord_webhook_url` is set (services/delivery.py); otherwise it falls back
+to the structured-log email stub. Cron runs every 30 minutes during market
 hours (06:00–17:30 ET) — see services/scheduler.py.
 
 Triggers (one entry in alerts_config gates each):
@@ -46,6 +48,7 @@ from db.models import (
     UserPreferences,
     Watchlist,
 )
+from services.delivery import send_discord
 from services.entitlements import (
     get_entitlements_for,
     get_subscription,
@@ -75,16 +78,42 @@ _ALERT_TIER_MIN: dict[str, str] = {a["key"]: a.get("tier_min") for a in ALERT_KE
 
 # ── Dispatch ────────────────────────────────────────────────────────────────
 
+def _format_alert(alert_type: str, ticker: str | None, payload: dict[str, Any]) -> str:
+    """Human-readable one-liner for outbound delivery (Discord)."""
+    t = ticker or "?"
+    if alert_type == "rec_change":
+        return f"📊 **{t}** recommendation changed: {payload.get('prev')} → {payload.get('now')}"
+    if alert_type == "conviction_breach":
+        return (f"🚨 **{t}** conviction {payload.get('conviction'):+} "
+                f"crossed your threshold ({payload.get('threshold')})")
+    if alert_type == "earnings_proximity":
+        return (f"📅 **{t}** earnings in {payload.get('days_until')}d "
+                f"({payload.get('earnings_date')})")
+    if alert_type == "unusual_flow":
+        detail = payload.get("detail") or "unusual options activity"
+        return (f"🐋 **{t}** {detail} — calls {payload.get('call_volume')} "
+                f"/ puts {payload.get('put_volume')}")
+    if alert_type == "news_spike":
+        return (f"📰 **{t}** news spike ({payload.get('sentiment'):+.2f} "
+                f"{payload.get('source') or ''}): {payload.get('headline')}")
+    return f"🔔 **{t}** {alert_type}: {payload}"
+
+
 async def _dispatch_alert(
     session: AsyncSession,
     user: User,
+    cfg: dict[str, Any],
     alert_type: str,
     ticker: str | None,
     key: str,
     payload: dict[str, Any],
 ) -> bool:
-    """Insert into alert_log (dedup) and stub-deliver. Returns True iff
-    a NEW alert was recorded (false on dedup hit).
+    """Insert into alert_log (dedup) and deliver. Returns True iff a NEW
+    alert was recorded (false on dedup hit).
+
+    Delivery: Discord webhook when cfg selects it, else email log stub.
+    The alert_log row is written either way — `delivered` records whether
+    the outbound send succeeded, so failed webhooks are auditable.
 
     The unique constraint on (user_id, key) is the dedup primitive — we
     rely on IntegrityError to short-circuit duplicates without a SELECT-
@@ -99,28 +128,42 @@ async def _dispatch_alert(
     if existing.scalars().first() is not None:
         return False
 
+    webhook = cfg.get("discord_webhook_url") if cfg.get("channel") == "discord" else None
+    if webhook:
+        delivered = await send_discord(webhook, _format_alert(alert_type, ticker, payload))
+        channel = "discord"
+        if not delivered:
+            logger.warning(
+                "Discord alert delivery failed user=%s key=%s — logged undelivered",
+                user.email, key,
+            )
+    else:
+        delivered = True  # stub-delivered immediately
+        channel = "email_log_stub"
+        logger.info(
+            "ALERT_STUB user=%s type=%s ticker=%s key=%s payload=%s",
+            user.email, alert_type, ticker, key, payload,
+        )
+
     log = AlertLog(
         user_id=user.id,
         alert_type=alert_type,
         ticker=ticker,
         key=key,
         payload=payload,
-        delivered=True,  # stub-delivered immediately; flip to False if delivery fails
-        delivery_channel="email_log_stub",
+        delivered=delivered,
+        delivery_channel=channel,
     )
     session.add(log)
     await session.flush()
-    logger.info(
-        "ALERT_STUB user=%s type=%s ticker=%s key=%s payload=%s",
-        user.email, alert_type, ticker, key, payload,
-    )
     return True
 
 
 # ── Detectors ───────────────────────────────────────────────────────────────
 
 async def _scan_rec_change(
-    session: AsyncSession, user: User, scope_tickers: set[str], weights: dict[str, float]
+    session: AsyncSession, user: User, cfg: dict[str, Any],
+    scope_tickers: set[str], weights: dict[str, float],
 ) -> int:
     """Today's weighted_action != yesterday's weighted_action for a ticker
     in the user's scope. Fires once per (ticker, date, transition)."""
@@ -155,7 +198,7 @@ async def _scan_rec_change(
             continue
         key = f"rec_change:{ticker}:{today.isoformat()}:{prev_action}->{today_action}"
         sent = await _dispatch_alert(
-            session, user, "rec_change", ticker, key,
+            session, user, cfg, "rec_change", ticker, key,
             {"prev": prev_action, "now": today_action},
         )
         if sent:
@@ -166,6 +209,7 @@ async def _scan_rec_change(
 async def _scan_conviction_breach(
     session: AsyncSession,
     user: User,
+    cfg: dict[str, Any],
     scope_tickers: set[str],
     weights: dict[str, float],
     threshold: int,
@@ -189,7 +233,7 @@ async def _scan_conviction_breach(
             continue
         key = f"conviction_breach:{r.ticker}:{today.isoformat()}:{int(round(new_conv))}"
         sent = await _dispatch_alert(
-            session, user, "conviction_breach", r.ticker, key,
+            session, user, cfg, "conviction_breach", r.ticker, key,
             {"conviction": round(new_conv, 1), "threshold": threshold},
         )
         if sent:
@@ -200,6 +244,7 @@ async def _scan_conviction_breach(
 async def _scan_earnings_proximity(
     session: AsyncSession,
     user: User,
+    cfg: dict[str, Any],
     scope_tickers: set[str],
     days_before: int,
 ) -> int:
@@ -219,7 +264,7 @@ async def _scan_earnings_proximity(
         days_until = (ec.earnings_date - today).days
         key = f"earnings_proximity:{ec.ticker}:{ec.earnings_date.isoformat()}:T-{days_until}"
         sent = await _dispatch_alert(
-            session, user, "earnings_proximity", ec.ticker, key,
+            session, user, cfg, "earnings_proximity", ec.ticker, key,
             {"earnings_date": ec.earnings_date.isoformat(), "days_until": days_until,
              "fiscal_quarter": ec.fiscal_quarter},
         )
@@ -229,7 +274,7 @@ async def _scan_earnings_proximity(
 
 
 async def _scan_unusual_flow(
-    session: AsyncSession, user: User, scope_tickers: set[str]
+    session: AsyncSession, user: User, cfg: dict[str, Any], scope_tickers: set[str]
 ) -> int:
     """Today's options snapshot has unusual_activity=True. One fire per
     (ticker, date) — won't repeat on subsequent scans the same day."""
@@ -251,7 +296,7 @@ async def _scan_unusual_flow(
         seen.add(snap.ticker)
         key = f"unusual_flow:{snap.ticker}:{date.today().isoformat()}"
         sent = await _dispatch_alert(
-            session, user, "unusual_flow", snap.ticker, key,
+            session, user, cfg, "unusual_flow", snap.ticker, key,
             {"detail": snap.unusual_activity_detail,
              "call_volume": snap.total_call_volume,
              "put_volume": snap.total_put_volume},
@@ -262,7 +307,7 @@ async def _scan_unusual_flow(
 
 
 async def _scan_news_spike(
-    session: AsyncSession, user: User, scope_tickers: set[str]
+    session: AsyncSession, user: User, cfg: dict[str, Any], scope_tickers: set[str]
 ) -> int:
     """News with FinBERT |sentiment| >= 0.5 today, mapped to scope tickers
     via news_ticker_relevance."""
@@ -284,7 +329,7 @@ async def _scan_news_spike(
             continue
         key = f"news_spike:{ticker}:{news.id}"
         sent = await _dispatch_alert(
-            session, user, "news_spike", ticker, key,
+            session, user, cfg, "news_spike", ticker, key,
             {"headline": (news.headline or "")[:200],
              "sentiment": round(score, 2),
              "source": news.source},
@@ -335,25 +380,25 @@ async def _scan_for_user(session: AsyncSession, user: User) -> dict[str, int]:
     counts: dict[str, int] = {}
 
     if cfg.get("rec_change") and _tier_meets_min(tier, _ALERT_TIER_MIN.get("rec_change")):
-        counts["rec_change"] = await _scan_rec_change(session, user, scope, weights)
+        counts["rec_change"] = await _scan_rec_change(session, user, cfg, scope, weights)
 
     if cfg.get("conviction_breach") and _tier_meets_min(tier, _ALERT_TIER_MIN.get("conviction_breach")):
         threshold = int(cfg.get("conviction_threshold", 60))
         counts["conviction_breach"] = await _scan_conviction_breach(
-            session, user, scope, weights, threshold
+            session, user, cfg, scope, weights, threshold
         )
 
     if cfg.get("earnings_proximity") and _tier_meets_min(tier, _ALERT_TIER_MIN.get("earnings_proximity")):
         days = int(cfg.get("earnings_days_before", 3))
         counts["earnings_proximity"] = await _scan_earnings_proximity(
-            session, user, scope, days
+            session, user, cfg, scope, days
         )
 
     if cfg.get("unusual_flow") and _tier_meets_min(tier, _ALERT_TIER_MIN.get("unusual_flow")):
-        counts["unusual_flow"] = await _scan_unusual_flow(session, user, scope)
+        counts["unusual_flow"] = await _scan_unusual_flow(session, user, cfg, scope)
 
     if cfg.get("news_spike") and _tier_meets_min(tier, _ALERT_TIER_MIN.get("news_spike")):
-        counts["news_spike"] = await _scan_news_spike(session, user, scope)
+        counts["news_spike"] = await _scan_news_spike(session, user, cfg, scope)
 
     # insider_filing intentionally not implemented yet — needs a per-user
     # baseline of "last seen insider filing", deferred until insider data
