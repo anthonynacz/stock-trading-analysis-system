@@ -1,7 +1,7 @@
-import { createContext, useContext, useState, useCallback, useRef } from 'react';
+import { createContext, useContext, useMemo, useState, useCallback, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { ResearchResult } from '../types';
-import { analyzeResearch } from '../utils/api';
+import { analyzeResearch, getApiErrorMessage } from '../utils/api';
 
 interface ResearchContextType {
   /** Ticker currently being analyzed, or null if idle */
@@ -39,12 +39,7 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
         setLastResult(result);
       })
       .catch((err: unknown) => {
-        const msg =
-          err && typeof err === 'object' && 'response' in err
-            ? (err as { response: { data: { detail: string } } }).response?.data
-                ?.detail
-            : 'Analysis failed';
-        setAnalyzeError(msg || 'Analysis failed');
+        setAnalyzeError(getApiErrorMessage(err, 'Analysis failed'));
       })
       .finally(() => {
         setAnalyzingTicker(null);
@@ -55,20 +50,19 @@ export function ResearchProvider({ children }: { children: ReactNode }) {
   const consumeResult = useCallback(() => setLastResult(null), []);
   const clearError = useCallback(() => setAnalyzeError(null), []);
 
-  return (
-    <ResearchContext.Provider
-      value={{
-        analyzingTicker,
-        analyzeError,
-        lastResult,
-        startAnalysis,
-        consumeResult,
-        clearError,
-      }}
-    >
-      {children}
-    </ResearchContext.Provider>
+  const value = useMemo<ResearchContextType>(
+    () => ({
+      analyzingTicker,
+      analyzeError,
+      lastResult,
+      startAnalysis,
+      consumeResult,
+      clearError,
+    }),
+    [analyzingTicker, analyzeError, lastResult, startAnalysis, consumeResult, clearError],
   );
+
+  return <ResearchContext.Provider value={value}>{children}</ResearchContext.Provider>;
 }
 
 export function useResearchContext() {

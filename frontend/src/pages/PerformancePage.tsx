@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  getOutcomesSummary,
-  type OutcomeBucket,
-  type OutcomesSummary,
-} from '../utils/api';
+import { Link } from 'react-router-dom';
+import { getApiErrorMessage, getOutcomesSummary } from '../utils/api';
+import type { OutcomeBucket, OutcomesSummary } from '../types';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
+import { EmptyCard, ErrorBox } from '../components/ui/feedback';
+import { fmtPct, fmtSigned } from '../utils/format';
+import { ACTION_TEXT_CLASS } from '../utils/theme';
 
 const WINDOWS = [30, 90, 180] as const;
 const HORIZON_LABEL: Record<string, string> = {
@@ -12,23 +14,17 @@ const HORIZON_LABEL: Record<string, string> = {
   t20: 'T+20',
 };
 
-const ACTION_COLORS: Record<string, string> = {
-  STRONG_BUY: 'text-emerald-400',
-  BUY: 'text-emerald-300',
-  HOLD: 'text-amber-300',
-  SELL: 'text-red-300',
-  STRONG_SELL: 'text-red-400',
-};
+const WINDOW_OPTIONS = WINDOWS.map((w) => ({ key: String(w), label: `${w}d` }));
+const SIGNAL_SORTS = [
+  { key: 'hit_rate', label: 'By hit rate' },
+  { key: 'return', label: 'By avg return' },
+  { key: 'n', label: 'By sample size' },
+] as const;
+type SignalSort = (typeof SIGNAL_SORTS)[number]['key'];
 
-function pct(v: number | null | undefined, digits = 0): string {
-  if (v == null) return '—';
-  return `${(v * 100).toFixed(digits)}%`;
-}
-
-function ret(v: number | null | undefined): string {
-  if (v == null) return '—';
-  return `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
-}
+// Hit rates arrive as fractions (0.57), returns as percents (1.23).
+const pct = (v: number | null | undefined) => fmtPct(v, 1, { fraction: true });
+const ret = (v: number | null | undefined) => fmtSigned(v, 2, '%');
 
 function hitClass(rate: number | null | undefined): string {
   if (rate == null) return 'text-text-secondary';
@@ -67,7 +63,7 @@ export default function PerformancePage() {
   const [data, setData] = useState<OutcomesSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [signalSort, setSignalSort] = useState<'hit_rate' | 'n' | 'return'>('hit_rate');
+  const [signalSort, setSignalSort] = useState<SignalSort>('hit_rate');
 
   useEffect(() => {
     let cancelled = false;
@@ -80,7 +76,7 @@ export default function PerformancePage() {
         }
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load outcomes');
+        if (!cancelled) setError(getApiErrorMessage(e, 'Failed to load outcomes'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -115,37 +111,23 @@ export default function PerformancePage() {
               signals that fired, sign-adjusted by the signal's points.
             </p>
           </div>
-          <div className="flex gap-1.5">
-            {WINDOWS.map((w) => (
-              <button
-                key={w}
-                onClick={() => setDays(w)}
-                className={`px-3 py-1.5 text-[11px] font-semibold rounded transition-colors ${
-                  days === w
-                    ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
-                    : 'bg-card border border-border text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                {w}d
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={WINDOW_OPTIONS}
+            value={String(days)}
+            onChange={(k) => setDays(Number(k))}
+          />
         </div>
 
-        {error && (
-          <div className="py-3 px-3 bg-red-900/20 border border-red-900/40 rounded text-sm text-red-400">
-            {error}
-          </div>
-        )}
+        {error && <ErrorBox message={error} />}
 
         {loading && data === null && <p className="text-sm text-text-secondary">Loading…</p>}
 
         {data !== null && !hasData && (
-          <div className="bg-card border border-border rounded-lg p-6 text-sm text-text-secondary">
+          <EmptyCard>
             No scored outcomes yet. The nightly scoring job runs at 18:00 ET on weekdays and
             backfills the last 180 days of recommendations on its first run — check back after
             the next run, or trigger it from the backend.
-          </div>
+          </EmptyCard>
         )}
 
         {hasData && (
@@ -183,7 +165,7 @@ export default function PerformancePage() {
                   <tbody className="divide-y divide-border">
                     {Object.entries(data.by_action).map(([action, buckets]) => (
                       <tr key={action}>
-                        <td className={`px-3 py-2 font-semibold ${ACTION_COLORS[action] ?? ''}`}>
+                        <td className={`px-3 py-2 font-semibold ${ACTION_TEXT_CLASS[action] ?? ''}`}>
                           {action}
                         </td>
                         {['t1', 't5', 't20'].map((h) => {
@@ -217,26 +199,18 @@ export default function PerformancePage() {
                 <h2 className="text-sm font-bold text-text-secondary uppercase tracking-wider">
                   Signal hit rates
                 </h2>
-                <div className="flex gap-1.5">
-                  {(
-                    [
-                      ['hit_rate', 'By hit rate'],
-                      ['return', 'By avg return'],
-                      ['n', 'By sample size'],
-                    ] as const
-                  ).map(([key, label]) => (
-                    <button
-                      key={key}
-                      onClick={() => setSignalSort(key)}
-                      className={`px-2.5 py-1 text-[11px] font-semibold rounded transition-colors ${
-                        signalSort === key
-                          ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
-                          : 'bg-card border border-border text-text-secondary hover:text-text-primary'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-3">
+                  <Link
+                    to="/knowledge?tab=signals"
+                    className="text-[11px] text-accent-400 hover:text-accent-300"
+                  >
+                    Signal reference →
+                  </Link>
+                  <SegmentedControl
+                    options={[...SIGNAL_SORTS]}
+                    value={signalSort}
+                    onChange={setSignalSort}
+                  />
                 </div>
               </div>
               {sortedSignals.length === 0 ? (
@@ -266,8 +240,7 @@ export default function PerformancePage() {
                               s.avg_points >= 0 ? 'text-emerald-300' : 'text-red-300'
                             }`}
                           >
-                            {s.avg_points >= 0 ? '+' : ''}
-                            {s.avg_points}
+                            {fmtSigned(s.avg_points)}
                           </td>
                           <td className={`px-3 py-2 text-right tabular-nums ${hitClass(s.t5.hit_rate)}`}>
                             {pct(s.t5.hit_rate)}

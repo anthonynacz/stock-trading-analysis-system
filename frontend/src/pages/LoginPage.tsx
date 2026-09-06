@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
-import api from '../utils/api';
+import { Link, Navigate, useLocation, useNavigate, type Location } from 'react-router-dom';
+import api, { getApiErrorMessage } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 
 /**
@@ -15,14 +15,19 @@ import { useAuth } from '../contexts/AuthContext';
 export default function LoginPage() {
   const { user, token, legacyMode, setToken, refresh } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // RequireAuth passes the guarded location as `state.from`; return there after login.
+  const fromLoc = (location.state as { from?: Location } | null)?.from;
+  const from = fromLoc ? `${fromLoc.pathname}${fromLoc.search}${fromLoc.hash}` : '/';
+
   // Bounce only when truly signed in (real token). The LEGACY_MODE-resolved
   // legacy admin still lets the user reach this page to switch identity.
   if (user && token) {
-    return <Navigate to="/" replace />;
+    return <Navigate to={from} replace />;
   }
 
   const handleDevLogin = async (e: React.FormEvent) => {
@@ -36,10 +41,9 @@ export default function LoginPage() {
       });
       setToken(res.data.access_token);
       await refresh();
-      navigate('/', { replace: true });
+      navigate(from, { replace: true });
     } catch (e) {
-      const detail = (e as { response?: { data?: { detail?: string } } }).response?.data?.detail;
-      setError(detail || (e instanceof Error ? e.message : 'Sign-in failed'));
+      setError(getApiErrorMessage(e, 'Sign-in failed'));
     } finally {
       setSubmitting(false);
     }
@@ -67,7 +71,7 @@ export default function LoginPage() {
               placeholder="you@example.com"
               autoComplete="email"
               required
-              className="mt-1 w-full bg-page border border-border rounded px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-500"
+              className="mt-1 w-full bg-page border border-border rounded px-3 py-2 text-sm text-text-primary focus:border-accent-500"
             />
           </label>
 
@@ -89,7 +93,7 @@ export default function LoginPage() {
         {legacyMode && (
           <p className="text-[11px] text-amber-300 bg-amber-900/15 border border-amber-500/25 rounded px-2.5 py-2">
             <span className="font-semibold">Legacy mode is on.</span> If you don't sign in
-            here, the <a href="/" className="text-accent-400 hover:underline">dashboard</a> opens
+            here, the <Link to="/" className="text-accent-400 hover:underline">dashboard</Link> opens
             as the legacy admin. Sign in above to switch to a real user (e.g.{' '}
             <code className="font-mono">anthony@vela.io</code>).
           </p>

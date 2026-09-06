@@ -7,7 +7,7 @@ GET  /api/me                           # Current user (id, email, role, provider
 GET  /api/me/entitlements              # Tier + feature flags + monthly quotas + credit balances
 POST /api/dev/token                    # Mint dev HS256 JWT { email } (gated by DEV_TOKEN_ENABLED)
 GET  /api/watchlist                    # Active watchlist with status tags; ?date= for historical
-GET  /api/watchlist/history            # Historical snapshots; ?ticker=&days=
+GET  /api/watchlist/history            # Historical snapshots; ?ticker=&days= (no portal consumer)
 GET  /api/watchlist/changes            # Entrants/exiters for a date; ?date=
 POST /api/watchlist                    # Add manual ticker { "ticker": "AAPL" }
 DELETE /api/watchlist/{ticker}         # Remove manual ticker
@@ -31,10 +31,10 @@ GET  /api/options/deep/{id}            # Single deep analysis
 DELETE /api/options/deep/{id}          # Delete a deep analysis
 POST /api/strikes/snapshots            # Save strike scan results { budget, results }
 GET  /api/strikes/snapshots            # Load saved snapshot; ?date=
-GET  /api/strikes/snapshots/dates      # List dates with saved snapshots
+GET  /api/strikes/snapshots/dates      # List dates with saved snapshots (no portal consumer)
 GET  /api/trends/{ticker}               # Daily trend data with SMA; ?days=20&sma=5
 GET  /api/status                       # Health check, last refresh times
-POST /api/refresh                      # Legacy full pipeline trigger (same as /pipeline/run with no body)
+POST /api/refresh                      # Legacy full pipeline trigger (same as /pipeline/run with no body; no portal consumer)
 POST /api/pipeline/run                 # Start pipeline; body { phases?: string[] } for selective runs
 GET  /api/pipeline/status              # Poll pipeline progress (status, current phase, completed phases)
 POST /api/research/{ticker}            # On-demand full analysis for any ticker (~30-60s)

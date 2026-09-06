@@ -19,11 +19,11 @@ export default function WatchlistChanges({
       {/* Collapsed band — always visible */}
       <button
         onClick={() => setExpanded((v) => !v)}
-        className="w-full flex items-center gap-3 px-3 py-1.5 text-left hover:bg-border/30 transition-colors rounded-lg"
+        className="w-full flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 text-left hover:bg-border/30 transition-colors rounded-lg"
       >
         {/* Entrant badges */}
         {entrants.length > 0 && (
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-start gap-1.5 min-w-0">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-green-400">
               +{entrants.length}
             </span>
@@ -47,7 +47,7 @@ export default function WatchlistChanges({
 
         {/* Exiter badges */}
         {exiters.length > 0 && (
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-start gap-1.5 min-w-0">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-red-400">
               &minus;{exiters.length}
             </span>

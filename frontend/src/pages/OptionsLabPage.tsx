@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import type {
   DeepOptionsAnalysis,
   ExpiryGreeksRow,
@@ -14,23 +14,11 @@ import type {
 } from '../types';
 import { getDeepOptionsResults, deleteDeepOptionsResult } from '../utils/api';
 import { useOptionsLabContext } from '../contexts/OptionsLabContext';
+import { fmtInt, fmtNum, fmtPct, fmtPrice } from '../utils/format';
+import { BIAS_COLORS, PALETTE, VERDICT_COLORS } from '../utils/theme';
+import { EmptyCard, LoadingRow, Spinner } from '../components/ui/feedback';
 
 // ── helpers ──────────────────────────────────────────────────────────────
-
-function fmtNum(v: number | null | undefined, digits = 2, fallback = '—'): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return fallback;
-  return v.toFixed(digits);
-}
-
-function fmtPct(v: number | null | undefined, digits = 2): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return '—';
-  return `${v.toFixed(digits)}%`;
-}
-
-function fmtInt(v: number | null | undefined, fallback = '—'): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return fallback;
-  return Math.round(v).toLocaleString();
-}
 
 function fmtTimestamp(ts: string): string {
   const d = new Date(ts);
@@ -43,24 +31,6 @@ function fmtExpiry(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
-
-const VERDICT_COLORS: Record<string, string> = {
-  BUY_CALL: '#2ea043',
-  BUY_CALL_SPREAD: '#2ea043',
-  BUY_PUT: '#da3633',
-  BUY_PUT_SPREAD: '#da3633',
-  SELL_PUT_SPREAD: '#56d364',
-  SELL_CALL_SPREAD: '#f85149',
-  SELL_IRON_CONDOR: '#d29922',
-  BUY_STRADDLE: '#8b5cf6',
-  NO_TRADE: '#6e7681',
-};
-
-const BIAS_COLORS: Record<string, string> = {
-  BULLISH: '#2ea043',
-  BEARISH: '#da3633',
-  NEUTRAL: '#8b949e',
-};
 
 const SEVERITY_STYLES: Record<RiskSeverity, { bg: string; text: string; border: string }> = {
   HIGH: { bg: 'bg-red-900/30', text: 'text-red-400', border: 'border-red-800/50' },
@@ -87,7 +57,7 @@ function ResultCard({ r, selected, onClick, onDelete }: {
   onClick: () => void;
   onDelete: () => void;
 }) {
-  const verdictColor = VERDICT_COLORS[r.verdict ?? 'NO_TRADE'] ?? '#6e7681';
+  const verdictColor = VERDICT_COLORS[r.verdict ?? 'NO_TRADE'] ?? PALETTE.grayMuted;
   const biasColor = BIAS_COLORS[r.directional_bias ?? 'NEUTRAL'];
   const ivRank = r.iv_rank ?? 0;
   const risks = r.hidden_risks ?? [];
@@ -96,15 +66,28 @@ function ResultCard({ r, selected, onClick, onDelete }: {
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
       onClick={onClick}
-      className={`bg-card border rounded-lg p-3 cursor-pointer transition-all hover:border-text-secondary group relative ${
+      onKeyDown={(e) => {
+        // Only handle keys on the card itself; the nested delete button owns its own Enter.
+        if (e.target !== e.currentTarget) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className={`bg-card border rounded-lg p-3 cursor-pointer transition-all hover:border-text-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent-500 group relative ${
         selected ? 'border-accent-500 ring-1 ring-accent-500/30' : 'border-border'
       }`}
     >
       <button
+        type="button"
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="absolute top-2 right-2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-red-900/40 transition-all text-text-secondary hover:text-red-400"
+        className="absolute top-2 right-2 p-1 rounded opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-red-900/40 transition-all text-text-secondary hover:text-red-400"
         title="Delete"
+        aria-label={`Delete ${r.ticker} analysis`}
       >
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -125,9 +108,7 @@ function ResultCard({ r, selected, onClick, onDelete }: {
       <div className="grid grid-cols-3 gap-1 text-[10px] mb-1.5">
         <div>
           <div className="text-text-secondary">Price</div>
-          <div className="font-mono text-text-primary">
-            {r.stock_price != null ? `$${r.stock_price.toFixed(2)}` : '—'}
-          </div>
+          <div className="font-mono text-text-primary">{fmtPrice(r.stock_price)}</div>
         </div>
         <div>
           <div className="text-text-secondary">IV Rank</div>
@@ -165,7 +146,7 @@ function ResultCard({ r, selected, onClick, onDelete }: {
 
 function StrategyCard({ strategy }: { strategy: StrategyRecommendation | null }) {
   if (!strategy) return null;
-  const color = VERDICT_COLORS[strategy.verdict] ?? '#6e7681';
+  const color = VERDICT_COLORS[strategy.verdict] ?? PALETTE.grayMuted;
   const verdictLabel = strategy.verdict.replace(/_/g, ' ');
 
   return (
@@ -220,6 +201,13 @@ function StrategyCard({ strategy }: { strategy: StrategyRecommendation | null })
           ))}
         </ul>
       )}
+
+      <Link
+        to="/knowledge?tab=strategies"
+        className="inline-block mt-3 text-[11px] text-accent-400 hover:text-accent-300 transition-colors"
+      >
+        Strategy guide →
+      </Link>
     </div>
   );
 }
@@ -620,7 +608,7 @@ function DeepDetail({
 
       {/* Price + IV */}
       <div className="grid grid-cols-3 gap-2">
-        <StatTile label="Price" value={r.stock_price != null ? `$${r.stock_price.toFixed(2)}` : '—'} />
+        <StatTile label="Price" value={fmtPrice(r.stock_price)} />
         <StatTile label="IV Rank" value={r.iv_rank != null ? r.iv_rank.toFixed(0) : '—'} />
         <StatTile label="IV %tile" value={r.iv_percentile != null ? r.iv_percentile.toFixed(0) : '—'} />
       </div>
@@ -713,20 +701,30 @@ export default function OptionsLabPage() {
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [filterTicker, setFilterTicker] = useState('');
+  const [debounced, setDebounced] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
   const autoAnalyzedRef = useRef<string | null>(null);
+  const seqRef = useRef(0);
 
-  const fetchResults = useCallback(async () => {
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(filterTicker.trim().toUpperCase()), 250);
+    return () => clearTimeout(t);
+  }, [filterTicker]);
+
+  // `background` keeps the grid visible (no spinner) for refreshes after an
+  // analysis completes; `seq` drops out-of-order responses.
+  const fetchResults = useCallback(async (background = false) => {
+    const seq = ++seqRef.current;
+    if (!background) setLoading(true);
     try {
-      setLoading(true);
-      const data = await getDeepOptionsResults(filterTicker || undefined);
-      setResults(data);
+      const data = await getDeepOptionsResults(debounced || undefined);
+      if (seq === seqRef.current) setResults(data);
     } catch {
       // silent
     } finally {
-      setLoading(false);
+      if (seq === seqRef.current) setLoading(false);
     }
-  }, [filterTicker]);
+  }, [debounced]);
 
   useEffect(() => { fetchResults(); }, [fetchResults]);
 
@@ -734,7 +732,7 @@ export default function OptionsLabPage() {
     if (lastResult) {
       setSelectedId(lastResult.id);
       consumeResult();
-      fetchResults();
+      fetchResults(true);
     }
   }, [lastResult, consumeResult, fetchResults]);
 
@@ -803,14 +801,14 @@ export default function OptionsLabPage() {
     <div className="min-h-screen bg-page text-text-primary">
       <div className="max-w-7xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-4 sm:space-y-6">
         {/* Header */}
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div>
             <h1 className="text-xl font-bold text-text-primary">Options Lab</h1>
             <p className="text-[11px] text-text-secondary">
               Expert options analysis: greeks, vol structure, positioning, strategy + hidden risks
             </p>
           </div>
-          <div className="flex items-center gap-2 ml-auto">
+          <div className="flex flex-wrap items-center gap-2 sm:ml-auto w-full sm:w-auto">
             <button
               type="button"
               onClick={handleRefreshAll}
@@ -820,7 +818,7 @@ export default function OptionsLabPage() {
                   ? 'No tickers to refresh'
                   : `Re-run deep analysis for all ${results.length} ticker${results.length !== 1 ? 's' : ''}`
               }
-              className="px-3 py-1.5 text-sm font-semibold rounded bg-card border border-border text-text-primary hover:border-accent-500 hover:text-accent-300 disabled:opacity-40 disabled:hover:border-border disabled:hover:text-text-primary transition-colors flex items-center gap-1.5"
+              className="btn-secondary text-sm"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -836,7 +834,7 @@ export default function OptionsLabPage() {
                   ? 'No analyses to clear'
                   : `Delete all ${results.length} saved analysis${results.length !== 1 ? 'es' : ''}`
               }
-              className="px-3 py-1.5 text-sm font-semibold rounded bg-card border border-border text-text-primary hover:border-red-500 hover:text-red-400 disabled:opacity-40 disabled:hover:border-border disabled:hover:text-text-primary transition-colors flex items-center gap-1.5"
+              className="btn-danger text-sm"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -845,7 +843,7 @@ export default function OptionsLabPage() {
             </button>
             <form
               onSubmit={(e) => { e.preventDefault(); handleAnalyze(); }}
-              className="flex items-center gap-2"
+              className="flex items-center gap-2 flex-1 sm:flex-none"
             >
               <input
                 type="text"
@@ -853,16 +851,16 @@ export default function OptionsLabPage() {
                 onChange={(e) => { setTickerInput(e.target.value); clearError(); }}
                 placeholder="Enter ticker..."
                 disabled={!!analyzingTicker}
-                className="w-32 px-3 py-1.5 text-sm bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500 disabled:opacity-50"
+                className="flex-1 sm:flex-none sm:w-32 min-w-0 px-3 py-1.5 text-sm bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:border-accent-500 disabled:opacity-50"
               />
               <button
                 type="submit"
                 disabled={!!analyzingTicker || !tickerInput.trim()}
-                className="px-4 py-1.5 text-sm font-semibold rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 disabled:opacity-40 transition-colors flex items-center gap-2"
+                className="btn-primary text-sm px-4"
               >
                 {analyzingTicker && !batchProgress ? (
                   <>
-                    <div className="w-3.5 h-3.5 border-2 border-accent-400 border-t-transparent rounded-full animate-spin" />
+                    <Spinner size={3.5} tone="accent" />
                     Analyzing...
                   </>
                 ) : (
@@ -877,7 +875,7 @@ export default function OptionsLabPage() {
 
         {analyzingTicker && (
           <div className="bg-card border border-border rounded-lg p-4 flex items-center gap-3">
-            <div className="w-4 h-4 border-2 border-accent-400 border-t-transparent rounded-full animate-spin shrink-0" />
+            <Spinner size={4} tone="accent" />
             {batchProgress ? (
               <>
                 <div className="flex-1 flex items-center gap-3">
@@ -917,10 +915,11 @@ export default function OptionsLabPage() {
                 value={filterTicker}
                 onChange={(e) => setFilterTicker(e.target.value)}
                 placeholder="Filter by ticker..."
-                className="w-36 px-2 py-1 text-xs bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500"
+                className="w-36 px-2 py-1 text-xs bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:border-accent-500"
               />
               {filterTicker && (
                 <button
+                  type="button"
                   onClick={() => setFilterTicker('')}
                   className="text-xs text-text-secondary hover:text-text-primary"
                 >
@@ -933,15 +932,13 @@ export default function OptionsLabPage() {
             </div>
 
             {loading ? (
-              <div className="flex items-center justify-center py-12">
-                <div className="w-5 h-5 border-2 border-text-secondary border-t-transparent rounded-full animate-spin" />
-              </div>
+              <LoadingRow label={null} py="py-12" />
             ) : results.length === 0 ? (
-              <div className="bg-card border border-border rounded-lg p-8 text-center text-text-secondary text-sm">
-                {filterTicker
-                  ? `No analyses for "${filterTicker.toUpperCase()}"`
+              <EmptyCard>
+                {debounced
+                  ? `No analyses for "${debounced}"`
                   : 'No analyses yet. Enter a ticker above to start.'}
-              </div>
+              </EmptyCard>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                 {results.map((r) => (
@@ -966,9 +963,7 @@ export default function OptionsLabPage() {
                 analyzing={analyzingTicker === selectedResult.ticker}
               />
             ) : (
-              <div className="bg-card border border-border rounded-lg p-8 text-center text-text-secondary text-sm">
-                Click an analysis to view details
-              </div>
+              <EmptyCard>Click an analysis to view details</EmptyCard>
             )}
           </div>
         </div>

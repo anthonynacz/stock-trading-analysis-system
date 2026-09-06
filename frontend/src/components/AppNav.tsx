@@ -1,21 +1,84 @@
-import { useState, useCallback } from 'react';
-import { NavLink } from 'react-router-dom';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { fmtCount, useEntitlements } from '../contexts/EntitlementsContext';
 
-const links = [
+const primaryLinks = [
   { to: '/', label: 'Dashboard' },
   { to: '/universe', label: 'Universe' },
   { to: '/industries', label: 'Industries' },
   { to: '/research', label: 'Research' },
   { to: '/options-lab', label: 'Options Lab' },
   { to: '/scanner', label: 'Scanner' },
-  { to: '/charts', label: 'Charts' },
   { to: '/positions', label: 'Positions' },
+] as const;
+
+const moreLinks = [
+  { to: '/charts', label: 'Charts' },
   { to: '/performance', label: 'Performance' },
   { to: '/schedule', label: 'Schedule' },
   { to: '/knowledge', label: 'Knowledge' },
 ] as const;
+
+const links = [...primaryLinks, ...moreLinks];
+
+const desktopLinkClass = ({ isActive }: { isActive: boolean }) =>
+  `text-sm transition-colors ${
+    isActive
+      ? 'text-text-primary font-semibold border-b-2 border-accent-500'
+      : 'text-text-secondary hover:text-text-primary'
+  }`;
+
+function MoreMenu() {
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const { pathname } = useLocation();
+  const isActive = moreLinks.some((l) => pathname.startsWith(l.to));
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  return (
+    <div className="relative" ref={menuRef}>
+      <button
+        type="button"
+        onClick={() => setShowMenu((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={showMenu}
+        className={desktopLinkClass({ isActive })}
+      >
+        More ▾
+      </button>
+      {showMenu && (
+        <div className="absolute left-0 top-full mt-1 bg-card border border-border rounded-lg shadow-lg z-50 py-1 min-w-[150px] flex flex-col">
+          {moreLinks.map((l) => (
+            <NavLink
+              key={l.to}
+              to={l.to}
+              onClick={() => setShowMenu(false)}
+              className={({ isActive }) =>
+                `px-3 py-2 text-sm transition-colors ${
+                  isActive
+                    ? 'text-text-primary font-semibold bg-border/40 border-l-2 border-accent-500'
+                    : 'text-text-secondary hover:text-text-primary hover:bg-border/30 border-l-2 border-transparent'
+                }`
+              }
+            >
+              {l.label}
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const TIER_STYLES: Record<string, { bg: string; text: string; border: string }> = {
   FREE:    { bg: 'bg-gray-900/60',    text: 'text-text-secondary', border: 'border-gray-700/60' },
@@ -83,7 +146,7 @@ function UserBadge() {
       >
         {initials}
       </span>
-      <span className="text-xs text-text-secondary hidden md:inline">{user.email}</span>
+      <span className="text-xs text-text-secondary hidden xl:inline max-w-[160px] truncate">{user.email}</span>
       <NavLink
         to="/settings"
         title="Settings"
@@ -128,13 +191,13 @@ export default function AppNav() {
   return (
     <nav className="bg-card border-b border-border">
       <div className="max-w-7xl mx-auto flex items-center h-10 gap-3 md:gap-6 px-3 sm:px-4">
-        {/* Hamburger toggle — phones only */}
+        {/* Hamburger toggle — below lg */}
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
           aria-label={open ? 'Close navigation menu' : 'Open navigation menu'}
           aria-expanded={open}
-          className="md:hidden p-1 -ml-1 text-text-secondary hover:text-text-primary rounded transition-colors"
+          className="lg:hidden p-1 -ml-1 text-text-secondary hover:text-text-primary rounded transition-colors"
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             {open ? (
@@ -149,24 +212,14 @@ export default function AppNav() {
           Vela
         </span>
 
-        {/* Horizontal links — md (768px) and up */}
-        <div className="hidden md:flex items-center gap-6">
-          {links.map((l) => (
-            <NavLink
-              key={l.to}
-              to={l.to}
-              end={l.to === '/'}
-              className={({ isActive }) =>
-                `text-sm transition-colors ${
-                  isActive
-                    ? 'text-text-primary font-semibold border-b-2 border-accent-500'
-                    : 'text-text-secondary hover:text-text-primary'
-                }`
-              }
-            >
+        {/* Horizontal links — lg (1024px) and up */}
+        <div className="hidden lg:flex items-center gap-4">
+          {primaryLinks.map((l) => (
+            <NavLink key={l.to} to={l.to} end={l.to === '/'} className={desktopLinkClass}>
               {l.label}
             </NavLink>
           ))}
+          <MoreMenu />
         </div>
 
         <UserBadge />
@@ -174,7 +227,7 @@ export default function AppNav() {
 
       {/* Mobile dropdown — only rendered when open, below the bar */}
       {open && (
-        <div className="md:hidden border-t border-border bg-card shadow-lg">
+        <div className="lg:hidden border-t border-border bg-card shadow-lg">
           <div className="flex flex-col py-1">
             {links.map((l) => (
               <NavLink

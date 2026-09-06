@@ -1,73 +1,15 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import type { StrikeAllResult, StrikeRecommendation } from '../types';
+import type { StrikeAllResult } from '../types';
 import { getStrikeRecommendationsAll } from '../utils/api';
+import { fmtPrice } from '../utils/format';
+import { RiskLevel } from '../utils/options';
+import { BudgetSlider } from './BudgetSlider';
+import { RiskLevelTabs } from './RiskLevelTabs';
+import { StrikeCard } from './StrikeCard';
 
 interface StrikeRecommenderProps {
   ticker: string;
-}
-
-const RISK_LEVELS = ['conservative', 'moderate', 'aggressive'] as const;
-type RiskLevel = (typeof RISK_LEVELS)[number];
-
-function StrikeCard({
-  rec,
-  type,
-}: {
-  rec: StrikeRecommendation;
-  type: 'CALL' | 'PUT';
-}) {
-  const isCall = type === 'CALL';
-  const borderColor = isCall ? 'border-green-600/60' : 'border-red-600/60';
-  const labelColor = isCall ? 'text-green-400' : 'text-red-400';
-  const bgColor = isCall ? 'bg-green-900/10' : 'bg-red-900/10';
-
-  return (
-    <div className={`${bgColor} border ${borderColor} rounded-lg p-3 space-y-2`}>
-      <div className="flex items-center justify-between">
-        <span className={`text-xs font-bold uppercase ${labelColor}`}>{type}</span>
-        <span className="text-xs text-text-secondary">{rec.days_to_expiry}d to expiry</span>
-      </div>
-      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-        <span className="text-text-secondary">Strike</span>
-        <span className="text-text-primary font-mono text-right">${rec.strike.toFixed(2)}</span>
-        <span className="text-text-secondary">Expiry</span>
-        <span className="text-text-primary text-right">{rec.expiry}</span>
-        <span className="text-text-secondary">Premium</span>
-        <span className="text-text-primary font-mono text-right">${rec.premium_estimate.toFixed(2)}</span>
-        <span className="text-text-secondary">Delta</span>
-        <span className="text-text-primary font-mono text-right">{rec.delta_estimate.toFixed(3)}</span>
-        {rec.theta_estimate != null && (
-          <>
-            <span className="text-text-secondary">Theta</span>
-            <span className={`font-mono text-right ${rec.premium_estimate > 0 && Math.abs(rec.theta_estimate) / rec.premium_estimate > 0.02 ? 'text-amber-400' : 'text-text-primary'}`}>
-              {rec.theta_estimate.toFixed(4)}/day
-            </span>
-          </>
-        )}
-        {rec.vega_estimate != null && (
-          <>
-            <span className="text-text-secondary">Vega</span>
-            <span className="text-text-primary font-mono text-right">{rec.vega_estimate.toFixed(4)}</span>
-          </>
-        )}
-        <span className="text-text-secondary">Breakeven</span>
-        <span className="text-text-primary font-mono text-right">${rec.breakeven.toFixed(2)}</span>
-        <span className="text-text-secondary">Open Interest</span>
-        <span className="text-text-primary font-mono text-right">{rec.open_interest.toLocaleString()}</span>
-      </div>
-      {rec.theta_estimate != null && rec.premium_estimate > 0 &&
-        Math.abs(rec.theta_estimate) / rec.premium_estimate > 0.02 && (
-        <div className="flex items-center gap-1.5 text-[10px] text-amber-400 mt-1">
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-          Heavy theta decay — {(Math.abs(rec.theta_estimate) / rec.premium_estimate * 100).toFixed(1)}% premium/day
-        </div>
-      )}
-      <p className="text-[11px] text-text-secondary leading-relaxed border-t border-border/40 pt-2 mt-1">
-        {rec.explanation}
-      </p>
-    </div>
-  );
 }
 
 export default function StrikeRecommender({ ticker }: StrikeRecommenderProps) {
@@ -96,11 +38,9 @@ export default function StrikeRecommender({ ticker }: StrikeRecommenderProps) {
 
   const activePair = result ? result[activeTab] : null;
 
-  // Check which tabs have results for indicator dots
-  const hasResults = (level: RiskLevel): boolean | null => {
-    if (!result) return null;
-    const pair = result[level];
-    return pair.recommended_call !== null || pair.recommended_put !== null;
+  const hasResults = (level: RiskLevel): boolean => {
+    const pair = result ? result[level] : null;
+    return pair != null && (pair.recommended_call !== null || pair.recommended_put !== null);
   };
 
   return (
@@ -109,72 +49,40 @@ export default function StrikeRecommender({ ticker }: StrikeRecommenderProps) {
         Strike Recommender
       </h4>
 
-      {/* Budget slider */}
-      <div className="space-y-1">
-        <div className="flex justify-between text-[10px] text-text-secondary">
-          <span>Max Budget</span>
-          <span className="font-mono text-text-primary">${budget.toLocaleString()}</span>
-        </div>
-        <input
-          type="range"
-          min={50}
-          max={10000}
-          step={50}
-          value={budget}
-          onChange={(e) => setBudget(Number(e.target.value))}
-          className="w-full h-1.5 rounded-full appearance-none bg-border cursor-pointer accent-accent-500"
-        />
-        <div className="flex justify-between text-[9px] text-text-secondary">
-          <span>$50</span>
-          <span>$10,000</span>
-        </div>
-      </div>
+      <BudgetSlider value={budget} onChange={setBudget} />
 
-      {/* Find button */}
-      <button
-        onClick={handleFind}
-        disabled={loading}
-        className="w-full py-1.5 text-xs font-semibold rounded bg-accent-700/80 text-white hover:bg-accent-600/80 disabled:opacity-40 transition-colors"
-      >
+      <button onClick={handleFind} disabled={loading} className="btn-primary w-full justify-center">
         {loading ? 'Searching...' : 'Find Strikes'}
       </button>
 
-      {/* Error */}
       {error && <p className="text-xs text-red-400">{error}</p>}
 
-      {/* Results */}
       {result && (
         <div className="space-y-2">
           {result.current_price != null && (
             <p className="text-xs text-text-secondary">
-              Current price: <span className="font-mono text-text-primary">${result.current_price.toFixed(2)}</span>
+              Current price: <span className="font-mono text-text-primary">{fmtPrice(result.current_price)}</span>
             </p>
           )}
 
-          {/* Risk tabs */}
-          <div className="flex gap-1">
-            {RISK_LEVELS.map((level) => {
+          <RiskLevelTabs
+            active={activeTab}
+            onChange={setActiveTab}
+            size="xs"
+            fullWidth
+            indicator={(level) => {
               const has = hasResults(level);
               return (
-                <button
-                  key={level}
-                  onClick={() => setActiveTab(level)}
-                  className={`flex-1 px-2 py-1 text-[10px] font-semibold rounded capitalize transition-colors ${
-                    activeTab === level
-                      ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
-                      : 'bg-card border border-border text-text-secondary hover:text-text-primary'
-                  }`}
-                >
-                  {level}
-                  {has !== null && (
-                    <span className={`inline-block w-1.5 h-1.5 rounded-full ml-1.5 align-middle ${has ? 'bg-green-400' : 'bg-gray-600'}`} />
-                  )}
-                </button>
+                <span
+                  role="img"
+                  title={has ? 'Strikes found' : 'No strikes in budget'}
+                  aria-label={`${level}: ${has ? 'results' : 'no results'}`}
+                  className={`inline-block w-1.5 h-1.5 rounded-full ml-1.5 align-middle ${has ? 'bg-green-400' : 'bg-gray-600'}`}
+                />
               );
-            })}
-          </div>
+            }}
+          />
 
-          {/* Active tab results */}
           {activePair && (
             <div className="space-y-2">
               {activePair.recommended_call ? (

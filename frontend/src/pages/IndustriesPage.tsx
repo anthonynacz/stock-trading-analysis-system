@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type {
   IndustryRecommendation,
   IndustryDetail,
@@ -7,15 +8,11 @@ import type {
   IndustryTopComponent,
 } from '../types';
 import { getIndustries, getIndustryDetail } from '../utils/api';
+import { ACTION_COLORS, PALETTE } from '../utils/theme';
+import { fmtMarketCap, fmtPrice, fmtSigned } from '../utils/format';
 import IndustryCard from '../components/IndustryCard';
-
-const ACTION_COLOR: Record<string, string> = {
-  STRONG_BUY: '#2ea043',
-  BUY: '#56d364',
-  HOLD: '#d29922',
-  SELL: '#f85149',
-  STRONG_SELL: '#da3633',
-};
+import { ActionBadge } from '../components/ui/badges';
+import { EmptyCard, ErrorBox, LoadingRow } from '../components/ui/feedback';
 
 type ChartPoint = {
   date: string;       // ISO yyyy-mm-dd
@@ -164,14 +161,14 @@ function ConvictionChart({
         )}
         {/* History line */}
         {histPath && (
-          <path d={histPath} fill="none" stroke={lastHist && lastHist.score >= 0 ? '#2ea043' : '#f85149'} strokeWidth={1.5} />
+          <path d={histPath} fill="none" stroke={lastHist && lastHist.score >= 0 ? PALETTE.green : PALETTE.red} strokeWidth={1.5} />
         )}
         {/* Forward line — dashed + slightly transparent */}
         {fwdPath && (
           <path
             d={fwdPath}
             fill="none"
-            stroke={lastFwd && lastFwd.score >= 0 ? '#56d364' : '#fb7185'}
+            stroke={lastFwd && lastFwd.score >= 0 ? PALETTE.greenLight : '#fb7185'}
             strokeWidth={1.5}
             strokeDasharray="3 2"
             opacity={0.85}
@@ -184,7 +181,7 @@ function ConvictionChart({
             cx={xOf(p.offset)}
             cy={yOf(p.score)}
             r={p.offset === 0 ? 2.4 : 1.6}
-            fill={p.score >= 0 ? '#2ea043' : '#f85149'}
+            fill={p.score >= 0 ? PALETTE.green : PALETTE.red}
             stroke={p.offset === 0 ? '#34d399' : 'none'}
             strokeWidth={p.offset === 0 ? 0.8 : 0}
             opacity={p.forecast && p.offset !== 0 ? 0.85 : 1}
@@ -197,7 +194,7 @@ function ConvictionChart({
             x={xOf(off)}
             y={H - 3}
             fontSize="7"
-            fill={off === 0 ? '#34d399' : '#8b949e'}
+            fill={off === 0 ? '#34d399' : PALETTE.gray}
             textAnchor="middle"
           >
             {fmtOffset(off)}
@@ -219,7 +216,7 @@ function ConvictionChart({
           <span
             className="inline-block w-3 h-px"
             style={{
-              borderTop: '1px dashed #56d364',
+              borderTop: `1px dashed ${PALETTE.greenLight}`,
             }}
           />
           <span>Forecast</span>
@@ -253,14 +250,6 @@ function ExecutiveSummaryPanel({ summary }: { summary: string | null }) {
   );
 }
 
-function fmtCap(v: number | null): string {
-  if (v == null || !isFinite(v) || v <= 0) return '—';
-  if (v >= 1_000_000_000_000) return `$${(v / 1_000_000_000_000).toFixed(2)}T`;
-  if (v >= 1_000_000_000) return `$${(v / 1_000_000_000).toFixed(1)}B`;
-  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(0)}M`;
-  return `$${v.toLocaleString()}`;
-}
-
 function TopComponentsPanel({ items }: { items: IndustryTopComponent[] }) {
   if (items.length === 0) {
     return (
@@ -277,7 +266,7 @@ function TopComponentsPanel({ items }: { items: IndustryTopComponent[] }) {
       </div>
       <div className="space-y-1.5">
         {items.map((c) => {
-          const tc = ACTION_COLOR[c.action] ?? '#8b949e';
+          const tc = ACTION_COLORS[c.action] ?? PALETTE.gray;
           const conv = Number(c.conviction);
           return (
             <div
@@ -293,26 +282,18 @@ function TopComponentsPanel({ items }: { items: IndustryTopComponent[] }) {
                     </span>
                   )}
                 </div>
-                <span
-                  className="text-[10px] font-bold uppercase px-1.5 py-px rounded"
-                  style={{ color: tc, background: `${tc}1a` }}
-                >
-                  {c.action.replace('_', ' ')} {conv >= 0 ? '+' : ''}
-                  {conv.toFixed(0)}
+                <span className="flex items-center gap-1 shrink-0">
+                  <ActionBadge action={c.action} size="xxs" />
+                  <span className="text-[10px] font-mono font-bold tabular-nums" style={{ color: tc }}>
+                    {fmtSigned(conv)}
+                  </span>
                 </span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-2 gap-y-1 text-[10px] font-mono tabular-nums">
-                <CompMini label="Px" value={c.price != null ? `$${c.price.toFixed(2)}` : '—'} />
-                <CompMini label="Cap" value={fmtCap(c.market_cap)} />
+                <CompMini label="Px" value={fmtPrice(c.price)} />
+                <CompMini label="Cap" value={fmtMarketCap(c.market_cap)} />
                 <CompMini label="P/E" value={c.pe_ratio != null ? c.pe_ratio.toFixed(1) : '—'} />
-                <CompMini
-                  label="vs 52H"
-                  value={
-                    c.pct_from_52w_high != null
-                      ? `${c.pct_from_52w_high >= 0 ? '+' : ''}${c.pct_from_52w_high.toFixed(1)}%`
-                      : '—'
-                  }
-                />
+                <CompMini label="vs 52H" value={fmtSigned(c.pct_from_52w_high, 1, '%')} />
               </div>
             </div>
           );
@@ -334,40 +315,26 @@ function CompMini({ label, value }: { label: string; value: string }) {
 function DetailPanel({ detail, loading }: { detail: IndustryDetail | null; loading: boolean }) {
   if (loading) {
     return (
-      <div className="bg-card border border-border rounded-lg p-8 text-center text-sm text-text-secondary">
-        <div className="w-4 h-4 border-2 border-text-secondary border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-        Loading…
+      <div className="detail-panel">
+        <LoadingRow size={4} />
       </div>
     );
   }
   if (!detail) {
-    return (
-      <div className="bg-card border border-border rounded-lg p-8 text-center text-sm text-text-secondary">
-        Select an industry to view breakdown.
-      </div>
-    );
+    return <EmptyCard>Select an industry to view breakdown.</EmptyCard>;
   }
   const latest = detail.latest;
   const conv = Number(latest.conviction_score);
 
   return (
-    <div className="bg-card border border-border rounded-lg p-4 space-y-4 sticky top-4">
+    <div className="detail-panel p-4 space-y-4">
       <div>
         <div className="flex items-center justify-between gap-2 mb-1">
           <h3 className="text-lg font-bold text-text-primary">{detail.industry}</h3>
-          <span
-            className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
-            style={{
-              color: ACTION_COLOR[latest.action],
-              background: `${ACTION_COLOR[latest.action]}22`,
-              border: `1px solid ${ACTION_COLOR[latest.action]}55`,
-            }}
-          >
-            {latest.action.replace('_', ' ')}
-          </span>
+          <ActionBadge action={latest.action} bordered className="tracking-wider" />
         </div>
         <p className="text-xs text-text-secondary">
-          Conviction {conv >= 0 ? '+' : ''}{conv.toFixed(0)} · {latest.signal_count} signals ·{' '}
+          Conviction {fmtSigned(conv)} · {latest.signal_count} signals ·{' '}
           {latest.member_count ?? 0} members
         </p>
       </div>
@@ -429,14 +396,13 @@ function DetailPanel({ detail, loading }: { detail: IndustryDetail | null; loadi
         ) : (
           <ul className="space-y-1">
             {latest.signals.map((s, i) => {
-              const c = s.points >= 0 ? '#2ea043' : '#f85149';
+              const c = s.points >= 0 ? PALETTE.green : PALETTE.red;
               return (
                 <li key={i} className="text-[11px]">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-semibold text-text-primary">{s.signal}</span>
                     <span className="font-mono tabular-nums" style={{ color: c }}>
-                      {s.points >= 0 ? '+' : ''}
-                      {s.points}
+                      {fmtSigned(s.points)}
                     </span>
                   </div>
                   <p className="text-text-secondary leading-snug">{s.detail}</p>
@@ -457,7 +423,7 @@ function DetailPanel({ detail, loading }: { detail: IndustryDetail | null; loadi
         ) : (
           <div className="flex flex-wrap gap-1">
             {detail.members.map((m) => {
-              const tc = ACTION_COLOR[m.action] ?? '#8b949e';
+              const tc = ACTION_COLORS[m.action] ?? PALETTE.gray;
               return (
                 <span
                   key={m.id}
@@ -465,8 +431,7 @@ function DetailPanel({ detail, loading }: { detail: IndustryDetail | null; loadi
                   style={{ color: tc, background: `${tc}1a` }}
                   title={`${m.ticker}: ${m.action} (${Number(m.conviction_score).toFixed(0)})`}
                 >
-                  {m.ticker} {Number(m.conviction_score) > 0 ? '+' : ''}
-                  {Number(m.conviction_score).toFixed(0)}
+                  {m.ticker} {fmtSigned(Number(m.conviction_score))}
                 </span>
               );
             })}
@@ -487,32 +452,44 @@ function Obs({ label, value }: { label: string; value: string }) {
 }
 
 export default function IndustriesPage() {
+  const [params, setParams] = useSearchParams();
+  const selected = params.get('industry');
   const [industries, setIndustries] = useState<IndustryRecommendation[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<IndustryDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const detailRef = useRef<HTMLDivElement>(null);
+  // Industry selected by the URL on mount (Dashboard deep-link); cleared once handled.
+  const deepLinkRef = useRef(selected);
 
-  const fetchList = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const d = await getIndustries();
-      setIndustries(d);
-      if (!selected && d.length > 0) {
-        setSelected(d[0].industry);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load industries');
-    } finally {
-      setLoading(false);
-    }
-  }, [selected]);
+  // setParams changes identity with the URL; route through a ref so `select`
+  // stays stable and memoized cards don't re-render on every selection.
+  const setParamsRef = useRef(setParams);
+  setParamsRef.current = setParams;
+  const select = useCallback(
+    (name: string) => setParamsRef.current({ industry: name }, { replace: true }),
+    [],
+  );
 
   useEffect(() => {
-    fetchList();
-  }, [fetchList]);
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        setIndustries(await getIndustries());
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load industries');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  // Default to the top-ranked industry only when the URL carries no selection.
+  useEffect(() => {
+    if (!selected && industries[0]) select(industries[0].industry);
+  }, [selected, industries, select]);
 
   useEffect(() => {
     if (!selected) {
@@ -535,6 +512,22 @@ export default function IndustriesPage() {
       cancelled = true;
     };
   }, [selected]);
+
+  // Below lg the detail panel stacks under the card grid, so a deep-linked
+  // selection would otherwise land off-screen. Scroll once, when its detail resolves.
+  useEffect(() => {
+    const target = deepLinkRef.current;
+    if (!target) return;
+    if (selected !== target) {
+      deepLinkRef.current = null;
+      return;
+    }
+    if (!detail) return;
+    deepLinkRef.current = null;
+    if (window.matchMedia('(max-width: 1023px)').matches) {
+      detailRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+  }, [detail, selected]);
 
   const latestDate = industries[0]?.rec_date;
 
@@ -562,7 +555,7 @@ export default function IndustriesPage() {
             <div className="mt-2 flex flex-wrap gap-x-3 text-[11px] text-text-secondary">
               {(['STRONG_BUY', 'BUY', 'HOLD', 'SELL', 'STRONG_SELL'] as const).map((a) => (
                 <span key={a}>
-                  <span className="font-semibold" style={{ color: ACTION_COLOR[a] }}>
+                  <span className="font-semibold" style={{ color: ACTION_COLORS[a] }}>
                     {a.replace('_', ' ')}
                   </span>
                   : {counts[a] ?? 0}
@@ -576,19 +569,14 @@ export default function IndustriesPage() {
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
           <div className="lg:col-span-3">
             {loading ? (
-              <div className="flex items-center justify-center py-16 text-sm text-text-secondary">
-                <div className="w-4 h-4 border-2 border-text-secondary border-t-transparent rounded-full animate-spin mr-2" />
-                Loading…
-              </div>
+              <LoadingRow py="py-16" size={4} />
             ) : error ? (
-              <div className="bg-red-900/20 border border-red-900/40 rounded p-3 text-sm text-red-300">
-                {error}
-              </div>
+              <ErrorBox message={error} />
             ) : industries.length === 0 ? (
-              <div className="bg-card border border-border rounded-lg p-8 text-center text-sm text-text-secondary">
+              <EmptyCard>
                 No industry recommendations yet. Run the pipeline (Dashboard → Refresh)
                 and the <span className="text-text-primary">industries</span> phase will populate this view.
-              </div>
+              </EmptyCard>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {industries.map((i) => (
@@ -596,13 +584,13 @@ export default function IndustriesPage() {
                     key={i.id}
                     item={i}
                     selected={selected === i.industry}
-                    onClick={() => setSelected(i.industry)}
+                    onSelect={select}
                   />
                 ))}
               </div>
             )}
           </div>
-          <div className="lg:col-span-2">
+          <div ref={detailRef} className="lg:col-span-2">
             <DetailPanel detail={detail} loading={detailLoading} />
           </div>
         </div>

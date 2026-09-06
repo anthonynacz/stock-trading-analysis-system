@@ -11,6 +11,7 @@
 // the demotion and surface the gate that caused it.
 
 import type { SignalDetail } from '../types';
+import { getActionLabel } from './theme';
 
 interface Band {
   min: number;
@@ -34,7 +35,8 @@ export function classifyConviction(score: number): Band['action'] {
   return 'STRONG_SELL';
 }
 
-const BAND_RANK: Record<Band['action'], number> = {
+/** Ordering of actions from most bearish (0) to most bullish (4). */
+export const ACTION_RANK: Record<Band['action'], number> = {
   STRONG_SELL: 0,
   SELL: 1,
   HOLD: 2,
@@ -73,7 +75,7 @@ export function detectDemotion(
   const score = Number(conviction ?? 0);
   const natural = classifyConviction(score);
   const isDemoted =
-    (BAND_RANK[natural] ?? 2) > (BAND_RANK[action as Band['action']] ?? 2);
+    (ACTION_RANK[natural] ?? 2) > (ACTION_RANK[action as Band['action']] ?? 2);
 
   if (!isDemoted) {
     return {
@@ -102,6 +104,19 @@ export function detectDemotion(
   };
 }
 
-export function actionLabel(action: string): string {
-  return action.replace('_', ' ');
+/**
+ * Hover text for the action pill / demotion chip. Undefined when the action
+ * was not demoted, so it can be passed straight to `title=`.
+ */
+export function buildDemotionTooltip(
+  conviction: number | null | undefined,
+  demotion: DemotionInfo | null | undefined,
+): string | undefined {
+  if (!demotion?.isDemoted) return undefined;
+  return (
+    `Score ${Number(conviction ?? 0).toFixed(0)}: natural band ${getActionLabel(demotion.naturalAction)}. ` +
+    `Demoted to ${getActionLabel(demotion.finalAction)}` +
+    (demotion.gateName ? ` by ${demotion.gateName}.` : '.') +
+    (demotion.gateDetail ? ` ${demotion.gateDetail}` : '')
+  );
 }

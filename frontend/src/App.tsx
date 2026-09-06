@@ -1,29 +1,37 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
+import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { EntitlementsProvider } from './contexts/EntitlementsContext';
 import { ResearchProvider } from './contexts/ResearchContext';
 import { OptionsLabProvider } from './contexts/OptionsLabContext';
 import AppNav from './components/AppNav';
 import RequireAuth from './components/RequireAuth';
+import { PageSpinner } from './components/ui/feedback';
 import Dashboard from './pages/Dashboard';
-import UniversePage from './pages/UniversePage';
-import ResearchPage from './pages/ResearchPage';
-import KnowledgePage from './pages/KnowledgePage';
-import PositionsPage from './pages/PositionsPage';
-import OptionsLabPage from './pages/OptionsLabPage';
-import ScannerPage from './pages/ScannerPage';
-import IndustriesPage from './pages/IndustriesPage';
-import ChartsPage from './pages/ChartsPage';
 import LoginPage from './pages/LoginPage';
-import SettingsPage from './pages/SettingsPage';
-import SchedulePage from './pages/SchedulePage';
-import PerformancePage from './pages/PerformancePage';
 
-function ProtectedShell({ children }: { children: React.ReactNode }) {
+// Landing page (Dashboard) and LoginPage stay eager; everything else is its own chunk.
+const UniversePage = lazy(() => import('./pages/UniversePage'));
+const ResearchPage = lazy(() => import('./pages/ResearchPage'));
+const KnowledgePage = lazy(() => import('./pages/KnowledgePage'));
+const PositionsPage = lazy(() => import('./pages/PositionsPage'));
+const OptionsLabPage = lazy(() => import('./pages/OptionsLabPage'));
+const ScannerPage = lazy(() => import('./pages/ScannerPage'));
+const IndustriesPage = lazy(() => import('./pages/IndustriesPage'));
+const ChartsPage = lazy(() => import('./pages/ChartsPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const SchedulePage = lazy(() => import('./pages/SchedulePage'));
+const PerformancePage = lazy(() => import('./pages/PerformancePage'));
+
+function ProtectedLayout() {
   return (
     <RequireAuth>
-      <AppNav />
-      {children}
+      <div className="min-h-screen bg-page text-text-primary">
+        <AppNav />
+        <Suspense fallback={<PageSpinner />}>
+          <Outlet />
+        </Suspense>
+      </div>
     </RequireAuth>
   );
 }
@@ -37,18 +45,20 @@ function App() {
             <OptionsLabProvider>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
-              <Route path="/" element={<ProtectedShell><Dashboard /></ProtectedShell>} />
-              <Route path="/universe" element={<ProtectedShell><UniversePage /></ProtectedShell>} />
-              <Route path="/research" element={<ProtectedShell><ResearchPage /></ProtectedShell>} />
-              <Route path="/options-lab" element={<ProtectedShell><OptionsLabPage /></ProtectedShell>} />
-              <Route path="/scanner" element={<ProtectedShell><ScannerPage /></ProtectedShell>} />
-              <Route path="/industries" element={<ProtectedShell><IndustriesPage /></ProtectedShell>} />
-              <Route path="/charts" element={<ProtectedShell><ChartsPage /></ProtectedShell>} />
-              <Route path="/positions" element={<ProtectedShell><PositionsPage /></ProtectedShell>} />
-              <Route path="/performance" element={<ProtectedShell><PerformancePage /></ProtectedShell>} />
-              <Route path="/knowledge" element={<ProtectedShell><KnowledgePage /></ProtectedShell>} />
-              <Route path="/schedule" element={<ProtectedShell><SchedulePage /></ProtectedShell>} />
-              <Route path="/settings" element={<ProtectedShell><SettingsPage /></ProtectedShell>} />
+              <Route element={<ProtectedLayout />}>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/universe" element={<UniversePage />} />
+                <Route path="/research" element={<ResearchPage />} />
+                <Route path="/options-lab" element={<OptionsLabPage />} />
+                <Route path="/scanner" element={<ScannerPage />} />
+                <Route path="/industries" element={<IndustriesPage />} />
+                <Route path="/charts" element={<ChartsPage />} />
+                <Route path="/positions" element={<PositionsPage />} />
+                <Route path="/performance" element={<PerformancePage />} />
+                <Route path="/knowledge" element={<KnowledgePage />} />
+                <Route path="/schedule" element={<SchedulePage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+              </Route>
             </Routes>
             </OptionsLabProvider>
           </ResearchProvider>

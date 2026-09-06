@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   getWatchlist,
   getRecommendations,
@@ -12,6 +12,7 @@ import {
   getDiscoveryCandidates,
   getPositions,
   getRotationStatus,
+  getApiErrorMessage,
   type RecommendationSort,
 } from '../utils/api';
 import type {
@@ -28,41 +29,104 @@ import type {
   Position,
   RotationStatus,
 } from '../types';
+import { usePolling } from './usePolling';
+
+interface RefetchOptions {
+  /** Skip the loading spinner (poll ticks); foreground fetches show it. */
+  background?: boolean;
+}
 
 interface HookResult<T> {
   data: T | null;
   loading: boolean;
   error: string | null;
-  refetch: () => void;
+  refetch: (opts?: RefetchOptions) => void;
 }
 
-export function useWatchlist(sector?: string, date?: string): HookResult<WatchlistItem[]> {
-  const [data, setData] = useState<WatchlistItem[] | null>(null);
+interface QueryOptions {
+  /** Poll interval in ms; `null` disables polling. */
+  pollMs: number | null;
+  /**
+   * After the first successful load, keep the previous object when the
+   * payload is unchanged and never touch `loading` again — used for /status
+   * so the 30s tick does not re-render the whole Dashboard.
+   */
+  dedupe?: boolean;
+}
+
+/**
+ * Shared fetch/poll state machine behind the list hooks. `fetcher` must be a
+ * stable `useCallback` keyed on the hook's params — its identity drives the
+ * foreground refetch on param change. Out-of-order responses are dropped via
+ * a per-hook sequence counter, which is also bumped on unmount.
+ */
+function usePolledQuery<T>(
+  fetcher: () => Promise<T>,
+  fallback: string,
+  { pollMs, dedupe = false }: QueryOptions,
+): HookResult<T> {
+  const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const isToday = !date || date === new Date().toISOString().slice(0, 10);
+  const seq = useRef(0);
+  const loaded = useRef(false);
+  const first = useRef(true);
 
-  const refetch = useCallback(async () => {
-    try {
-      setLoading(true);
-      const result = await getWatchlist(sector, date);
-      setData(result);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch watchlist');
-    } finally {
-      setLoading(false);
-    }
-  }, [sector, date]);
+  const refetch = useCallback(
+    async (opts?: RefetchOptions) => {
+      const id = ++seq.current;
+      const quiet = dedupe && loaded.current;
+      if (!opts?.background && !quiet) setLoading(true);
+      try {
+        const result = await fetcher();
+        if (id !== seq.current) return;
+        if (dedupe) {
+          setData((prev) =>
+            prev && JSON.stringify(prev) === JSON.stringify(result) ? prev : result,
+          );
+        } else {
+          setData(result);
+        }
+        loaded.current = true;
+        setError(null);
+      } catch (e) {
+        if (id !== seq.current) return;
+        setError(getApiErrorMessage(e, fallback));
+      } finally {
+        if (id === seq.current && !quiet) setLoading(false);
+      }
+    },
+    [fetcher, fallback, dedupe],
+  );
+
+  useEffect(() => () => { seq.current++; }, []);
 
   useEffect(() => {
+    if (first.current) {
+      first.current = false;
+    } else {
+      // Param change: drop the previous params' payload so `loading && !data`
+      // gates show a spinner again. Background ticks never change `refetch`.
+      loaded.current = false;
+      setData(null);
+      setError(null);
+    }
     refetch();
-    if (!isToday) return;
-    const interval = setInterval(refetch, 60_000);
-    return () => clearInterval(interval);
-  }, [refetch, isToday]);
+  }, [refetch]);
+
+  usePolling(refetch, pollMs);
 
   return { data, loading, error, refetch };
+}
+
+const isTodayDate = (date?: string) =>
+  !date || date === new Date().toISOString().slice(0, 10);
+
+export function useWatchlist(sector?: string, date?: string): HookResult<WatchlistItem[]> {
+  const fetcher = useCallback(() => getWatchlist(sector, date), [sector, date]);
+  return usePolledQuery(fetcher, 'Failed to fetch watchlist', {
+    pollMs: isTodayDate(date) ? 60_000 : null,
+  });
 }
 
 export function useRecommendations(
@@ -71,34 +135,13 @@ export function useRecommendations(
   date?: string,
   sort?: RecommendationSort,
 ): HookResult<Recommendation[]> {
-  const [data, setData] = useState<Recommendation[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const isToday = !date || date === new Date().toISOString().slice(0, 10);
-
-  const refetch = useCallback(async () => {
-    try {
-      setLoading(true);
-      const result = await getRecommendations(action, minConviction, date, sort);
-      setData(result);
-      setError(null);
-    } catch (e) {
-      setError(
-        e instanceof Error ? e.message : 'Failed to fetch recommendations',
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [action, minConviction, date, sort]);
-
-  useEffect(() => {
-    refetch();
-    if (!isToday) return;
-    const interval = setInterval(refetch, 60_000);
-    return () => clearInterval(interval);
-  }, [refetch, isToday]);
-
-  return { data, loading, error, refetch };
+  const fetcher = useCallback(
+    () => getRecommendations(action, minConviction, date, sort),
+    [action, minConviction, date, sort],
+  );
+  return usePolledQuery(fetcher, 'Failed to fetch recommendations', {
+    pollMs: isTodayDate(date) ? 60_000 : null,
+  });
 }
 
 export function useNews(filters?: {
@@ -110,86 +153,25 @@ export function useNews(filters?: {
   min_relevance?: number;
   limit?: number;
 }): HookResult<NewsItem[]> {
-  const [data, setData] = useState<NewsItem[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refetch = useCallback(async () => {
-    try {
-      setLoading(true);
-      const result = await getNews(filters);
-      setData(result);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch news');
-    } finally {
-      setLoading(false);
-    }
-  }, [filters?.ticker, filters?.mode, filters?.category, filters?.impact_level, filters?.industry, filters?.min_relevance, filters?.limit]);
-
-  useEffect(() => {
-    refetch();
-    const interval = setInterval(refetch, 120_000);
-    return () => clearInterval(interval);
-  }, [refetch]);
-
-  return { data, loading, error, refetch };
+  const fetcher = useCallback(
+    () => getNews(filters),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filters?.ticker, filters?.mode, filters?.category, filters?.impact_level, filters?.industry, filters?.min_relevance, filters?.limit],
+  );
+  return usePolledQuery(fetcher, 'Failed to fetch news', { pollMs: 120_000 });
 }
 
 export function useCatalysts(): HookResult<CatalystEvent[]> {
-  const [data, setData] = useState<CatalystEvent[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refetch = useCallback(async () => {
-    try {
-      setLoading(true);
-      const result = await getCatalysts();
-      setData(result);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch catalysts');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refetch();
-    const interval = setInterval(refetch, 300_000);
-    return () => clearInterval(interval);
-  }, [refetch]);
-
-  return { data, loading, error, refetch };
+  const fetcher = useCallback(() => getCatalysts(), []);
+  return usePolledQuery(fetcher, 'Failed to fetch catalysts', { pollMs: 300_000 });
 }
 
 export function useStatus(): HookResult<SystemStatus> {
-  const [data, setData] = useState<SystemStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refetch = useCallback(async () => {
-    try {
-      setLoading(true);
-      const result = await getStatus();
-      setData(result);
-      setError(null);
-    } catch (e) {
-      setError(
-        e instanceof Error ? e.message : 'Failed to fetch system status',
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refetch();
-    const interval = setInterval(refetch, 30_000);
-    return () => clearInterval(interval);
-  }, [refetch]);
-
-  return { data, loading, error, refetch };
+  const fetcher = useCallback(() => getStatus(), []);
+  return usePolledQuery(fetcher, 'Failed to fetch system status', {
+    pollMs: 30_000,
+    dedupe: true,
+  });
 }
 
 /**
@@ -240,63 +222,15 @@ export function useRotationStatus(active: boolean): HookResult<RotationStatus> {
 }
 
 export function usePipelineDates(): HookResult<PipelineDates> {
-  const [data, setData] = useState<PipelineDates | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refetch = useCallback(async () => {
-    try {
-      setLoading(true);
-      const result = await getPipelineDates();
-      setData(result);
-      setError(null);
-    } catch (e) {
-      setError(
-        e instanceof Error ? e.message : 'Failed to fetch pipeline dates',
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refetch();
-    const interval = setInterval(refetch, 300_000);
-    return () => clearInterval(interval);
-  }, [refetch]);
-
-  return { data, loading, error, refetch };
+  const fetcher = useCallback(() => getPipelineDates(), []);
+  return usePolledQuery(fetcher, 'Failed to fetch pipeline dates', { pollMs: 300_000 });
 }
 
 export function useWatchlistChanges(date?: string): HookResult<WatchlistChanges> {
-  const [data, setData] = useState<WatchlistChanges | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const isToday = !date || date === new Date().toISOString().slice(0, 10);
-
-  const refetch = useCallback(async () => {
-    try {
-      setLoading(true);
-      const result = await getWatchlistChanges(date);
-      setData(result);
-      setError(null);
-    } catch (e) {
-      setError(
-        e instanceof Error ? e.message : 'Failed to fetch watchlist changes',
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [date]);
-
-  useEffect(() => {
-    refetch();
-    if (!isToday) return;
-    const interval = setInterval(refetch, 60_000);
-    return () => clearInterval(interval);
-  }, [refetch, isToday]);
-
-  return { data, loading, error, refetch };
+  const fetcher = useCallback(() => getWatchlistChanges(date), [date]);
+  return usePolledQuery(fetcher, 'Failed to fetch watchlist changes', {
+    pollMs: isTodayDate(date) ? 60_000 : null,
+  });
 }
 
 export function useTickerTrends(
@@ -307,26 +241,35 @@ export function useTickerTrends(
   const [data, setData] = useState<TrendData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const seq = useRef(0);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (opts?: RefetchOptions) => {
     if (!ticker) return;
+    const id = ++seq.current;
+    if (!opts?.background) setLoading(true);
     try {
-      setLoading(true);
       const result = await getTickerTrends(ticker, days, sma);
+      if (id !== seq.current) return;
       setData(result);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch trends');
+      if (id !== seq.current) return;
+      setError(getApiErrorMessage(e, 'Failed to fetch trends'));
     } finally {
-      setLoading(false);
+      if (id === seq.current) setLoading(false);
     }
   }, [ticker, days, sma]);
+
+  useEffect(() => () => { seq.current++; }, []);
 
   useEffect(() => {
     if (ticker) {
       refetch();
     } else {
+      seq.current++;
       setData(null);
+      setError(null);
+      setLoading(false);
     }
   }, [ticker, refetch]);
 
@@ -334,82 +277,16 @@ export function useTickerTrends(
 }
 
 export function useUniverse(): HookResult<UniverseSummary> {
-  const [data, setData] = useState<UniverseSummary | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refetch = useCallback(async () => {
-    try {
-      setLoading(true);
-      const result = await getUniverse();
-      setData(result);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch universe');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refetch();
-    const interval = setInterval(refetch, 120_000);
-    return () => clearInterval(interval);
-  }, [refetch]);
-
-  return { data, loading, error, refetch };
+  const fetcher = useCallback(() => getUniverse(), []);
+  return usePolledQuery(fetcher, 'Failed to fetch universe', { pollMs: 120_000 });
 }
 
 export function useDiscoveryCandidates(): HookResult<DiscoveryCandidate[]> {
-  const [data, setData] = useState<DiscoveryCandidate[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refetch = useCallback(async () => {
-    try {
-      setLoading(true);
-      const result = await getDiscoveryCandidates();
-      setData(result);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch candidates');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refetch();
-    const interval = setInterval(refetch, 60_000);
-    return () => clearInterval(interval);
-  }, [refetch]);
-
-  return { data, loading, error, refetch };
+  const fetcher = useCallback(() => getDiscoveryCandidates(), []);
+  return usePolledQuery(fetcher, 'Failed to fetch candidates', { pollMs: 60_000 });
 }
 
 export function usePositions(status?: string): HookResult<Position[]> {
-  const [data, setData] = useState<Position[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refetch = useCallback(async () => {
-    try {
-      setLoading(true);
-      const result = await getPositions(status);
-      setData(result);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch positions');
-    } finally {
-      setLoading(false);
-    }
-  }, [status]);
-
-  useEffect(() => {
-    refetch();
-    const interval = setInterval(refetch, 60_000);
-    return () => clearInterval(interval);
-  }, [refetch]);
-
-  return { data, loading, error, refetch };
+  const fetcher = useCallback(() => getPositions(status), [status]);
+  return usePolledQuery(fetcher, 'Failed to fetch positions', { pollMs: 60_000 });
 }

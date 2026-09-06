@@ -1,9 +1,13 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { Recommendation, SignalDetail } from '../types';
+import type { Recommendation } from '../types';
 import { ACTION_COLORS, getActionLabel, shortSectorLabel } from '../utils/theme';
-import { actionLabel, detectDemotion } from '../utils/recommendation';
-import OptionsTable from './OptionsTable';
+import { buildDemotionTooltip, detectDemotion } from '../utils/recommendation';
+import { fmtPrice, fmtSigned } from '../utils/format';
+import { ActionBadge, DemotionChip, RiskBadge } from './ui/badges';
+import { ConvictionBar } from './ui/ConvictionBar';
+import { SignalBullet } from './SignalBullet';
+import { SuggestedOptionsList } from './SuggestedOptionsList';
 
 interface RecommendationCardProps {
   recommendation: Recommendation;
@@ -11,58 +15,8 @@ interface RecommendationCardProps {
   selectable?: boolean;
   selected?: boolean;
   onToggleSelect?: (ticker: string) => void;
-}
-
-function ConvictionBar({ score }: { score: number }) {
-  const abs = Math.min(Math.abs(score), 100);
-  const isPositive = score >= 0;
-
-  return (
-    <div className="flex items-center gap-1.5">
-      <div className="flex-1 h-1.5 rounded-full bg-border overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all ${isPositive ? 'bg-green-500' : 'bg-red-500'}`}
-          style={{ width: `${abs}%` }}
-        />
-      </div>
-      <span className="text-[10px] font-mono text-text-secondary w-6 text-right">
-        {score}
-      </span>
-    </div>
-  );
-}
-
-function SignalBullet({ signal }: { signal: SignalDetail }) {
-  const isPositive = signal.points > 0;
-  const prefix = isPositive ? '+' : '';
-  const pointColor = isPositive ? 'text-green-400' : 'text-red-400';
-
-  return (
-    <li className="flex items-start gap-1.5 text-xs">
-      <span className={`font-mono font-bold mt-px w-7 shrink-0 text-right ${pointColor}`}>
-        {prefix}{signal.points}
-      </span>
-      <span className="text-text-primary">
-        {signal.signal}
-        {signal.detail && (
-          <span className="text-text-secondary"> — {signal.detail}</span>
-        )}
-      </span>
-    </li>
-  );
-}
-
-function RiskBadge({ level }: { level: string }) {
-  const colors: Record<string, string> = {
-    LOW: 'bg-green-900/60 text-green-400',
-    MEDIUM: 'bg-amber-900/60 text-amber-400',
-    HIGH: 'bg-red-900/60 text-red-400',
-  };
-  return (
-    <span className={`px-1.5 py-px rounded text-[10px] font-medium ${colors[level] ?? 'bg-gray-800 text-text-secondary'}`}>
-      {level}
-    </span>
-  );
+  /** Opens the full TickerDetail panel for this ticker (Dashboard wires it to setSelectedTicker). */
+  onOpenDetail?: (ticker: string) => void;
 }
 
 function formatRelativeTime(iso: string): string {
@@ -77,76 +31,40 @@ function formatRelativeTime(iso: string): string {
   return `${Math.round(diffH / 24)}d ago`;
 }
 
-function RevisionBadge({ rec }: { rec: Recommendation }) {
+/** `REV · Xh ago` chip; the tooltip carries the reason plus the prior→current action/conviction diff. */
+export function RevisionBadge({ rec }: { rec: Recommendation }) {
   if (!rec.revision_number || rec.revision_number === 0) return null;
-  const priorConv = rec.prior_conviction_score;
-  const currConv = rec.conviction_score;
-  const convDelta =
-    priorConv != null && currConv != null ? currConv - priorConv : null;
-  const actionFlipped =
-    rec.prior_action != null && rec.prior_action !== rec.action;
   const isRecent = rec.revised_at
     ? Date.now() - new Date(rec.revised_at).getTime() < 4 * 60 * 60 * 1000
     : false;
+  const tooltip = [rec.revision_reason ?? 'Revised'];
+  if (rec.prior_action != null && rec.prior_action !== rec.action) {
+    tooltip.push(`${getActionLabel(rec.prior_action)} → ${getActionLabel(rec.action)}`);
+  }
+  if (rec.prior_conviction_score != null && rec.conviction_score != null) {
+    tooltip.push(`conv ${fmtSigned(rec.prior_conviction_score)} → ${fmtSigned(rec.conviction_score)}`);
+  }
 
   return (
-    <span className="relative group inline-flex">
-      <span
-        className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-accent-900/50 text-accent-300 border border-accent-500/40 flex items-center gap-1 cursor-help"
-        aria-label="Revised recommendation"
-      >
-        <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-        </svg>
-        REV{rec.revision_number > 1 ? ` ${rec.revision_number}` : ''}
-        {isRecent && rec.revised_at && (
-          <span className="font-normal normal-case opacity-80">
-            · {formatRelativeTime(rec.revised_at)}
-          </span>
-        )}
-      </span>
-      {/* Hover tooltip with diff */}
-      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 hidden group-hover:block z-50 pointer-events-none">
-        <div className="bg-gray-900 border border-accent-500/60 text-white text-[10px] px-2 py-1.5 rounded whitespace-nowrap shadow-lg space-y-0.5">
-          <div className="text-accent-300 font-semibold uppercase tracking-wider text-[9px]">
-            Revision {rec.revision_number}
-          </div>
-          {rec.prior_action != null && (
-            <div>
-              Action:{' '}
-              <span className={actionFlipped ? 'text-amber-300 font-semibold' : 'text-text-secondary'}>
-                {rec.prior_action.replace('_', ' ')} → {rec.action.replace('_', ' ')}
-              </span>
-            </div>
-          )}
-          {priorConv != null && currConv != null && convDelta != null && (
-            <div>
-              Conviction:{' '}
-              <span className="font-mono">
-                {priorConv > 0 ? '+' : ''}{priorConv} → {currConv > 0 ? '+' : ''}{currConv}
-              </span>{' '}
-              <span className={convDelta >= 0 ? 'text-green-400' : 'text-red-400'}>
-                ({convDelta >= 0 ? '+' : ''}{convDelta.toFixed(0)})
-              </span>
-            </div>
-          )}
-          {rec.revised_at && (
-            <div className="text-text-secondary">
-              {new Date(rec.revised_at).toLocaleTimeString()}
-            </div>
-          )}
-          {rec.revision_reason && (
-            <div className="text-text-secondary max-w-xs whitespace-normal pt-1 border-t border-accent-500/30 mt-1">
-              {rec.revision_reason}
-            </div>
-          )}
-        </div>
-      </div>
+    <span
+      className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-accent-900/50 text-accent-300 border border-accent-500/40 inline-flex items-center gap-1 cursor-help"
+      aria-label="Revised recommendation"
+      title={tooltip.join(' · ')}
+    >
+      <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+      </svg>
+      REV{rec.revision_number > 1 ? ` ${rec.revision_number}` : ''}
+      {isRecent && rec.revised_at && (
+        <span className="font-normal normal-case opacity-80">
+          · {formatRelativeTime(rec.revised_at)}
+        </span>
+      )}
     </span>
   );
 }
 
-export default function RecommendationCard({ recommendation: rec, selectable, selected, onToggleSelect }: RecommendationCardProps) {
+function RecommendationCard({ recommendation: rec, selectable, selected, onToggleSelect, onOpenDetail }: RecommendationCardProps) {
   const [expanded, setExpanded] = useState(false);
   const borderColor = ACTION_COLORS[rec.action] ?? '#21262d';
   const navigate = useNavigate();
@@ -156,6 +74,18 @@ export default function RecommendationCard({ recommendation: rec, selectable, se
     navigate(`/options-lab?ticker=${encodeURIComponent(rec.ticker)}&auto=1`);
   };
 
+  const toggleExpanded = () => setExpanded((v) => !v);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    // Only react to keys on the card itself — the inner Options Lab <button>
+    // and checkbox handle their own Enter/Space and bubble here.
+    if (e.target !== e.currentTarget) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleExpanded();
+    }
+  };
+
   const isRevised = (rec.revision_number ?? 0) > 0;
   const sectorShort = shortSectorLabel(rec.sector);
   const demotion = detectDemotion(
@@ -163,15 +93,13 @@ export default function RecommendationCard({ recommendation: rec, selectable, se
     rec.action,
     rec.signals,
   );
-  const actionTooltip = demotion.isDemoted
-    ? `Score ${Number(rec.conviction_score ?? 0).toFixed(0)}: natural band ${actionLabel(demotion.naturalAction)}. ` +
-      `Demoted to ${actionLabel(demotion.finalAction)}` +
-      (demotion.gateName ? ` by ${demotion.gateName}.` : '.') +
-      (demotion.gateDetail ? ` ${demotion.gateDetail}` : '')
-    : undefined;
+  const actionTooltip = buildDemotionTooltip(rec.conviction_score, demotion);
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
       className={`bg-card rounded-lg border overflow-hidden cursor-pointer transition-colors hover:border-text-secondary/30 ${
         selected
           ? 'border-amber-500 ring-2 ring-amber-500/50'
@@ -180,7 +108,8 @@ export default function RecommendationCard({ recommendation: rec, selectable, se
             : 'border-border'
       }`}
       style={{ borderLeftWidth: '3px', borderLeftColor: borderColor }}
-      onClick={() => setExpanded((v) => !v)}
+      onClick={toggleExpanded}
+      onKeyDown={onKeyDown}
     >
       {/* Collapsed view */}
       <div className="px-3 py-2 space-y-1.5">
@@ -200,20 +129,13 @@ export default function RecommendationCard({ recommendation: rec, selectable, se
               ✓
             </span>
           )}
-          <span
-            className={demotion.isDemoted ? 'px-1.5 py-0.5 rounded text-[10px] font-bold uppercase cursor-help' : 'px-1.5 py-0.5 rounded text-[10px] font-bold uppercase'}
-            style={{ backgroundColor: borderColor + '22', color: borderColor }}
+          <ActionBadge
+            action={rec.action}
+            className={actionTooltip ? 'cursor-help' : ''}
             title={actionTooltip}
-          >
-            {getActionLabel(rec.action)}
-          </span>
+          />
           {demotion.isDemoted && (
-            <span
-              className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-px rounded bg-amber-900/40 text-amber-300 border border-amber-500/30 cursor-help"
-              title={actionTooltip}
-            >
-              ↓ {actionLabel(demotion.naturalAction)}
-            </span>
+            <DemotionChip naturalAction={demotion.naturalAction} title={actionTooltip} />
           )}
           <RevisionBadge rec={rec} />
           <span className="text-sm font-bold text-text-primary">{rec.ticker}</span>
@@ -227,7 +149,7 @@ export default function RecommendationCard({ recommendation: rec, selectable, se
           )}
           {rec.current_price != null && (
             <span className="text-xs font-mono text-text-secondary">
-              ${rec.current_price.toFixed(2)}
+              {fmtPrice(rec.current_price)}
             </span>
           )}
           {rec.signal_count != null && (
@@ -255,7 +177,7 @@ export default function RecommendationCard({ recommendation: rec, selectable, se
             <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
           </svg>
         </div>
-        {rec.conviction_score != null && <ConvictionBar score={rec.conviction_score} />}
+        {rec.conviction_score != null && <ConvictionBar score={rec.conviction_score} showValue />}
       </div>
 
       {/* Expanded view */}
@@ -270,9 +192,9 @@ export default function RecommendationCard({ recommendation: rec, selectable, se
               {rec.prior_action != null && rec.prior_action !== rec.action && (
                 <span>
                   <span className="text-text-secondary">action </span>
-                  <span className="font-mono">{rec.prior_action.replace('_', ' ')}</span>
+                  <span className="font-mono">{getActionLabel(rec.prior_action)}</span>
                   <span className="text-text-secondary"> → </span>
-                  <span className="font-mono text-amber-300">{rec.action.replace('_', ' ')}</span>
+                  <span className="font-mono text-amber-300">{getActionLabel(rec.action)}</span>
                 </span>
               )}
               {rec.prior_conviction_score != null && rec.conviction_score != null && (
@@ -288,8 +210,7 @@ export default function RecommendationCard({ recommendation: rec, selectable, se
                         : 'text-red-400'
                     }`}
                   >
-                    ({rec.conviction_score - rec.prior_conviction_score >= 0 ? '+' : ''}
-                    {(rec.conviction_score - rec.prior_conviction_score).toFixed(0)})
+                    ({fmtSigned(rec.conviction_score - rec.prior_conviction_score)})
                   </span>
                 </span>
               )}
@@ -319,12 +240,12 @@ export default function RecommendationCard({ recommendation: rec, selectable, se
           <div className="flex items-center gap-3 text-xs flex-wrap">
             {rec.target_price != null && (
               <span className="text-text-secondary">
-                Target <span className="font-mono text-text-primary">${rec.target_price.toFixed(2)}</span>
+                Target <span className="font-mono text-text-primary">{fmtPrice(rec.target_price)}</span>
               </span>
             )}
             {rec.stop_loss_price != null && (
               <span className="text-text-secondary">
-                Stop <span className="font-mono text-text-primary">${rec.stop_loss_price.toFixed(2)}</span>
+                Stop <span className="font-mono text-text-primary">{fmtPrice(rec.stop_loss_price)}</span>
               </span>
             )}
             {rec.risk_level && <RiskBadge level={rec.risk_level} />}
@@ -347,15 +268,27 @@ export default function RecommendationCard({ recommendation: rec, selectable, se
             </p>
           )}
 
-          {/* Options */}
+          {/* Options — compact summary; the full detail lives in TickerDetail */}
           {rec.suggested_options.length > 0 && (
             <div>
               <h4 className="text-[10px] font-semibold text-text-secondary uppercase mb-1">Suggested Options</h4>
-              <OptionsTable options={rec.suggested_options} />
+              <SuggestedOptionsList options={rec.suggested_options} />
             </div>
+          )}
+
+          {onOpenDetail && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onOpenDetail(rec.ticker); }}
+              className="btn-secondary w-full justify-center"
+            >
+              View details
+            </button>
           )}
         </div>
       )}
     </div>
   );
 }
+
+export default memo(RecommendationCard);

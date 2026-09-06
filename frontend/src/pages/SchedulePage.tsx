@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   getScheduleRuns,
   getScheduleUpcoming,
   type ScheduleRun,
   type ScheduleUpcoming,
 } from '../utils/api';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
+import { ErrorBox } from '../components/ui/feedback';
+import { usePolling } from '../hooks/usePolling';
 
 const PHASE_LABEL: Record<string, string> = {
   discovery: 'Universe Discovery',
@@ -88,33 +91,21 @@ export default function SchedulePage() {
   const [error, setError] = useState<string | null>(null);
   const [phaseFilter, setPhaseFilter] = useState<string>('all');
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const [r, u] = await Promise.all([
-          getScheduleRuns(72),
-          getScheduleUpcoming(24),
-        ]);
-        if (!cancelled) {
-          setRuns(r);
-          setUpcoming(u);
-          setError(null);
-        }
-      } catch (e: unknown) {
-        if (!cancelled) {
-          const message = e instanceof Error ? e.message : 'Failed to load schedule';
-          setError(message);
-        }
-      }
+  const load = useCallback(async () => {
+    try {
+      const [r, u] = await Promise.all([getScheduleRuns(72), getScheduleUpcoming(24)]);
+      setRuns(r);
+      setUpcoming(u);
+      setError(null);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to load schedule');
     }
-    load();
-    const interval = setInterval(load, 60_000); // refresh once a minute
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+  usePolling(load, 60_000);
 
   const phases = useMemo(() => {
     const set = new Set<string>();
@@ -167,39 +158,19 @@ export default function SchedulePage() {
           </p>
         </div>
 
-        {error && (
-          <div className="py-3 px-3 bg-red-900/20 border border-red-900/40 rounded text-sm text-red-400">
-            {error}
-          </div>
-        )}
+        {error && <ErrorBox message={error} />}
 
         {/* Phase filter */}
         {phases.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            <button
-              onClick={() => setPhaseFilter('all')}
-              className={`px-3 py-1.5 sm:px-2.5 sm:py-1 text-[11px] font-semibold rounded transition-colors ${
-                phaseFilter === 'all'
-                  ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
-                  : 'bg-card border border-border text-text-secondary hover:text-text-primary'
-              }`}
-            >
-              All
-            </button>
-            {phases.map((p) => (
-              <button
-                key={p}
-                onClick={() => setPhaseFilter(p)}
-                className={`px-3 py-1.5 sm:px-2.5 sm:py-1 text-[11px] font-semibold rounded transition-colors ${
-                  phaseFilter === p
-                    ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
-                    : 'bg-card border border-border text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                {PHASE_LABEL[p] ?? p}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            className="flex-wrap"
+            options={[
+              { key: 'all', label: 'All' },
+              ...phases.map((p) => ({ key: p, label: PHASE_LABEL[p] ?? p })),
+            ]}
+            value={phaseFilter}
+            onChange={setPhaseFilter}
+          />
         )}
 
         {/* Upcoming */}

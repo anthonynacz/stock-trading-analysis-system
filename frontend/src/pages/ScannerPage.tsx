@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { ScannerResult, ScannerTier, ScannerRunStatus } from '../types';
 import {
   getScannerResults,
@@ -7,22 +8,31 @@ import {
   runScanner,
   addScannerUniverse,
   removeScannerUniverse,
+  getApiErrorMessage,
 } from '../utils/api';
+import { PALETTE, TIER_COLORS } from '../utils/theme';
+import { fmtMarketCap, fmtPct, fmtPrice } from '../utils/format';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
+import { LoadingRow, ErrorBox, EmptyCard } from '../components/ui/feedback';
 
-const TIERS: { key: ScannerTier | 'ALL'; label: string; color: string }[] = [
-  { key: 'ALL', label: 'All', color: '#8b949e' },
-  { key: 'HOT', label: 'Hot', color: '#f85149' },
-  { key: 'WATCH', label: 'Watch', color: '#d29922' },
-  { key: 'MONITOR', label: 'Monitor', color: '#58a6ff' },
-  { key: 'IGNORE', label: 'Ignore', color: '#484f58' },
-];
+type TierFilter = ScannerTier | 'ALL';
 
-const TIER_COLOR: Record<ScannerTier, string> = {
-  HOT: '#f85149',
-  WATCH: '#d29922',
-  MONITOR: '#58a6ff',
-  IGNORE: '#484f58',
+const TIER_DESC: Record<ScannerTier, string> = {
+  HOT: '4+ signals AND composite ≥ 60 (strong confluence)',
+  WATCH: '3+ signals OR composite ≥ 40 (meaningful evidence)',
+  MONITOR: '2 signals fired (early / faint)',
+  IGNORE: '0–1 signals',
 };
+
+const TIERS: { key: TierFilter; label: string; color: string; title?: string }[] = [
+  { key: 'ALL', label: 'All', color: PALETTE.gray },
+  ...(Object.keys(TIER_COLORS) as ScannerTier[]).map((k) => ({
+    key: k,
+    label: k.charAt(0) + k.slice(1).toLowerCase(),
+    color: TIER_COLORS[k],
+    title: `${k} — ${TIER_DESC[k]}`,
+  })),
+];
 
 const THEME_LABEL: Record<string, string> = {
   AI_MEMORY: 'AI Memory',
@@ -38,20 +48,11 @@ const THEME_LABEL: Record<string, string> = {
   RECENT_IPO_SPINOFF: 'Recent IPO / Spinoff',
 };
 
-function fmtPct(v: number | null | undefined, digits = 0): string {
-  if (v === null || v === undefined) return '—';
-  return `${(v * 100).toFixed(digits)}%`;
-}
-
-function fmtMoney(v: number | null | undefined): string {
-  if (v === null || v === undefined) return '—';
-  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
-  if (v >= 1e6) return `$${(v / 1e6).toFixed(0)}M`;
-  return `$${v.toFixed(2)}`;
-}
+// Scanner returns/growth arrive as fractions (0.12 → 12%).
+const pct0 = (v: number | null | undefined) => fmtPct(v, 0, { fraction: true });
 
 function TierBadge({ tier }: { tier: ScannerTier }) {
-  const c = TIER_COLOR[tier];
+  const c = TIER_COLORS[tier];
   return (
     <span
       className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
@@ -116,10 +117,10 @@ function ResultCard({
       <ScoreBar score={result.composite_score} />
       <div className="flex items-center justify-between gap-2 mt-2 text-[11px]">
         <span className="text-text-secondary">
-          {fmtMoney(result.price)} · {fmtMoney(result.market_cap)}
+          {fmtPrice(result.price)} · {fmtMarketCap(result.market_cap)}
         </span>
         <span className={`font-semibold tabular-nums ${retColor}`}>
-          12m {fmtPct(ret12)}
+          12m {pct0(ret12)}
         </span>
       </div>
     </button>
@@ -128,11 +129,7 @@ function ResultCard({
 
 function DetailPanel({ result }: { result: ScannerResult | null }) {
   if (!result) {
-    return (
-      <div className="bg-card border border-border rounded-lg p-8 text-center text-text-secondary text-sm">
-        Select a ticker to view signal breakdown.
-      </div>
-    );
+    return <EmptyCard>Select a ticker to view signal breakdown.</EmptyCard>;
   }
 
   return (
@@ -166,16 +163,16 @@ function DetailPanel({ result }: { result: ScannerResult | null }) {
       <div>
         <div className="text-[10px] text-text-secondary uppercase mb-2">Observations</div>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px]">
-          <Stat label="Price" value={fmtMoney(result.price)} />
-          <Stat label="Market cap" value={fmtMoney(result.market_cap)} />
+          <Stat label="Price" value={fmtPrice(result.price)} />
+          <Stat label="Market cap" value={fmtMarketCap(result.market_cap)} />
           <Stat
             label="12m return"
-            value={fmtPct(result.return_12m, 0)}
+            value={pct0(result.return_12m)}
             positive={result.return_12m ? result.return_12m >= 0 : undefined}
           />
           <Stat
             label="6m return"
-            value={fmtPct(result.return_6m, 0)}
+            value={pct0(result.return_6m)}
             positive={result.return_6m ? result.return_6m >= 0 : undefined}
           />
           <Stat
@@ -194,14 +191,8 @@ function DetailPanel({ result }: { result: ScannerResult | null }) {
                 : '—'
             }
           />
-          <Stat
-            label="Rev YoY (latest Q)"
-            value={fmtPct(result.rev_growth_latest, 0)}
-          />
-          <Stat
-            label="Rev YoY (prior Q)"
-            value={fmtPct(result.rev_growth_prior, 0)}
-          />
+          <Stat label="Rev YoY (latest Q)" value={pct0(result.rev_growth_latest)} />
+          <Stat label="Rev YoY (prior Q)" value={pct0(result.rev_growth_prior)} />
           <Stat
             label="Rev accel"
             value={
@@ -286,31 +277,54 @@ function Stat({
 }
 
 export default function ScannerPage() {
+  const [params, setParams] = useSearchParams();
+  // setParams is recreated whenever the URL changes; a ref keeps fetchDates stable.
+  const setParamsRef = useRef(setParams);
+  setParamsRef.current = setParams;
+
+  const selectedDate = params.get('date');
+  const tier = (params.get('tier') ?? 'ALL') as TierFilter;
+  const theme = params.get('theme') ?? 'ALL';
+
+  const setParam = useCallback((key: string, value: string | null) => {
+    setParamsRef.current(
+      (p) => {
+        if (!value || value === 'ALL') p.delete(key);
+        else p.set(key, value);
+        return p;
+      },
+      { replace: true },
+    );
+  }, []);
+
   const [results, setResults] = useState<ScannerResult[]>([]);
   const [dates, setDates] = useState<string[]>([]);
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [tier, setTier] = useState<ScannerTier | 'ALL'>('ALL');
-  const [theme, setTheme] = useState<string>('ALL');
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [runStatus, setRunStatus] = useState<ScannerRunStatus | null>(null);
   const [addInput, setAddInput] = useState('');
   const [addError, setAddError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const seq = useRef(0);
 
   const fetchDates = useCallback(async () => {
     try {
       const d = await getScannerDates();
       setDates(d.dates);
-      if (!selectedDate && d.dates.length > 0) {
-        setSelectedDate(d.dates[0]);
-      }
+      setParamsRef.current(
+        (p) => {
+          if (!p.get('date') && d.dates[0]) p.set('date', d.dates[0]);
+          return p;
+        },
+        { replace: true },
+      );
     } catch {
       // Non-fatal
     }
-  }, [selectedDate]);
+  }, []);
 
   const fetchResults = useCallback(async () => {
+    const id = ++seq.current;
     setLoading(true);
     setError(null);
     try {
@@ -319,11 +333,13 @@ export default function ScannerPage() {
         tier: tier === 'ALL' ? undefined : tier,
         theme: theme === 'ALL' ? undefined : theme,
       });
+      if (id !== seq.current) return;
       setResults(r);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch scanner results');
+      if (id !== seq.current) return;
+      setError(getApiErrorMessage(e, 'Failed to fetch scanner results'));
     } finally {
-      setLoading(false);
+      if (id === seq.current) setLoading(false);
     }
   }, [selectedDate, tier, theme]);
 
@@ -339,12 +355,16 @@ export default function ScannerPage() {
   useEffect(() => {
     if (!runStatus?.running) return;
     const iv = setInterval(async () => {
-      const s = await getScannerStatus();
-      setRunStatus(s);
-      if (!s.running) {
-        clearInterval(iv);
-        fetchDates();
-        fetchResults();
+      try {
+        const s = await getScannerStatus();
+        setRunStatus(s);
+        if (!s.running) {
+          clearInterval(iv);
+          fetchDates();
+          fetchResults();
+        }
+      } catch {
+        // Keep polling; a transient status failure should not throw
       }
     }, 3000);
     return () => clearInterval(iv);
@@ -367,11 +387,7 @@ export default function ScannerPage() {
       setAddInput('');
       await fetchResults();
     } catch (e: unknown) {
-      const msg =
-        e && typeof e === 'object' && 'response' in e
-          ? (e as { response: { data: { detail?: string } } }).response?.data?.detail
-          : 'Failed to add ticker';
-      setAddError(msg || 'Failed to add ticker');
+      setAddError(getApiErrorMessage(e, 'Failed to add ticker'));
     }
   };
 
@@ -397,6 +413,16 @@ export default function ScannerPage() {
     return out;
   }, [results]);
 
+  const tierOptions = useMemo(
+    () =>
+      TIERS.map((t) => ({
+        key: t.key,
+        label: t.key === 'ALL' ? t.label : `${t.label} (${tierCounts[t.key] ?? 0})`,
+        title: t.title,
+      })),
+    [tierCounts],
+  );
+
   const selected = results.find((r) => r.ticker === selectedTicker) ?? null;
 
   return (
@@ -410,12 +436,6 @@ export default function ScannerPage() {
             against six signals: revenue acceleration, margin expansion, long-horizon momentum,
             analyst chase, recent structural events, and 90-day revision clusters.
           </p>
-          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-text-secondary">
-            <span><span className="font-semibold text-[#f85149]">HOT</span> — 4+ signals AND composite ≥ 60 (strong confluence)</span>
-            <span><span className="font-semibold text-[#d29922]">WATCH</span> — 3+ signals OR composite ≥ 40 (meaningful evidence)</span>
-            <span><span className="font-semibold text-[#58a6ff]">MONITOR</span> — 2 signals fired (early / faint)</span>
-            <span><span className="font-semibold text-[#484f58]">IGNORE</span> — 0–1 signals</span>
-          </div>
         </div>
 
         {/* Controls */}
@@ -424,7 +444,7 @@ export default function ScannerPage() {
             <label className="text-[11px] text-text-secondary">Run date</label>
             <select
               value={selectedDate ?? ''}
-              onChange={(e) => setSelectedDate(e.target.value || null)}
+              onChange={(e) => setParam('date', e.target.value || null)}
               className="bg-page border border-border rounded text-xs px-2 py-1 text-text-primary"
             >
               {dates.length === 0 ? (
@@ -435,29 +455,22 @@ export default function ScannerPage() {
             </select>
           </div>
 
-          <div className="flex items-center gap-1">
-            {TIERS.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => setTier(t.key)}
-                className={`text-[11px] font-medium px-2 py-0.5 rounded transition-colors ${
-                  tier === t.key
-                    ? 'bg-border text-text-primary'
-                    : 'text-text-secondary hover:text-text-primary'
-                }`}
-                style={tier === t.key ? { color: t.color } : undefined}
-              >
-                {t.label}
-                {t.key !== 'ALL' && ` (${tierCounts[t.key] ?? 0})`}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={tierOptions}
+            value={tier}
+            onChange={(k) => setParam('tier', k)}
+            size="xs"
+            variant="joined"
+            optionStyle={(k, active) =>
+              active && k !== 'ALL' ? { color: TIER_COLORS[k] } : undefined
+            }
+          />
 
           <div className="flex items-center gap-2">
             <label className="text-[11px] text-text-secondary">Theme</label>
             <select
               value={theme}
-              onChange={(e) => setTheme(e.target.value)}
+              onChange={(e) => setParam('theme', e.target.value)}
               className="bg-page border border-border rounded text-xs px-2 py-1 text-text-primary"
             >
               <option value="ALL">All themes</option>
@@ -495,11 +508,7 @@ export default function ScannerPage() {
                 Add
               </button>
             </form>
-            <button
-              onClick={handleRun}
-              disabled={runStatus?.running}
-              className="text-xs font-semibold px-3 py-1 rounded bg-green-900/60 text-green-300 hover:bg-green-800/60 disabled:opacity-50 transition-colors"
-            >
+            <button onClick={handleRun} disabled={runStatus?.running} className="btn-primary">
               {runStatus?.running ? 'Scanning…' : 'Run Scan'}
             </button>
           </div>
@@ -521,25 +530,18 @@ export default function ScannerPage() {
           </div>
         )}
         {runStatus?.last_result?.status === 'error' && (
-          <div className="bg-red-900/20 border border-red-900/40 rounded px-3 py-2 text-xs text-red-300">
-            Error: {runStatus.last_result.error}
-          </div>
+          <ErrorBox size="xs" message={`Error: ${runStatus.last_result.error}`} />
         )}
 
         {/* Grid + detail — results widened to 5/7 so 4 cards fit per row at lg+ */}
         <div className="grid grid-cols-1 lg:grid-cols-7 gap-4">
           <div className="lg:col-span-5">
             {loading ? (
-              <div className="flex items-center justify-center py-16 text-sm text-text-secondary">
-                <div className="w-4 h-4 border-2 border-text-secondary border-t-transparent rounded-full animate-spin mr-2" />
-                Loading…
-              </div>
+              <LoadingRow py="py-16" size={4} />
             ) : error ? (
-              <div className="bg-red-900/20 border border-red-900/40 rounded p-3 text-sm text-red-300">
-                {error}
-              </div>
+              <ErrorBox message={error} />
             ) : results.length === 0 ? (
-              <div className="bg-card border border-border rounded-lg p-8 text-center text-sm text-text-secondary">
+              <EmptyCard>
                 {dates.length === 0 ? (
                   <>
                     No scanner runs yet. Click <span className="text-text-primary">Run Scan</span> to score the universe.
@@ -547,7 +549,7 @@ export default function ScannerPage() {
                 ) : (
                   'No results match the current filters.'
                 )}
-              </div>
+              </EmptyCard>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5">
                 {results.map((r) => (
@@ -562,7 +564,7 @@ export default function ScannerPage() {
                         e.stopPropagation();
                         handleRemove(r.ticker);
                       }}
-                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-red-400 bg-page/80 rounded px-1 hover:bg-red-900/40"
+                      className="btn-danger absolute top-2 right-2 px-1.5 py-0.5 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
                       title={`Remove ${r.ticker} from scanner universe`}
                     >
                       ✕

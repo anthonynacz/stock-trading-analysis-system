@@ -1,50 +1,21 @@
+import { memo } from 'react';
 import { Link } from 'react-router-dom';
 import type { IndustryRecommendation } from '../types';
-
-const ACTION_COLOR: Record<string, string> = {
-  STRONG_BUY: '#2ea043',
-  BUY: '#56d364',
-  HOLD: '#d29922',
-  SELL: '#f85149',
-  STRONG_SELL: '#da3633',
-};
-
-function ActionBadge({ action }: { action: string }) {
-  const c = ACTION_COLOR[action] ?? '#8b949e';
-  return (
-    <span
-      className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
-      style={{ color: c, background: `${c}22`, border: `1px solid ${c}55` }}
-    >
-      {action.replace('_', ' ')}
-    </span>
-  );
-}
-
-function ConvictionBar({ score }: { score: number }) {
-  const width = Math.min(100, (Math.abs(score) / 100) * 100);
-  const color = score >= 0 ? '#2ea043' : '#f85149';
-  const side = score >= 0 ? 'left-1/2' : 'right-1/2';
-  return (
-    <div className="relative w-full h-1.5 bg-border rounded-full overflow-hidden">
-      <div className="absolute top-0 left-1/2 w-px h-full bg-text-secondary/40" />
-      <div
-        className={`absolute top-0 ${side} h-full`}
-        style={{ width: `${width / 2}%`, background: color }}
-      />
-    </div>
-  );
-}
+import { ACTION_COLORS, PALETTE } from '../utils/theme';
+import { fmtSigned } from '../utils/format';
+import { ActionBadge } from './ui/badges';
+import { ConvictionBar } from './ui/ConvictionBar';
 
 interface Props {
   item: IndustryRecommendation;
   selected?: boolean;
   linkTo?: string;
-  onClick?: () => void;
+  /** Receives the industry name so the parent can pass one stable callback to every card. */
+  onSelect?: (industry: string) => void;
   compact?: boolean;
 }
 
-export default function IndustryCard({ item, selected, linkTo, onClick, compact }: Props) {
+function IndustryCard({ item, selected, linkTo, onSelect, compact }: Props) {
   const rawConv = Number(item.conviction_score);
   const weight = item.industry_weight != null ? Number(item.industry_weight) : 1;
   const weighted = item.weighted_conviction_score != null
@@ -60,9 +31,9 @@ export default function IndustryCard({ item, selected, linkTo, onClick, compact 
 
   const body = (
     <div
-      className={`bg-card border rounded-lg p-3 text-left transition-colors ${
+      className={`bg-card border rounded-lg p-3 text-left transition-colors min-w-0 ${
         selected ? 'border-accent-500' : 'border-border hover:border-text-secondary'
-      } ${onClick || linkTo ? 'cursor-pointer' : ''} ${isMuted ? 'opacity-50' : ''}`}
+      } ${onSelect || linkTo ? 'cursor-pointer' : ''} ${isMuted ? 'opacity-50' : ''}`}
     >
       <div className="flex items-start justify-between gap-2 mb-1.5">
         <div className="flex-1 min-w-0">
@@ -83,27 +54,26 @@ export default function IndustryCard({ item, selected, linkTo, onClick, compact 
                     ? 'bg-emerald-900/40 text-emerald-300 border border-emerald-500/30'
                     : 'bg-amber-900/40 text-amber-300 border border-amber-500/30'
               }`}
-              title={`Your industry weight: ${weight.toFixed(2)}× (raw conviction ${rawConv >= 0 ? '+' : ''}${rawConv.toFixed(0)})`}
+              title={`Your industry weight: ${weight.toFixed(2)}× (raw conviction ${fmtSigned(rawConv)})`}
             >
               {weight.toFixed(2)}×
             </span>
           )}
-          <ActionBadge action={item.action} />
+          <ActionBadge action={item.action} bordered className="tracking-wider" />
         </div>
       </div>
 
       <div className="flex items-center gap-2 mb-2">
-        <ConvictionBar score={conv} />
+        <ConvictionBar score={conv} centered />
         <span
           className="text-xs font-mono text-text-primary tabular-nums"
           title={
             weightChanged
-              ? `Weighted ${conv >= 0 ? '+' : ''}${conv.toFixed(0)} = raw ${rawConv >= 0 ? '+' : ''}${rawConv.toFixed(0)} × ${weight.toFixed(2)}`
+              ? `Weighted ${fmtSigned(conv)} = raw ${fmtSigned(rawConv)} × ${weight.toFixed(2)}`
               : undefined
           }
         >
-          {conv >= 0 ? '+' : ''}
-          {conv.toFixed(0)}
+          {fmtSigned(conv)}
         </span>
       </div>
 
@@ -131,13 +101,13 @@ export default function IndustryCard({ item, selected, linkTo, onClick, compact 
           {reps.length > 0 && (
             <div className="flex flex-wrap gap-1 pt-2 border-t border-border">
               {reps.map((t) => {
-                const tc = ACTION_COLOR[t.action] ?? '#8b949e';
+                const tc = ACTION_COLORS[t.action] ?? PALETTE.gray;
                 return (
                   <span
                     key={t.ticker}
                     className="text-[10px] font-mono px-1.5 py-0.5 rounded"
                     style={{ color: tc, background: `${tc}1a` }}
-                    title={`${t.ticker}: ${t.action} (${t.conviction > 0 ? '+' : ''}${t.conviction.toFixed(0)})`}
+                    title={`${t.ticker}: ${t.action} (${fmtSigned(t.conviction)})`}
                   >
                     {t.ticker}
                   </span>
@@ -152,17 +122,19 @@ export default function IndustryCard({ item, selected, linkTo, onClick, compact 
 
   if (linkTo) {
     return (
-      <Link to={linkTo} className="block">
+      <Link to={linkTo} className="block min-w-0">
         {body}
       </Link>
     );
   }
-  if (onClick) {
+  if (onSelect) {
     return (
-      <button type="button" onClick={onClick} className="block w-full text-left">
+      <button type="button" onClick={() => onSelect(item.industry)} className="block w-full min-w-0 text-left">
         {body}
       </button>
     );
   }
   return body;
 }
+
+export default memo(IndustryCard);

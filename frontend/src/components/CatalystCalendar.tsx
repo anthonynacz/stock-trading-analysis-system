@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import type { CatalystEvent } from '../types';
 
 interface CatalystCalendarProps {
@@ -82,7 +82,7 @@ function timeSortKey(t: string | null): number {
   return 1;
 }
 
-export default function CatalystCalendar({ events }: CatalystCalendarProps) {
+function CatalystCalendar({ events }: CatalystCalendarProps) {
   const groups = useMemo<CatalystGroup[]>(() => {
     const upcoming = events.filter((e) => e.days_until <= 14);
     const map = new Map<string, CatalystGroup>();
@@ -137,13 +137,13 @@ export default function CatalystCalendar({ events }: CatalystCalendarProps) {
               </span>
               {group.fiscalQuarter && (
                 <>
-                  <span className="text-border">·</span>
+                  <span className="text-text-secondary/50">·</span>
                   <span className="text-xs text-text-secondary">{group.fiscalQuarter}</span>
                 </>
               )}
               {timeLabel && (
                 <>
-                  <span className="text-border">·</span>
+                  <span className="text-text-secondary/50">·</span>
                   <span className="text-xs text-text-secondary">{timeLabel}</span>
                 </>
               )}
@@ -184,3 +184,5 @@ export default function CatalystCalendar({ events }: CatalystCalendarProps) {
     </div>
   );
 }
+
+export default memo(CatalystCalendar);

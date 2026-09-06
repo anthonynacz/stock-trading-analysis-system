@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import type { Recommendation, IndustryRecommendation } from '../types';
 import {
   useWatchlist,
@@ -22,23 +23,20 @@ import NewsModeSelector from '../components/NewsModeSelector';
 import CatalystCalendar from '../components/CatalystCalendar';
 import WatchlistStrikes from '../components/WatchlistStrikes';
 import IndustryCard from '../components/IndustryCard';
+import { AddTickerForm } from '../components/AddTickerForm';
+import { LoadingRow, ErrorBox, EmptyCard } from '../components/ui/feedback';
+import { SegmentedControl, type SegmentOption } from '../components/ui/SegmentedControl';
 
-function SectionLoading() {
-  return (
-    <div className="flex items-center justify-center py-8">
-      <div className="w-5 h-5 border-2 border-text-secondary border-t-transparent rounded-full animate-spin" />
-      <span className="ml-2 text-sm text-text-secondary">Loading...</span>
-    </div>
-  );
-}
+type RecSort = 'conviction' | 'revised_at';
 
-function SectionError({ message }: { message: string }) {
-  return (
-    <div className="py-4 px-3 bg-red-900/20 border border-red-900/40 rounded text-sm text-red-400">
-      {message}
-    </div>
-  );
-}
+const REC_SORT_OPTIONS: SegmentOption<RecSort>[] = [
+  { key: 'conviction', label: 'Top conviction', title: 'Sort by conviction score' },
+  {
+    key: 'revised_at',
+    label: 'Recently revised',
+    title: 'Sort by most recently rescored (intraday news triggers)',
+  },
+];
 
 export default function Dashboard() {
   const [selectedDate, setSelectedDate] = useState(
@@ -49,13 +47,10 @@ export default function Dashboard() {
   // and the recommendations list (keyed by ticker so the two views stay in sync).
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [rotateModalTickers, setRotateModalTickers] = useState<string[] | null>(null);
-  const [addTickerInput, setAddTickerInput] = useState('');
-  const [addingTicker, setAddingTicker] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
   const [newsMode, setNewsMode] = useState<'general' | 'watchlist' | 'ticker'>('general');
   const [newsTicker, setNewsTicker] = useState('');
   const [newsIndustry, setNewsIndustry] = useState('');
-  const [recSort, setRecSort] = useState<'conviction' | 'revised_at'>(() => {
+  const [recSort, setRecSort] = useState<RecSort>(() => {
     const stored = localStorage.getItem('vela.rec_sort');
     return stored === 'revised_at' ? 'revised_at' : 'conviction';
   });
@@ -149,7 +144,9 @@ export default function Dashboard() {
 
   const clearSelection = useCallback(() => setSelected(new Set()), []);
 
-  const handlePipelineComplete = useCallback(() => {
+  // The hooks' refetch identities change with selectedDate/recSort; route the
+  // stable StatusBar callback through a ref so it never calls a stale closure.
+  const refetchAll = () => {
     watchlist.refetch();
     recommendations.refetch();
     watchlistChanges.refetch();
@@ -157,47 +154,47 @@ export default function Dashboard() {
     catalysts.refetch();
     status.refetch();
     pipelineDates.refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  };
+  const refetchAllRef = useRef(refetchAll);
+  useEffect(() => {
+    refetchAllRef.current = refetchAll;
+  });
+  const handlePipelineComplete = useCallback(() => refetchAllRef.current(), []);
 
-  const handleAddTicker = async () => {
-    const ticker = addTickerInput.trim().toUpperCase();
-    if (!ticker) return;
-    setAddingTicker(true);
-    setAddError(null);
-    try {
+  const handleAddTicker = useCallback(
+    async (ticker: string) => {
       await addToWatchlist(ticker);
-      setAddTickerInput('');
       watchlist.refetch();
-    } catch (err: unknown) {
-      const msg =
-        err && typeof err === 'object' && 'response' in err
-          ? (err as { response: { data: { detail: string } } }).response?.data?.detail
-          : 'Failed to add ticker';
-      setAddError(msg || 'Failed to add ticker');
-    } finally {
-      setAddingTicker(false);
-    }
-  };
+    },
+    [watchlist.refetch],
+  );
 
-  const handleRemoveTicker = async (ticker: string) => {
-    try {
-      await removeFromWatchlist(ticker);
-      watchlist.refetch();
-      if (selectedTicker === ticker) setSelectedTicker(null);
-    } catch {
-      // Silently fail — ticker may already be removed
-    }
-  };
+  const handleRemoveTicker = useCallback(
+    async (ticker: string) => {
+      try {
+        await removeFromWatchlist(ticker);
+        watchlist.refetch();
+        if (selectedTicker === ticker) setSelectedTicker(null);
+      } catch {
+        // Silently fail — ticker may already be removed
+      }
+    },
+    [watchlist.refetch, selectedTicker],
+  );
 
-  const handleToggleLock = async (ticker: string) => {
-    try {
-      await toggleLockTicker(ticker);
-      watchlist.refetch();
-    } catch {
-      // Silently fail
-    }
-  };
+  const handleToggleLock = useCallback(
+    async (ticker: string) => {
+      try {
+        await toggleLockTicker(ticker);
+        watchlist.refetch();
+      } catch {
+        // Silently fail
+      }
+    },
+    [watchlist.refetch],
+  );
+
+  const closeDetail = useCallback(() => setSelectedTicker(null), []);
 
   return (
     <div className="min-h-screen bg-page text-text-primary">
@@ -231,18 +228,19 @@ export default function Dashboard() {
           <section>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-text-primary">Industries</h2>
-              <a
-                href="/industries"
+              <Link
+                to="/industries"
                 className="text-xs text-text-secondary hover:text-text-primary transition-colors"
               >
                 Detail view →
-              </a>
+              </Link>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
               {industries.map((i) => (
                 <IndustryCard
                   key={i.id}
                   item={i}
+                  compact
                   linkTo={`/industries?industry=${encodeURIComponent(i.industry)}`}
                 />
               ))}
@@ -255,33 +253,12 @@ export default function Dashboard() {
           <section className="lg:col-span-3">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-text-primary">Watchlist</h2>
-              <form
-                onSubmit={(e) => { e.preventDefault(); handleAddTicker(); }}
-                className="flex items-center gap-2"
-              >
-                <input
-                  type="text"
-                  value={addTickerInput}
-                  onChange={(e) => { setAddTickerInput(e.target.value); setAddError(null); }}
-                  placeholder="Add ticker..."
-                  className="w-28 px-2 py-1 text-xs bg-card border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-new-entrant"
-                />
-                <button
-                  type="submit"
-                  disabled={addingTicker || !addTickerInput.trim()}
-                  className="px-2 py-1 text-xs font-semibold rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 disabled:opacity-40 transition-colors"
-                >
-                  {addingTicker ? '...' : 'Add'}
-                </button>
-              </form>
+              <AddTickerForm onAdd={handleAddTicker} />
             </div>
-            {addError && (
-              <p className="text-xs text-red-400 mb-2">{addError}</p>
-            )}
-            {watchlist.loading ? (
-              <SectionLoading />
+            {watchlist.loading && !watchlist.data ? (
+              <LoadingRow />
             ) : watchlist.error ? (
-              <SectionError message={watchlist.error} />
+              <ErrorBox message={watchlist.error} />
             ) : (
               <WatchlistGrid
                 items={watchlist.data ?? []}
@@ -306,15 +283,13 @@ export default function Dashboard() {
                   ticker={selectedTicker}
                   companyName={selectedCompany}
                   selectedDate={selectedDate}
-                  onClose={() => setSelectedTicker(null)}
+                  onClose={closeDetail}
                   rotationProtected={selectedItem?.rotation_protected}
                   protectionReasons={selectedItem?.protection_reasons}
                 />
               </div>
             ) : (
-              <div className="hidden lg:block bg-card border border-border rounded-lg p-8 text-center text-text-secondary text-sm mt-9">
-                Click a ticker to view details
-              </div>
+              <EmptyCard className="hidden lg:block mt-9">Click a ticker to view details</EmptyCard>
             )}
           </section>
         </div>
@@ -323,36 +298,17 @@ export default function Dashboard() {
         <section>
           <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
             <h2 className="text-xl font-bold text-text-primary">Recommendations</h2>
-            <div className="inline-flex rounded-md border border-border overflow-hidden text-xs">
-              <button
-                type="button"
-                onClick={() => setRecSort('conviction')}
-                className={`px-3 py-1.5 transition-colors ${
-                  recSort === 'conviction'
-                    ? 'bg-border text-text-primary'
-                    : 'bg-card text-text-secondary hover:text-text-primary'
-                }`}
-              >
-                Top conviction
-              </button>
-              <button
-                type="button"
-                onClick={() => setRecSort('revised_at')}
-                className={`px-3 py-1.5 transition-colors border-l border-border ${
-                  recSort === 'revised_at'
-                    ? 'bg-border text-text-primary'
-                    : 'bg-card text-text-secondary hover:text-text-primary'
-                }`}
-                title="Sort by most recently rescored (intraday news triggers)"
-              >
-                Recently revised
-              </button>
-            </div>
+            <SegmentedControl
+              variant="joined"
+              options={REC_SORT_OPTIONS}
+              value={recSort}
+              onChange={setRecSort}
+            />
           </div>
-          {recommendations.loading ? (
-            <SectionLoading />
+          {recommendations.loading && !recommendations.data ? (
+            <LoadingRow />
           ) : recommendations.error ? (
-            <SectionError message={recommendations.error} />
+            <ErrorBox message={recommendations.error} />
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
               {(recommendations.data ?? []).map((rec) => (
@@ -362,12 +318,11 @@ export default function Dashboard() {
                   selectable={selectableTickers.has(rec.ticker)}
                   selected={selected.has(rec.ticker)}
                   onToggleSelect={toggleSelect}
+                  onOpenDetail={setSelectedTicker}
                 />
               ))}
               {recommendations.data?.length === 0 && (
-                <p className="text-text-secondary text-sm text-center py-6 col-span-2">
-                  No recommendations available
-                </p>
+                <EmptyCard className="md:col-span-2">No recommendations available</EmptyCard>
               )}
             </div>
           )}
@@ -393,10 +348,10 @@ export default function Dashboard() {
               />
             </div>
             <div className="bg-card border border-border rounded-lg p-4">
-              {news.loading ? (
-                <SectionLoading />
+              {news.loading && !news.data ? (
+                <LoadingRow />
               ) : news.error ? (
-                <SectionError message={news.error} />
+                <ErrorBox message={news.error} />
               ) : (
                 <NewsTimeline
                   items={news.data ?? []}
@@ -412,10 +367,10 @@ export default function Dashboard() {
           <section className="lg:col-span-2">
             <h2 className="text-xl font-bold text-text-primary mb-4">Upcoming Catalysts</h2>
             <div className="bg-card border border-border rounded-lg p-4">
-              {catalysts.loading ? (
-                <SectionLoading />
+              {catalysts.loading && !catalysts.data ? (
+                <LoadingRow />
               ) : catalysts.error ? (
-                <SectionError message={catalysts.error} />
+                <ErrorBox message={catalysts.error} />
               ) : (
                 <CatalystCalendar events={catalysts.data ?? []} />
               )}

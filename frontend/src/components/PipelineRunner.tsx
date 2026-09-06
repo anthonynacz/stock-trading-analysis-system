@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { PipelineRunStatus } from '../types';
-import { startPipeline, getPipelineStatus } from '../utils/api';
+import { startPipeline, getPipelineStatus, getApiErrorMessage } from '../utils/api';
 import { useEntitlements } from '../contexts/EntitlementsContext';
+import { PHASE_COLORS } from '../utils/theme';
+import { LockedBadge } from './ui/LockedBadge';
 
 const ALL_PHASES = [
   { key: 'discovery', label: 'Discovery' },
@@ -49,14 +51,6 @@ const PRESETS: {
     iconColor: 'text-accent-400',
   },
 ];
-
-const PHASE_COLORS: Record<string, string> = {
-  idle: '#8b949e',
-  pending: '#21262d',
-  running: '#58a6ff',
-  done: '#2ea043',
-  failed: '#f85149',
-};
 
 interface Props {
   onComplete: () => void;
@@ -167,10 +161,7 @@ export default function PipelineRunner({ onComplete }: Props) {
       const status = await getPipelineStatus();
       setRun(status);
     } catch (e: unknown) {
-      const detail = e && typeof e === 'object' && 'response' in e
-        ? (e as { response: { data: { detail: string } } }).response?.data?.detail
-        : 'Failed to start pipeline';
-      alert(detail);
+      alert(getApiErrorMessage(e, 'Failed to start pipeline'));
     } finally {
       setStarting(false);
     }
@@ -220,17 +211,11 @@ export default function PipelineRunner({ onComplete }: Props) {
           {phases.map((phase) => {
             const info = ALL_PHASES.find((p) => p.key === phase);
             const label = info?.label ?? phase;
-            let color: string;
-            let animate = false;
-
-            if (completedSet.has(phase)) {
-              color = PHASE_COLORS.done;
-            } else if (currentSet.has(phase)) {
-              color = PHASE_COLORS.running;
-              animate = true;
-            } else {
-              color = PHASE_COLORS.pending;
-            }
+            const state = completedSet.has(phase)
+              ? 'done'
+              : currentSet.has(phase)
+                ? 'running'
+                : 'pending';
 
             return (
               <div
@@ -238,8 +223,10 @@ export default function PipelineRunner({ onComplete }: Props) {
                 className="relative group"
               >
                 <div
-                  className={`w-2.5 h-2.5 rounded-full transition-colors ${animate ? 'animate-pulse' : ''}`}
-                  style={{ backgroundColor: color }}
+                  className={`w-2.5 h-2.5 rounded-full transition-colors ${state === 'running' ? 'animate-pulse' : ''}`}
+                  style={{ backgroundColor: PHASE_COLORS[state] }}
+                  title={label}
+                  aria-label={`${label}: ${state}`}
                 />
                 {/* Tooltip */}
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block z-50">
@@ -295,9 +282,7 @@ export default function PipelineRunner({ onComplete }: Props) {
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m0 0v2m0-2h2m-2 0h-2m9-9V7a4 4 0 00-8 0v3m12 0H4a2 2 0 00-2 2v6a2 2 0 002 2h16a2 2 0 002-2v-6a2 2 0 00-2-2z" />
         </svg>
         <span>Refresh</span>
-        <span className="text-[9px] font-bold uppercase tracking-wider px-1 py-px rounded bg-amber-900/40 text-amber-300 border border-amber-500/30">
-          Pro+
-        </span>
+        <LockedBadge minTier="PRO" />
       </div>
     );
   }
@@ -364,7 +349,7 @@ export default function PipelineRunner({ onComplete }: Props) {
         {/* Dropdown arrow */}
         <button
           onClick={() => setShowMenu((v) => !v)}
-          className="px-1.5 py-1.5 rounded-r bg-border text-text-primary text-xs hover:bg-text-secondary/20 transition-colors border-l border-background"
+          className="px-1.5 py-1.5 rounded-r bg-border text-text-primary text-xs hover:bg-text-secondary/20 transition-colors border-l border-page"
           title="Choose phases"
         >
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

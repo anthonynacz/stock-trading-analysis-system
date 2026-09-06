@@ -6,6 +6,9 @@ import {
   type RiskProfile,
   type UserPreferences,
 } from '../hooks/usePreferences';
+import { LockedBadge } from '../components/ui/LockedBadge';
+import { LoadingRow, ErrorBox } from '../components/ui/feedback';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
 
 // ── Tier ordering for "tier_min" gating ────────────────────────────────────
 const TIER_RANK: Record<string, number> = {
@@ -37,14 +40,6 @@ const SECTIONS: { key: SectionKey; label: string; description: string }[] = [
 ];
 
 // ── Reusable bits ──────────────────────────────────────────────────────────
-
-function LockedBadge({ minTier }: { minTier: string }) {
-  return (
-    <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-px rounded bg-amber-900/40 text-amber-300 border border-amber-500/30">
-      🔒 {minTier}+
-    </span>
-  );
-}
 
 function WeightSlider({
   label,
@@ -97,7 +92,7 @@ function WeightSlider({
   );
 }
 
-function SectionHeader({ title, description }: { title: string; description: string }) {
+function PaneHeader({ title, description }: { title: string; description: string }) {
   return (
     <div className="mb-4">
       <h2 className="text-lg font-bold text-text-primary">{title}</h2>
@@ -115,7 +110,7 @@ function ProfilePane() {
   const isLegacySession = user.provider === 'legacy';
   return (
     <div>
-      <SectionHeader title="Profile" description="Read-only summary of your account state." />
+      <PaneHeader title="Profile" description="Read-only summary of your account state." />
       <div className="space-y-2 text-sm">
         <Row label="Email" value={user.email} />
         <Row label="Provider" value={user.provider ?? '—'} />
@@ -165,7 +160,7 @@ function RiskProfilePane({
 }) {
   return (
     <div>
-      <SectionHeader
+      <PaneHeader
         title="Risk Profile"
         description="Drives the strike recommender's preferred delta range and DTE window."
       />
@@ -212,7 +207,7 @@ function SignalWeightsPane({
   const allowed = !!ent?.entitlements.custom_signal_weights;
   return (
     <div>
-      <SectionHeader
+      <PaneHeader
         title="Signal Weights"
         description={
           allowed
@@ -253,7 +248,7 @@ function IndustryWeightsPane({
 }) {
   return (
     <div>
-      <SectionHeader
+      <PaneHeader
         title="Industry Weights"
         description="Boost or mute sectors in the dashboard ranking. 0 = hidden, 2 = double-weighted."
       />
@@ -284,12 +279,13 @@ function AlertsPane({
   const tier = ent?.tier;
   const alertsEnabled = !!ent?.entitlements.alerts_enabled;
   const alerts = draft.alerts_config;
+  const discordAllowed = tier === 'PREMIUM' || tier === 'ADMIN';
 
   return (
     <div>
-      <SectionHeader
+      <PaneHeader
         title="Alerts"
-        description="Email when watchlist tickers cross trigger conditions. Discord and SMS coming later."
+        description="Email or Discord when watchlist tickers cross trigger conditions."
       />
       {!alertsEnabled && (
         <div className="mb-3 px-3 py-2 rounded border border-amber-500/30 bg-amber-900/20 text-xs text-amber-200">
@@ -359,16 +355,53 @@ function AlertsPane({
       </div>
 
       <div className="mt-4 px-3 py-2.5 rounded border border-border">
-        <div className="text-sm font-semibold text-text-primary mb-1">Discord webhook (Premium)</div>
-        <p className="text-[11px] text-text-secondary mb-2">
-          Real-time push to a Discord channel. Premium tier only.
-        </p>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-text-primary">Delivery</div>
+            <p className="text-[11px] text-text-secondary leading-snug">
+              Where triggered alerts are sent.
+            </p>
+          </div>
+          <SegmentedControl
+            variant="joined"
+            value={alerts.channel}
+            onChange={(v) => patchAlerts('channel', v)}
+            options={[
+              { key: 'email', label: 'Email' },
+              {
+                key: 'discord',
+                label: 'Discord',
+                disabled: !discordAllowed,
+                title: discordAllowed ? undefined : 'Premium tier only',
+              },
+            ]}
+          />
+        </div>
+      </div>
+
+      <div className="mt-2 px-3 py-2.5 rounded border border-border">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-sm font-semibold text-text-primary">Discord webhook</span>
+          <LockedBadge minTier="PREMIUM" />
+        </div>
+        <p className="text-[11px] text-text-secondary mb-2">Real-time push to a Discord channel.</p>
         <input
           type="text"
           placeholder="https://discord.com/api/webhooks/..."
           value={alerts.discord_webhook_url ?? ''}
-          onChange={(e) => patchAlerts('discord_webhook_url', e.target.value || null)}
-          disabled={tier !== 'PREMIUM' && tier !== 'ADMIN'}
+          onChange={(e) => {
+            const url = e.target.value || null;
+            const hadUrl = !!alerts.discord_webhook_url;
+            patchAlerts('discord_webhook_url', url);
+            // Auto-switch only on the empty→filled and filled→empty transitions so an
+            // explicit Email choice survives later edits to the webhook.
+            if (url && !hadUrl && alerts.channel === 'email') {
+              patchAlerts('channel', 'discord');
+            } else if (!url && alerts.channel === 'discord') {
+              patchAlerts('channel', 'email');
+            }
+          }}
+          disabled={!discordAllowed}
           className="w-full bg-page border border-border rounded px-3 py-1.5 text-xs text-text-primary font-mono disabled:opacity-50"
         />
       </div>
@@ -408,7 +441,7 @@ function CustomUniversePane({
 
   return (
     <div>
-      <SectionHeader
+      <PaneHeader
         title="Custom Universe"
         description="Tickers to add to the shared daily pipeline. Globally deduped — if another user has the same ticker, it doesn't count twice in our cost."
       />
@@ -484,7 +517,7 @@ function DigestPane({
 
   return (
     <div>
-      <SectionHeader
+      <PaneHeader
         title="AM Digest"
         description="Single morning email with watchlist highlights, conviction breaches, and upcoming catalysts."
       />
@@ -565,17 +598,10 @@ export default function SettingsPage() {
           daily pipeline.
         </p>
 
-        {error && (
-          <div className="mb-4 px-3 py-2 rounded bg-red-900/20 border border-red-900/40 text-sm text-red-300">
-            {error}
-          </div>
-        )}
+        {error && <ErrorBox message={error} className="mb-4" />}
 
         {loading || !draft || !catalog ? (
-          <div className="flex items-center gap-2 text-sm text-text-secondary py-12">
-            <div className="w-4 h-4 border-2 border-text-secondary border-t-transparent rounded-full animate-spin" />
-            Loading preferences…
-          </div>
+          <LoadingRow label="Loading preferences…" py="py-12" size={4} />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-6">
             {/* Vertical tab nav */}

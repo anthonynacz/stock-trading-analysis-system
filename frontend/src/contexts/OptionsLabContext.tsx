@@ -1,7 +1,7 @@
-import { createContext, useContext, useState, useCallback, useRef } from 'react';
+import { createContext, useContext, useMemo, useState, useCallback, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { DeepOptionsAnalysis } from '../types';
-import { analyzeDeepOptions } from '../utils/api';
+import { analyzeDeepOptions, getApiErrorMessage } from '../utils/api';
 
 interface BatchProgress {
   current: number;
@@ -23,6 +23,8 @@ interface OptionsLabContextType {
 
 const OptionsLabContext = createContext<OptionsLabContextType | null>(null);
 
+const ERROR_FALLBACK = 'Deep options analysis failed';
+
 export function OptionsLabProvider({ children }: { children: ReactNode }) {
   const [analyzingTicker, setAnalyzingTicker] = useState<string | null>(null);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
@@ -30,15 +32,6 @@ export function OptionsLabProvider({ children }: { children: ReactNode }) {
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   const runningRef = useRef(false);
   const cancelBatchRef = useRef(false);
-
-  const extractError = (err: unknown): string => {
-    if (err && typeof err === 'object' && 'response' in err) {
-      const detail = (err as { response: { data: { detail: string } } }).response
-        ?.data?.detail;
-      if (detail) return detail;
-    }
-    return 'Deep options analysis failed';
-  };
 
   const startAnalysis = useCallback((ticker: string) => {
     if (runningRef.current) return;
@@ -53,7 +46,7 @@ export function OptionsLabProvider({ children }: { children: ReactNode }) {
         setLastResult(result);
       })
       .catch((err: unknown) => {
-        setAnalyzeError(extractError(err));
+        setAnalyzeError(getApiErrorMessage(err, ERROR_FALLBACK));
       })
       .finally(() => {
         setAnalyzingTicker(null);
@@ -83,7 +76,7 @@ export function OptionsLabProvider({ children }: { children: ReactNode }) {
         const result = await analyzeDeepOptions(t);
         setLastResult(result);
       } catch (err) {
-        failures.push(`${t}: ${extractError(err)}`);
+        failures.push(`${t}: ${getApiErrorMessage(err, ERROR_FALLBACK)}`);
       }
     }
 
@@ -107,23 +100,32 @@ export function OptionsLabProvider({ children }: { children: ReactNode }) {
   const consumeResult = useCallback(() => setLastResult(null), []);
   const clearError = useCallback(() => setAnalyzeError(null), []);
 
-  return (
-    <OptionsLabContext.Provider
-      value={{
-        analyzingTicker,
-        analyzeError,
-        lastResult,
-        batchProgress,
-        startAnalysis,
-        refreshAll,
-        cancelBatch,
-        consumeResult,
-        clearError,
-      }}
-    >
-      {children}
-    </OptionsLabContext.Provider>
+  const value = useMemo<OptionsLabContextType>(
+    () => ({
+      analyzingTicker,
+      analyzeError,
+      lastResult,
+      batchProgress,
+      startAnalysis,
+      refreshAll,
+      cancelBatch,
+      consumeResult,
+      clearError,
+    }),
+    [
+      analyzingTicker,
+      analyzeError,
+      lastResult,
+      batchProgress,
+      startAnalysis,
+      refreshAll,
+      cancelBatch,
+      consumeResult,
+      clearError,
+    ],
   );
+
+  return <OptionsLabContext.Provider value={value}>{children}</OptionsLabContext.Provider>;
 }
 
 export function useOptionsLabContext() {

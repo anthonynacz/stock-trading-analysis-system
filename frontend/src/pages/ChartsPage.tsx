@@ -18,11 +18,15 @@ import type {
   ChartDatasetKey,
   ChartResponse,
 } from '../types';
-import { getChartDatasets, runChartQuery } from '../utils/api';
+import { getApiErrorMessage, getChartDatasets, getIndustries, runChartQuery } from '../utils/api';
+import { BRAND, PALETTE } from '../utils/theme';
+import { EmptyCard, ErrorBox } from '../components/ui/feedback';
+import { TabBar } from '../components/ui/TabBar';
 
 // Distinguishable colors for multiple series; cycles past 10 series.
-const COLORS = [
-  '#58a6ff', '#56d364', '#d29922', '#f85149', '#bc8cff',
+// Chart-only hues past the shared palette stay local (PALETTE has no series ramp).
+const SERIES_COLORS = [
+  PALETTE.blue, PALETTE.greenLight, PALETTE.amber, PALETTE.red, '#bc8cff',
   '#39c5cf', '#ffa657', '#ff7b72', '#a5d6ff', '#79c0ff',
 ];
 
@@ -130,7 +134,7 @@ function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className={`bg-page border border-border rounded px-2 py-1 text-xs text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500 ${props.className ?? ''}`}
+      className={`bg-page border border-border rounded px-2 py-1 text-xs text-text-primary placeholder-text-secondary focus:border-accent-500 ${props.className ?? ''}`}
     />
   );
 }
@@ -139,7 +143,7 @@ function SelectInput(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select
       {...props}
-      className={`bg-page border border-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-accent-500 ${props.className ?? ''}`}
+      className={`bg-page border border-border rounded px-2 py-1 text-xs text-text-primary focus:border-accent-500 ${props.className ?? ''}`}
     />
   );
 }
@@ -387,31 +391,31 @@ function ChartCanvas({ result }: { result: ChartResponse | null }) {
   const rows = useMemo(() => (result ? unifyRows(result) : []), [result]);
   if (!result) {
     return (
-      <div className="bg-card border border-border rounded-lg p-12 text-center text-text-secondary text-sm">
+      <EmptyCard className="p-12">
         Configure the form on the left and click <span className="text-text-primary font-semibold">Build</span> to render a chart.
-      </div>
+      </EmptyCard>
     );
   }
   if (result.series.length === 0 || rows.length === 0) {
     return (
-      <div className="bg-card border border-border rounded-lg p-12 text-center text-text-secondary text-sm">
+      <EmptyCard className="p-12">
         No data points returned for this query. Try widening the date range or removing filters.
-      </div>
+      </EmptyCard>
     );
   }
 
   const sharedAxes = (
     <>
-      <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
+      <CartesianGrid strokeDasharray="3 3" stroke={PALETTE.border} />
       <XAxis
         dataKey="x"
-        tick={{ fontSize: 10, fill: '#8b949e' }}
-        stroke="#21262d"
+        tick={{ fontSize: 10, fill: PALETTE.gray }}
+        stroke={PALETTE.border}
       />
-      <YAxis tick={{ fontSize: 10, fill: '#8b949e' }} stroke="#21262d" />
+      <YAxis tick={{ fontSize: 10, fill: PALETTE.gray }} stroke={PALETTE.border} />
       <Tooltip
         contentStyle={{ background: '#0d1117', border: '1px solid #30363d', fontSize: 11 }}
-        labelStyle={{ color: '#e6edf3' }}
+        labelStyle={{ color: PALETTE.textPrimary }}
       />
       <Legend wrapperStyle={{ fontSize: 11 }} />
       <ReferenceLine y={0} stroke="#4b5563" strokeDasharray="3 3" />
@@ -434,7 +438,7 @@ function ChartCanvas({ result }: { result: ChartResponse | null }) {
           <BarChart data={rows} margin={{ top: 10, right: 16, bottom: 10, left: 0 }}>
             {sharedAxes}
             {result.series.map((s, i) => (
-              <Bar key={s.name} dataKey={s.name} fill={COLORS[i % COLORS.length]} />
+              <Bar key={s.name} dataKey={s.name} fill={SERIES_COLORS[i % SERIES_COLORS.length]} />
             ))}
           </BarChart>
         ) : (
@@ -445,7 +449,7 @@ function ChartCanvas({ result }: { result: ChartResponse | null }) {
                 key={s.name}
                 type="monotone"
                 dataKey={s.name}
-                stroke={COLORS[i % COLORS.length]}
+                stroke={SERIES_COLORS[i % SERIES_COLORS.length]}
                 strokeWidth={1.6}
                 dot={false}
                 connectNulls
@@ -525,18 +529,17 @@ export default function ChartsPage() {
   // Fetch industries list (for the Industry Comparison form chip picker)
   const [industriesAll, setIndustriesAll] = useState<string[]>([]);
   useEffect(() => {
-    if (dataset !== 'industry_comparison') return;
-    (async () => {
-      try {
-        const r = await fetch('/api/industries');
-        if (!r.ok) return;
-        const data = await r.json();
-        setIndustriesAll((data as { industry: string }[]).map((i) => i.industry));
-      } catch {
-        // ignore
-      }
-    })();
-  }, [dataset]);
+    if (dataset !== 'industry_comparison' || industriesAll.length > 0) return;
+    let cancelled = false;
+    getIndustries()
+      .then((d) => {
+        if (!cancelled) setIndustriesAll([...new Set(d.map((i) => i.industry))].sort());
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [dataset, industriesAll.length]);
 
   // Build the query spec from current form state
   const buildSpec = useCallback((): Record<string, unknown> => {
@@ -609,13 +612,7 @@ export default function ChartsPage() {
       const r = await runChartQuery(dataset, buildSpec());
       setResult(r);
     } catch (e: unknown) {
-      const msg =
-        e && typeof e === 'object' && 'response' in e
-          ? (e as { response: { data: { detail: string } } }).response?.data?.detail
-          : e instanceof Error
-            ? e.message
-            : 'Query failed';
-      setError(msg || 'Query failed');
+      setError(getApiErrorMessage(e, 'Query failed'));
     } finally {
       setLoading(false);
     }
@@ -627,32 +624,21 @@ export default function ChartsPage() {
         <div>
           <h1 className="text-2xl font-bold mb-1">Charts</h1>
           <p className="text-sm text-text-secondary">
-            Dynamic visualizations across EdgeFlow data. Pick a dataset, configure
+            Dynamic visualizations across {BRAND} data. Pick a dataset, configure
             dimensions / aggregations / filters, click Build. URL updates so you
             can bookmark or share a chart.
           </p>
         </div>
 
         {/* Dataset tabs */}
-        <div className="flex gap-1 border-b border-border">
-          {DATASET_KEYS.map((k) => {
+        <TabBar
+          tabs={DATASET_KEYS.map((k) => {
             const info = datasets.find((d) => d.key === k);
-            return (
-              <button
-                key={k}
-                onClick={() => setDataset(k)}
-                className={`px-3 py-2 text-xs font-medium transition-colors border-b-2 ${
-                  dataset === k
-                    ? 'border-accent-500 text-text-primary'
-                    : 'border-transparent text-text-secondary hover:text-text-primary'
-                }`}
-                title={info?.description}
-              >
-                {info?.label ?? k}
-              </button>
-            );
+            return { key: k, label: info?.label ?? k, title: info?.description };
           })}
-        </div>
+          active={dataset}
+          onChange={setDataset}
+        />
 
         {/* Form */}
         <div className="bg-card border border-border rounded-lg p-3">
@@ -672,11 +658,7 @@ export default function ChartsPage() {
               />
             )}
             <div className="ml-auto">
-              <button
-                onClick={runBuild}
-                disabled={loading}
-                className="px-4 py-1.5 rounded text-xs font-semibold bg-accent-600/80 hover:bg-accent-600 text-white transition-colors disabled:opacity-50"
-              >
+              <button onClick={runBuild} disabled={loading} className="btn-primary px-4">
                 {loading ? 'Building…' : 'Build'}
               </button>
             </div>
@@ -688,11 +670,7 @@ export default function ChartsPage() {
           )}
         </div>
 
-        {error && (
-          <div className="bg-red-900/20 border border-red-900/40 rounded p-3 text-xs text-red-300">
-            {error}
-          </div>
-        )}
+        {error && <ErrorBox message={error} size="xs" />}
 
         <ChartCanvas result={result} />
       </div>

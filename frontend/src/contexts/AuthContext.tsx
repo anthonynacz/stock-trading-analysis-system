@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
-import api, { TOKEN_STORAGE_KEY } from '../utils/api';
+import { createContext, useContext, useEffect, useMemo, useState, useCallback, ReactNode } from 'react';
+import api, { TOKEN_STORAGE_KEY, UNAUTHORIZED_EVENT } from '../utils/api';
 
 export interface CurrentUser {
   id: number;
@@ -65,27 +65,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refresh();
   }, [refresh, token]);
 
+  // The axios response interceptor already removed the token from storage on a
+  // 401; mirror that in state so RequireAuth redirects to /login.
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setTokenState(null);
+      setUser(null);
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, []);
+
   const logout = useCallback(() => {
     setToken(null);
     setUser(null);
   }, [setToken]);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        loading,
-        error,
-        legacyMode: user?.legacy_mode ?? false,
-        token,
-        setToken,
-        logout,
-        refresh,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo<AuthState>(
+    () => ({
+      user,
+      loading,
+      error,
+      legacyMode: user?.legacy_mode ?? false,
+      token,
+      setToken,
+      logout,
+      refresh,
+    }),
+    [user, loading, error, token, setToken, logout, refresh],
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthState {

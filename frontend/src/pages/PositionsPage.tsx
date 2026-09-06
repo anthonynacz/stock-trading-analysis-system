@@ -1,7 +1,14 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import type { Position, PositionCreateRequest, PositionType, SignalDetail } from '../types';
+import type {
+  HealthSeverity,
+  Position,
+  PositionCreateRequest,
+  PositionHealthFlag,
+  PositionType,
+} from '../types';
 import { usePositions } from '../hooks/useEdgeFlow';
+import { usePolling } from '../hooks/usePolling';
 import {
   createPosition,
   closePosition,
@@ -13,7 +20,19 @@ import {
   analyzeResearch,
   type PnlHistory,
 } from '../utils/api';
-import { ACTION_COLORS, getActionLabel } from '../utils/theme';
+import {
+  ACTION_COLORS,
+  BRAND,
+  PALETTE,
+  PNL_COLOR,
+  POSITION_TYPE_COLORS,
+  getActionLabel,
+} from '../utils/theme';
+import { fmtCurrency, fmtSigned } from '../utils/format';
+import { SignalBullet } from '../components/SignalBullet';
+import { EmptyCard, ErrorBox, LoadingRow } from '../components/ui/feedback';
+import { SegmentedControl, type SegmentOption } from '../components/ui/SegmentedControl';
+import { TabBar, type TabItem } from '../components/ui/TabBar';
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */
 
@@ -23,21 +42,29 @@ function formatDate(iso: string | null): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function formatCurrency(n: number | null | undefined): string {
-  if (n == null) return '—';
-  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** `+$1,234.56` — sign prefix ahead of the currency symbol (zero renders `+$0.00`). */
+function fmtSignedCurrency(v: number): string {
+  return `${v >= 0 ? '+' : ''}${fmtCurrency(v)}`;
 }
 
-function pnlColor(pnl: number | null): string {
-  if (pnl == null || pnl === 0) return '#8b949e';
-  return pnl > 0 ? '#2ea043' : '#f85149';
-}
-
-const TYPE_COLORS: Record<string, string> = {
-  CALL: '#2ea043',
-  PUT: '#f85149',
-  STOCK: '#58a6ff',
+const SEVERITY_RANK: Record<HealthSeverity, number> = { info: 0, warn: 1, critical: 2 };
+const SEVERITY_COLOR: Record<HealthSeverity, string> = {
+  info: PALETTE.blue,
+  warn: PALETTE.amber,
+  critical: PALETTE.red,
 };
+
+/** Highest-severity flag, or null. `health_flags` is always [] for CLOSED positions. */
+function topHealthFlag(flags: PositionHealthFlag[]): PositionHealthFlag | null {
+  return flags.reduce<PositionHealthFlag | null>(
+    (best, f) => (best == null || SEVERITY_RANK[f.severity] > SEVERITY_RANK[best.severity] ? f : best),
+    null,
+  );
+}
+
+function hasFlag(flags: PositionHealthFlag[], code: PositionHealthFlag['code']): boolean {
+  return flags.some((f) => f.code === code);
+}
 
 /* ── P&L History (day / month rollup) ────────────────────────────────── */
 
@@ -53,49 +80,39 @@ function formatDay(iso: string): string {
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
+const PNL_VIEWS: SegmentOption<'day' | 'month'>[] = [
+  { key: 'day', label: 'Daily' },
+  { key: 'month', label: 'Monthly' },
+];
+
 function PnlHistorySection() {
   const [data, setData] = useState<PnlHistory | null>(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<'day' | 'month'>('day');
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const h = await getPnlHistory(90);
-        if (!cancelled) {
-          setData(h);
-        }
-      } catch {
-        if (!cancelled) setData({ daily: [], monthly: [] });
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+  const load = useCallback(async () => {
+    try {
+      setData(await getPnlHistory(90));
+    } catch {
+      setData({ daily: [], monthly: [] });
+    } finally {
+      setLoading(false);
     }
-    load();
-    const interval = setInterval(load, 5 * 60_000); // 5 min
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
   }, []);
 
-  if (loading) {
+  useEffect(() => {
+    load();
+  }, [load]);
+  usePolling(load, 300_000);
+
+  if (loading || !data) return null;
+  if (data.daily.length === 0 && data.monthly.length === 0) {
     return (
-      <div className="bg-card border border-border rounded-lg p-4">
-        <div className="text-sm text-text-secondary">Loading P&L history…</div>
-      </div>
-    );
-  }
-  if (!data || (data.daily.length === 0 && data.monthly.length === 0)) {
-    return (
-      <div className="bg-card border border-border rounded-lg p-4">
-        <div className="text-sm font-bold text-text-primary mb-1">P&L over time</div>
-        <p className="text-xs text-text-secondary">
-          No snapshots yet. The first row is written tonight at 16:45 ET after market close,
-          and one row per weekday thereafter.
-        </p>
-      </div>
+      <EmptyCard>
+        <div className="font-bold text-text-primary mb-1">P&L over time</div>
+        No snapshots yet. The first row is written tonight at 16:45 ET after market close,
+        and one row per weekday thereafter.
+      </EmptyCard>
     );
   }
 
@@ -105,21 +122,7 @@ function PnlHistorySection() {
     <div className="bg-card border border-border rounded-lg p-3 sm:p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-bold text-text-primary">P&L over time</h3>
-        <div className="flex gap-1">
-          {(['day', 'month'] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={`px-3 py-1.5 sm:px-2.5 sm:py-1 text-[11px] font-semibold rounded transition-colors ${
-                view === v
-                  ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
-                  : 'bg-page/60 border border-border text-text-secondary hover:text-text-primary'
-              }`}
-            >
-              {v === 'day' ? 'Daily' : 'Monthly'}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl options={PNL_VIEWS} value={view} onChange={setView} />
       </div>
 
       <ul className="divide-y divide-border max-h-72 overflow-y-auto">
@@ -127,7 +130,7 @@ function PnlHistorySection() {
           <li className="py-3 text-xs text-text-secondary text-center">No {view} data.</li>
         )}
         {view === 'day' && (data.daily ?? []).map((d) => {
-          const color = pnlColor(d.realized_pnl_today);
+          const color = PNL_COLOR(d.realized_pnl_today);
           return (
             <li key={d.date} className="py-2 flex items-center gap-3">
               <span className="text-xs font-mono tabular-nums text-text-primary w-24 shrink-0">
@@ -138,7 +141,7 @@ function PnlHistorySection() {
                 style={{ color }}
                 title="Realized P&L from positions closed this day"
               >
-                {d.realized_pnl_today >= 0 ? '+' : ''}{formatCurrency(d.realized_pnl_today)}
+                {fmtSignedCurrency(d.realized_pnl_today)}
               </span>
               <span className="text-[10px] text-text-secondary flex-1 min-w-0 truncate">
                 {d.closed_count_today > 0 && `${d.closed_count_today} closed · `}
@@ -148,7 +151,7 @@ function PnlHistorySection() {
                 className="text-[10px] font-mono tabular-nums text-text-secondary w-20 shrink-0 text-right"
                 title="Unrealized P&L at snapshot time"
               >
-                {d.unrealized_pnl >= 0 ? '+' : ''}{formatCurrency(d.unrealized_pnl)} U
+                {fmtSignedCurrency(d.unrealized_pnl)} U
               </span>
             </li>
           );
@@ -160,10 +163,10 @@ function PnlHistorySection() {
             </span>
             <span
               className="text-xs font-mono tabular-nums font-semibold w-24 shrink-0 text-right"
-              style={{ color: pnlColor(m.realized_pnl) }}
+              style={{ color: PNL_COLOR(m.realized_pnl) }}
               title="Total realized P&L closed in this month"
             >
-              {m.realized_pnl >= 0 ? '+' : ''}{formatCurrency(m.realized_pnl)}
+              {fmtSignedCurrency(m.realized_pnl)}
             </span>
             <span className="text-[10px] text-text-secondary flex-1 min-w-0 truncate">
               {m.closed_count > 0 ? `${m.closed_count} closed` : 'no closures'}
@@ -172,7 +175,7 @@ function PnlHistorySection() {
               className="text-[10px] font-mono tabular-nums text-text-secondary w-20 shrink-0 text-right"
               title="Unrealized at the latest snapshot in this month"
             >
-              {m.latest_unrealized >= 0 ? '+' : ''}{formatCurrency(m.latest_unrealized)} U
+              {fmtSignedCurrency(m.latest_unrealized)} U
             </span>
           </li>
         ))}
@@ -202,8 +205,8 @@ function SummaryBar({ positions }: { positions: Position[] }) {
       </div>
       <div className="bg-card border border-border rounded-lg p-3 text-center">
         <div className="text-xs text-text-secondary mb-1">Unrealized P&L</div>
-        <div className="text-xl font-bold" style={{ color: pnlColor(totalPnl) }}>
-          {totalPnl >= 0 ? '+' : ''}{formatCurrency(totalPnl)}
+        <div className="text-xl font-bold" style={{ color: PNL_COLOR(totalPnl) }}>
+          {fmtSignedCurrency(totalPnl)}
         </div>
       </div>
       <div className="bg-card border border-border rounded-lg p-3 text-center">
@@ -277,7 +280,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
     <form onSubmit={handleSubmit} className="bg-card border border-border rounded-lg p-4 mb-6 space-y-3">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold text-text-primary">New Position</h3>
-        <button type="button" onClick={onCancel} className="text-xs text-text-secondary hover:text-text-primary">
+        <button type="button" onClick={onCancel} className="btn-secondary">
           Cancel
         </button>
       </div>
@@ -289,7 +292,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             type="text"
             value={ticker}
             onChange={(e) => setTicker(e.target.value)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary placeholder-text-secondary focus:border-accent-500"
             placeholder="NVDA"
             required
           />
@@ -307,7 +310,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
                     ? 'text-white'
                     : 'bg-page border border-border text-text-secondary hover:text-text-primary'
                 }`}
-                style={posType === t ? { backgroundColor: TYPE_COLORS[t] + 'cc' } : undefined}
+                style={posType === t ? { backgroundColor: POSITION_TYPE_COLORS[t] + 'cc' } : undefined}
               >
                 {t}
               </button>
@@ -321,7 +324,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             min={1}
             value={quantity}
             onChange={(e) => setQuantity(parseInt(e.target.value) || 1)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:border-accent-500"
           />
         </div>
         <div>
@@ -331,7 +334,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             step="0.01"
             value={entryPrice}
             onChange={(e) => setEntryPrice(e.target.value)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:border-accent-500"
             placeholder="0.00"
             required
           />
@@ -347,7 +350,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
               step="0.01"
               value={strikePrice}
               onChange={(e) => setStrikePrice(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
+              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:border-accent-500"
               placeholder="0.00"
             />
           </div>
@@ -358,7 +361,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
               step="0.01"
               value={premiumPaid}
               onChange={(e) => setPremiumPaid(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
+              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:border-accent-500"
               placeholder="Per contract"
             />
           </div>
@@ -368,7 +371,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
               type="date"
               value={expiry}
               onChange={(e) => setExpiry(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
+              className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:border-accent-500"
             />
           </div>
         </div>
@@ -382,7 +385,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             step="0.01"
             value={stopLoss}
             onChange={(e) => setStopLoss(e.target.value)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:border-accent-500"
             placeholder="Optional"
           />
         </div>
@@ -393,7 +396,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             step="0.01"
             value={targetPrice}
             onChange={(e) => setTargetPrice(e.target.value)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:border-accent-500"
             placeholder="Optional"
           />
         </div>
@@ -403,7 +406,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
             type="text"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:border-accent-500"
             placeholder="Optional"
           />
         </div>
@@ -413,7 +416,7 @@ function AddPositionForm({ initial, onSubmit, onCancel }: AddFormProps) {
         <button
           type="submit"
           disabled={submitting || !ticker.trim() || !entryPrice}
-          className="px-4 py-1.5 text-xs font-semibold rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 disabled:opacity-40 transition-colors"
+          className="btn-primary px-4"
         >
           {submitting ? 'Adding...' : 'Add Position'}
         </button>
@@ -436,11 +439,25 @@ function PositionCard({
   const pnl = position.status === 'OPEN' ? position.unrealized_pnl : position.realized_pnl;
   const pnlPct = position.status === 'OPEN' ? position.unrealized_pnl_pct : null;
   const isOption = position.position_type !== 'STOCK';
-  const borderColor = pnlColor(pnl ?? null);
+  const flags = position.health_flags ?? [];
+  const topFlag = topHealthFlag(flags);
+  const borderColor = topFlag?.severity === 'critical' ? PALETTE.red : PNL_COLOR(pnl);
+  const expired = hasFlag(flags, 'EXPIRED');
+  const dteWarning = hasFlag(flags, 'DTE_WARNING');
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       className={`bg-card border rounded-lg px-3 py-2.5 cursor-pointer transition-colors hover:border-text-secondary/40 ${
         selected ? 'ring-1 ring-accent-500/60' : ''
       }`}
@@ -451,7 +468,7 @@ function PositionCard({
           <span className="text-sm font-bold text-text-primary">{position.ticker}</span>
           <span
             className="px-1.5 py-px rounded text-[9px] font-bold"
-            style={{ backgroundColor: TYPE_COLORS[position.position_type] + '22', color: TYPE_COLORS[position.position_type] }}
+            style={{ backgroundColor: POSITION_TYPE_COLORS[position.position_type] + '22', color: POSITION_TYPE_COLORS[position.position_type] }}
           >
             {position.position_type}
           </span>
@@ -459,28 +476,44 @@ function PositionCard({
             x{position.quantity}
           </span>
         </div>
-        {position.is_on_watchlist && (
-          <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400 font-medium">
-            Watchlist
-          </span>
-        )}
+        <div className="flex items-center gap-1.5">
+          {topFlag && (
+            <span
+              className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded font-semibold cursor-help"
+              style={{ backgroundColor: SEVERITY_COLOR[topFlag.severity] + '22', color: SEVERITY_COLOR[topFlag.severity] }}
+              title={topFlag.message}
+            >
+              <span
+                className="w-1.5 h-1.5 rounded-full shrink-0"
+                style={{ backgroundColor: SEVERITY_COLOR[topFlag.severity] }}
+              />
+              {topFlag.code.replace('_', ' ')}
+              {flags.length > 1 && <span className="font-normal opacity-80">+{flags.length - 1}</span>}
+            </span>
+          )}
+          {position.is_on_watchlist && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400 font-medium">
+              Watchlist
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="flex items-center justify-between text-xs">
         <div className="text-text-secondary">
-          Entry: <span className="text-text-primary font-mono">{formatCurrency(position.entry_price)}</span>
+          Entry: <span className="text-text-primary font-mono">{fmtCurrency(position.entry_price)}</span>
           {isOption && position.strike_price != null && (
             <span className="ml-2">
-              Strike: <span className="text-text-primary font-mono">{formatCurrency(position.strike_price)}</span>
+              Strike: <span className="text-text-primary font-mono">{fmtCurrency(position.strike_price)}</span>
             </span>
           )}
         </div>
         <div className="text-right">
           {pnl != null && (
-            <span className="font-mono font-semibold" style={{ color: pnlColor(pnl) }}>
-              {pnl >= 0 ? '+' : ''}{formatCurrency(pnl)}
+            <span className="font-mono font-semibold" style={{ color: PNL_COLOR(pnl) }}>
+              {fmtSignedCurrency(pnl)}
               {pnlPct != null && (
-                <span className="text-[10px] ml-1">({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)</span>
+                <span className="text-[10px] ml-1">({fmtSigned(pnlPct, 1, '%')})</span>
               )}
             </span>
           )}
@@ -497,18 +530,20 @@ function PositionCard({
           {position.days_to_expiry != null && position.status === 'OPEN' && (
             <span
               className={`px-1 py-px rounded font-medium ${
-                position.days_to_expiry <= 3
-                  ? 'bg-amber-900/60 text-amber-400'
-                  : position.days_to_expiry <= 7
-                    ? 'bg-amber-900/30 text-amber-400'
-                    : 'bg-border text-text-secondary'
+                expired
+                  ? 'bg-red-900/60 text-red-400'
+                  : position.days_to_expiry <= 3
+                    ? 'bg-amber-900/60 text-amber-400'
+                    : dteWarning
+                      ? 'bg-amber-900/30 text-amber-400'
+                      : 'bg-border text-text-secondary'
               }`}
             >
-              {position.days_to_expiry}d left
+              {expired ? 'Expired' : `${position.days_to_expiry}d left`}
             </span>
           )}
           {position.premium_paid != null && (
-            <span>Premium: {formatCurrency(position.premium_paid)}</span>
+            <span>Premium: {fmtCurrency(position.premium_paid)}</span>
           )}
         </div>
       )}
@@ -517,20 +552,6 @@ function PositionCard({
 }
 
 /* ── Position Detail Panel ──────────────────────────────────────────────── */
-
-function SignalBullet({ signal }: { signal: SignalDetail }) {
-  const isPositive = signal.points > 0;
-  return (
-    <li className="text-[10px] leading-tight">
-      <div className="flex items-start gap-1">
-        <span className={`font-mono font-bold shrink-0 w-6 text-right ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
-          {isPositive ? '+' : ''}{signal.points}
-        </span>
-        <span className="text-text-primary">{signal.signal}</span>
-      </div>
-    </li>
-  );
-}
 
 function PositionDetail({
   position,
@@ -565,6 +586,9 @@ function PositionDetail({
 
   const rec = position.recommendation;
   const isOption = position.position_type !== 'STOCK';
+  const flags = position.health_flags ?? [];
+  const expired = hasFlag(flags, 'EXPIRED');
+  const dteWarning = hasFlag(flags, 'DTE_WARNING');
 
   const handleClose = async () => {
     if (!closePrice) return;
@@ -604,7 +628,7 @@ function PositionDetail({
   };
 
   return (
-    <div className="bg-card border border-border rounded-lg overflow-hidden sticky top-24 max-h-[calc(100vh-7rem)] overflow-y-auto">
+    <div className="detail-panel overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3 border-b border-border">
         <div className="flex items-center justify-between">
@@ -612,7 +636,7 @@ function PositionDetail({
             <span className="text-lg font-bold text-text-primary">{position.ticker}</span>
             <span
               className="px-1.5 py-0.5 rounded text-[10px] font-bold"
-              style={{ backgroundColor: TYPE_COLORS[position.position_type] + '22', color: TYPE_COLORS[position.position_type] }}
+              style={{ backgroundColor: POSITION_TYPE_COLORS[position.position_type] + '22', color: POSITION_TYPE_COLORS[position.position_type] }}
             >
               {position.position_type}
             </span>
@@ -624,8 +648,9 @@ function PositionDetail({
           </div>
           <button
             onClick={() => onDelete(position.id)}
-            className="text-xs text-text-secondary hover:text-red-400 transition-colors"
+            className="btn-danger px-1.5"
             title="Delete position"
+            aria-label="Delete position"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -646,36 +671,36 @@ function PositionDetail({
           </div>
           <div className="flex justify-between">
             <span className="text-text-secondary">Entry Price</span>
-            <span className="text-text-primary font-mono">{formatCurrency(position.entry_price)}</span>
+            <span className="text-text-primary font-mono">{fmtCurrency(position.entry_price)}</span>
           </div>
           {isOption && position.strike_price != null && (
             <div className="flex justify-between">
               <span className="text-text-secondary">Strike</span>
-              <span className="text-text-primary font-mono">{formatCurrency(position.strike_price)}</span>
+              <span className="text-text-primary font-mono">{fmtCurrency(position.strike_price)}</span>
             </div>
           )}
           {isOption && position.premium_paid != null && (
             <div className="flex justify-between">
               <span className="text-text-secondary">Premium</span>
-              <span className="text-text-primary font-mono">{formatCurrency(position.premium_paid)}</span>
+              <span className="text-text-primary font-mono">{fmtCurrency(position.premium_paid)}</span>
             </div>
           )}
           {position.current_price != null && (
             <div className="flex justify-between">
               <span className="text-text-secondary">Current</span>
-              <span className="text-text-primary font-mono">{formatCurrency(position.current_price)}</span>
+              <span className="text-text-primary font-mono">{fmtCurrency(position.current_price)}</span>
             </div>
           )}
           {position.stop_loss != null && (
             <div className="flex justify-between">
               <span className="text-text-secondary">Stop Loss</span>
-              <span className="text-red-400 font-mono">{formatCurrency(position.stop_loss)}</span>
+              <span className="text-red-400 font-mono">{fmtCurrency(position.stop_loss)}</span>
             </div>
           )}
           {position.target_price != null && (
             <div className="flex justify-between">
               <span className="text-text-secondary">Target</span>
-              <span className="text-green-400 font-mono">{formatCurrency(position.target_price)}</span>
+              <span className="text-green-400 font-mono">{fmtCurrency(position.target_price)}</span>
             </div>
           )}
           {isOption && position.expiry && (
@@ -687,7 +712,15 @@ function PositionDetail({
           {position.days_to_expiry != null && position.status === 'OPEN' && (
             <div className="flex justify-between">
               <span className="text-text-secondary">Days Left</span>
-              <span className={position.days_to_expiry <= 3 ? 'text-amber-400 font-semibold' : 'text-text-primary'}>
+              <span
+                className={
+                  expired
+                    ? 'text-red-400 font-semibold'
+                    : dteWarning || position.days_to_expiry <= 3
+                      ? 'text-amber-400 font-semibold'
+                      : 'text-text-primary'
+                }
+              >
                 {position.days_to_expiry}
               </span>
             </div>
@@ -702,11 +735,11 @@ function PositionDetail({
         {position.status === 'OPEN' && position.unrealized_pnl != null && (
           <div className="bg-page border border-border rounded-lg p-3 text-center">
             <div className="text-[10px] text-text-secondary mb-1">Unrealized P&L</div>
-            <div className="text-lg font-bold font-mono" style={{ color: pnlColor(position.unrealized_pnl) }}>
-              {position.unrealized_pnl >= 0 ? '+' : ''}{formatCurrency(position.unrealized_pnl)}
+            <div className="text-lg font-bold font-mono" style={{ color: PNL_COLOR(position.unrealized_pnl) }}>
+              {fmtSignedCurrency(position.unrealized_pnl)}
               {position.unrealized_pnl_pct != null && (
                 <span className="text-sm ml-2">
-                  ({position.unrealized_pnl_pct >= 0 ? '+' : ''}{position.unrealized_pnl_pct.toFixed(1)}%)
+                  ({fmtSigned(position.unrealized_pnl_pct, 1, '%')})
                 </span>
               )}
             </div>
@@ -716,15 +749,37 @@ function PositionDetail({
         {position.status === 'CLOSED' && position.realized_pnl != null && (
           <div className="bg-page border border-border rounded-lg p-3 text-center">
             <div className="text-[10px] text-text-secondary mb-1">Realized P&L</div>
-            <div className="text-lg font-bold font-mono" style={{ color: pnlColor(position.realized_pnl) }}>
-              {position.realized_pnl >= 0 ? '+' : ''}{formatCurrency(position.realized_pnl)}
+            <div className="text-lg font-bold font-mono" style={{ color: PNL_COLOR(position.realized_pnl) }}>
+              {fmtSignedCurrency(position.realized_pnl)}
             </div>
             {position.close_price != null && (
               <div className="text-[10px] text-text-secondary mt-1">
-                Closed at {formatCurrency(position.close_price)} on {formatDate(position.closed_at)}
+                Closed at {fmtCurrency(position.close_price)} on {formatDate(position.closed_at)}
               </div>
             )}
           </div>
+        )}
+
+        {/* Health flags (position-aware overlay; server-computed, [] when closed) */}
+        {flags.length > 0 && (
+          <ul className="space-y-1">
+            {flags.map((f) => {
+              const color = SEVERITY_COLOR[f.severity];
+              return (
+                <li
+                  key={f.code}
+                  className="flex items-start gap-2 text-[11px] leading-snug rounded px-2 py-1.5"
+                  style={{ backgroundColor: color + '14', border: `1px solid ${color}40` }}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-1" style={{ backgroundColor: color }} />
+                  <span className="text-text-primary">
+                    <span className="font-semibold mr-1" style={{ color }}>{f.code.replace('_', ' ')}</span>
+                    {f.message}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
         )}
 
         {/* Refresh button (STOCK only, since option premium needs manual update) */}
@@ -732,7 +787,7 @@ function PositionDetail({
           <button
             onClick={handleRefresh}
             disabled={refreshing}
-            className="w-full py-1.5 text-xs rounded bg-border text-text-primary hover:bg-text-secondary/20 disabled:opacity-40 transition-colors"
+            className="btn-secondary w-full justify-center"
           >
             {refreshing ? 'Refreshing...' : 'Refresh Stock Price'}
           </button>
@@ -742,13 +797,13 @@ function PositionDetail({
         {rec && (
           <div className="border-t border-border/40 pt-3">
             <h4 className="text-[10px] font-semibold text-text-secondary uppercase tracking-wider mb-2">
-              EdgeFlow Recommendation
+              {BRAND} Recommendation
               <span className="text-[9px] font-normal ml-1 normal-case">({rec.recommendation_date})</span>
             </h4>
             <div className="flex items-center gap-2 mb-2">
               <span
                 className="px-2 py-0.5 rounded text-xs font-bold"
-                style={{ backgroundColor: (ACTION_COLORS[rec.action] ?? '#21262d') + '22', color: ACTION_COLORS[rec.action] }}
+                style={{ backgroundColor: (ACTION_COLORS[rec.action] ?? PALETTE.border) + '22', color: ACTION_COLORS[rec.action] }}
               >
                 {getActionLabel(rec.action)}
               </span>
@@ -773,7 +828,7 @@ function PositionDetail({
             {rec.signals && rec.signals.length > 0 && (
               <ul className="space-y-0.5 mb-2">
                 {rec.signals.slice(0, 8).map((s, i) => (
-                  <SignalBullet key={i} signal={s} />
+                  <SignalBullet key={i} signal={s} compact />
                 ))}
                 {rec.signals.length > 8 && (
                   <li className="text-[10px] text-text-secondary ml-7">+{rec.signals.length - 8} more</li>
@@ -784,13 +839,13 @@ function PositionDetail({
               {rec.target_price != null && (
                 <div className="flex justify-between">
                   <span className="text-text-secondary">Target</span>
-                  <span className="text-green-400 font-mono">{formatCurrency(rec.target_price)}</span>
+                  <span className="text-green-400 font-mono">{fmtCurrency(rec.target_price)}</span>
                 </div>
               )}
               {rec.stop_loss_price != null && (
                 <div className="flex justify-between">
                   <span className="text-text-secondary">Stop</span>
-                  <span className="text-red-400 font-mono">{formatCurrency(rec.stop_loss_price)}</span>
+                  <span className="text-red-400 font-mono">{fmtCurrency(rec.stop_loss_price)}</span>
                 </div>
               )}
             </div>
@@ -803,9 +858,9 @@ function PositionDetail({
             <button
               onClick={handleAnalyze}
               disabled={analyzing}
-              className="w-full py-1.5 text-xs rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 disabled:opacity-40 transition-colors"
+              className="btn-primary w-full justify-center"
             >
-              {analyzing ? 'Analyzing (30-60s)...' : 'Run EdgeFlow Analysis'}
+              {analyzing ? 'Analyzing (30-60s)...' : `Run ${BRAND} Analysis`}
             </button>
             {analysisError && <p className="text-xs text-red-400 mt-1">{analysisError}</p>}
             <p className="text-[9px] text-text-secondary mt-1">
@@ -822,15 +877,12 @@ function PositionDetail({
           <textarea
             value={editNotes}
             onChange={(e) => { setEditNotes(e.target.value); setNotesChanged(true); }}
-            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary placeholder-text-secondary focus:outline-none focus:border-accent-500 resize-none"
+            className="w-full px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary placeholder-text-secondary focus:border-accent-500 resize-none"
             rows={2}
             placeholder="Add notes..."
           />
           {notesChanged && (
-            <button
-              onClick={handleSaveNotes}
-              className="mt-1 px-3 py-1 text-[10px] rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 transition-colors"
-            >
+            <button onClick={handleSaveNotes} className="btn-primary mt-1">
               Save Notes
             </button>
           )}
@@ -846,13 +898,13 @@ function PositionDetail({
                 step="0.01"
                 value={closePrice}
                 onChange={(e) => setClosePrice(e.target.value)}
-                className="flex-1 px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
+                className="flex-1 px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:border-accent-500"
                 placeholder={isOption ? 'Close premium' : 'Close price'}
               />
               <button
                 onClick={handleClose}
                 disabled={closing || !closePrice}
-                className="px-3 py-1.5 text-xs font-semibold rounded bg-red-900/40 text-red-400 hover:bg-red-900/60 disabled:opacity-40 transition-colors"
+                className="btn-danger"
               >
                 {closing ? '...' : 'Close'}
               </button>
@@ -861,7 +913,7 @@ function PositionDetail({
               type="text"
               value={closeNotes}
               onChange={(e) => setCloseNotes(e.target.value)}
-              className="w-full mt-2 px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:outline-none focus:border-accent-500"
+              className="w-full mt-2 px-2 py-1.5 text-xs bg-page border border-border rounded text-text-primary focus:border-accent-500"
               placeholder="Close notes (optional)"
             />
           </div>
@@ -873,6 +925,11 @@ function PositionDetail({
 
 /* ── Main Page ──────────────────────────────────────────────────────────── */
 
+const POSITION_TABS: TabItem<'OPEN' | 'CLOSED'>[] = [
+  { key: 'OPEN', label: 'Open' },
+  { key: 'CLOSED', label: 'Closed' },
+];
+
 export default function PositionsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState<'OPEN' | 'CLOSED'>('OPEN');
@@ -883,6 +940,13 @@ export default function PositionsPage() {
   const positions = usePositions(tab);
   const [refreshing, setRefreshing] = useState(false);
 
+  // `positions.refetch` is re-created when `tab` changes; the stable handlers
+  // below call through this ref so they always refetch the tab on screen.
+  const refetchRef = useRef(positions.refetch);
+  useEffect(() => {
+    refetchRef.current = positions.refetch;
+  }, [positions.refetch]);
+
   // Bulk-refresh prices on the FIRST mount so the P&L the user sees is fresh.
   // The hook's 60s poll keeps it warm after that.
   useEffect(() => {
@@ -891,7 +955,7 @@ export default function PositionsPage() {
       setRefreshing(true);
       try {
         await refreshAllPositions();
-        if (!cancelled) positions.refetch();
+        if (!cancelled) refetchRef.current();
       } catch {
         // best-effort; existing prices remain
       } finally {
@@ -901,7 +965,6 @@ export default function PositionsPage() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Handle pre-fill from Dashboard "Open Position" link
@@ -935,45 +998,39 @@ export default function PositionsPage() {
     await createPosition(data);
     setShowForm(false);
     setInitialForm(undefined);
-    positions.refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    refetchRef.current();
   }, []);
 
   const handleClosePosition = useCallback(async (id: number, price: number, notes?: string) => {
     await closePosition(id, { close_price: price, notes });
-    positions.refetch();
+    refetchRef.current();
     setSelectedId(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleDelete = useCallback(async (id: number) => {
     await deletePosition(id);
-    positions.refetch();
+    refetchRef.current();
     setSelectedId(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleRefresh = useCallback(async (id: number) => {
     await refreshPositionPrice(id);
-    positions.refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    refetchRef.current();
   }, []);
 
   const handleUpdate = useCallback(async (id: number, data: Record<string, unknown>) => {
     await updatePosition(id, data);
-    positions.refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    refetchRef.current();
   }, []);
 
   const handleRefreshAll = useCallback(async () => {
     setRefreshing(true);
     try {
       await refreshAllPositions();
-      positions.refetch();
+      refetchRef.current();
     } finally {
       setRefreshing(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const selected = positions.data?.find((p) => p.id === selectedId) ?? null;
@@ -983,7 +1040,7 @@ export default function PositionsPage() {
     <div className="min-h-screen bg-page text-text-primary">
       <div className="max-w-7xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-4">
         {/* Header */}
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold">My Positions</h1>
             {refreshing && (
@@ -993,7 +1050,7 @@ export default function PositionsPage() {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:ml-auto w-full sm:w-auto">
             <button
               onClick={handleRefreshAll}
               disabled={refreshing}
@@ -1006,13 +1063,14 @@ export default function PositionsPage() {
               </svg>
             </button>
             <button
-              onClick={() => { setShowForm((v) => !v); if (showForm) setInitialForm(undefined); }}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-accent-900/60 text-accent-400 hover:bg-accent-800/60 transition-colors"
+              onClick={() => setShowForm(true)}
+              disabled={showForm}
+              className="btn-primary"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
               </svg>
-              {showForm ? 'Cancel' : 'Add Position'}
+              Add Position
             </button>
           </div>
         </div>
@@ -1029,40 +1087,23 @@ export default function PositionsPage() {
         {/* Summary (open positions only) */}
         {tab === 'OPEN' && allPositions.length > 0 && <SummaryBar positions={allPositions} />}
 
-        {/* P&L history rollup (day / month) */}
-        <PnlHistorySection />
-
         {/* Tabs */}
-        <div className="flex gap-1 border-b border-border">
-          {(['OPEN', 'CLOSED'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => { setTab(t); setSelectedId(null); }}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                tab === t
-                  ? 'border-accent-500 text-text-primary'
-                  : 'border-transparent text-text-secondary hover:text-text-primary'
-              }`}
-            >
-              {t === 'OPEN' ? 'Open' : 'Closed'}
-            </button>
-          ))}
-        </div>
+        <TabBar
+          tabs={POSITION_TABS}
+          active={tab}
+          size="md"
+          onChange={(t) => { setTab(t); setSelectedId(null); }}
+        />
 
-        {/* Content */}
-        {positions.loading ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="w-5 h-5 border-2 border-text-secondary border-t-transparent rounded-full animate-spin" />
-            <span className="ml-2 text-sm text-text-secondary">Loading...</span>
-          </div>
+        {/* Content — gate on first load only so the 60s poll never unmounts the detail panel */}
+        {positions.loading && !positions.data ? (
+          <LoadingRow py="py-12" />
         ) : positions.error ? (
-          <div className="py-4 px-3 bg-red-900/20 border border-red-900/40 rounded text-sm text-red-400">
-            {positions.error}
-          </div>
+          <ErrorBox message={positions.error} />
         ) : allPositions.length === 0 ? (
-          <div className="py-12 text-center text-text-secondary text-sm">
+          <EmptyCard>
             {tab === 'OPEN' ? 'No open positions. Click "Add Position" to get started.' : 'No closed positions yet.'}
-          </div>
+          </EmptyCard>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
             {/* Position cards */}
@@ -1089,13 +1130,14 @@ export default function PositionsPage() {
                   onAnalyzeDone={() => positions.refetch()}
                 />
               ) : (
-                <div className="bg-card border border-border rounded-lg p-8 text-center text-text-secondary text-sm">
-                  Click a position to view details
-                </div>
+                <EmptyCard>Click a position to view details</EmptyCard>
               )}
             </div>
           </div>
         )}
+
+        {/* P&L history rollup (day / month) */}
+        <PnlHistorySection />
       </div>
     </div>
   );

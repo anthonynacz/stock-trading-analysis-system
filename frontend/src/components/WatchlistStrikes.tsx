@@ -1,55 +1,19 @@
 import { useState, useEffect } from 'react';
-import type { WatchlistStrikesResult, StrikeRecommendation } from '../types';
+import type { StrikeAllResult, StrikeSnapshotResult, WatchlistStrikesResult } from '../types';
 import {
   getWatchlistStrikes,
   saveStrikeSnapshot,
   getStrikeSnapshot,
 } from '../utils/api';
-
-const RISK_LEVELS = ['conservative', 'moderate', 'aggressive'] as const;
-type RiskLevel = (typeof RISK_LEVELS)[number];
+import { fmtPrice } from '../utils/format';
+import { RiskLevel } from '../utils/options';
+import { BudgetSlider } from './BudgetSlider';
+import { RiskLevelTabs } from './RiskLevelTabs';
+import { StrikeCard } from './StrikeCard';
+import { LoadingRow } from './ui/feedback';
 
 interface WatchlistStrikesProps {
   selectedDate: string;
-}
-
-function MiniStrikeCard({
-  rec,
-  type,
-}: {
-  rec: StrikeRecommendation;
-  type: 'CALL' | 'PUT';
-}) {
-  const isCall = type === 'CALL';
-  const borderColor = isCall ? 'border-green-600/40' : 'border-red-600/40';
-  const labelColor = isCall ? 'text-green-400' : 'text-red-400';
-  const bgColor = isCall ? 'bg-green-900/10' : 'bg-red-900/10';
-
-  return (
-    <div className={`${bgColor} border ${borderColor} rounded p-2`}>
-      <div className="flex items-center justify-between mb-1">
-        <span className={`text-[10px] font-bold uppercase ${labelColor}`}>{type}</span>
-        <span className="text-[10px] text-text-secondary">{rec.days_to_expiry}d</span>
-      </div>
-      <div className="grid grid-cols-3 gap-x-2 text-[11px]">
-        <div>
-          <span className="text-text-secondary">Strike </span>
-          <span className="font-mono text-text-primary">${rec.strike.toFixed(0)}</span>
-        </div>
-        <div>
-          <span className="text-text-secondary">Prem </span>
-          <span className="font-mono text-text-primary">${rec.premium_estimate.toFixed(2)}</span>
-        </div>
-        <div>
-          <span className="text-text-secondary">Delta </span>
-          <span className="font-mono text-text-primary">{rec.delta_estimate.toFixed(2)}</span>
-        </div>
-      </div>
-      <div className="text-[10px] text-text-secondary mt-1">
-        Breakeven ${rec.breakeven.toFixed(2)} &middot; OI {rec.open_interest.toLocaleString()} &middot; Exp {rec.expiry}
-      </div>
-    </div>
-  );
 }
 
 function TickerStrikeRow({
@@ -58,18 +22,11 @@ function TickerStrikeRow({
   riskLevel,
 }: {
   ticker: string;
-  data: { current_price: number | null; [key: string]: unknown };
+  data: StrikeAllResult;
   riskLevel: RiskLevel;
 }) {
-  const pair = data[riskLevel] as {
-    recommended_call: StrikeRecommendation | null;
-    recommended_put: StrikeRecommendation | null;
-  } | undefined;
-
-  const hasCall = pair?.recommended_call != null;
-  const hasPut = pair?.recommended_put != null;
-
-  if (!hasCall && !hasPut) return null;
+  const pair = data[riskLevel];
+  if (!pair.recommended_call && !pair.recommended_put) return null;
 
   return (
     <div className="bg-card border border-border rounded-lg p-3">
@@ -77,15 +34,13 @@ function TickerStrikeRow({
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold text-text-primary">{ticker}</span>
           {data.current_price != null && (
-            <span className="text-xs text-text-secondary font-mono">
-              ${(data.current_price as number).toFixed(2)}
-            </span>
+            <span className="text-xs text-text-secondary font-mono">{fmtPrice(data.current_price)}</span>
           )}
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        {hasCall && <MiniStrikeCard rec={pair!.recommended_call!} type="CALL" />}
-        {hasPut && <MiniStrikeCard rec={pair!.recommended_put!} type="PUT" />}
+        {pair.recommended_call && <StrikeCard rec={pair.recommended_call} type="CALL" variant="mini" />}
+        {pair.recommended_put && <StrikeCard rec={pair.recommended_put} type="PUT" variant="mini" />}
       </div>
     </div>
   );
@@ -95,7 +50,7 @@ export default function WatchlistStrikes({ selectedDate }: WatchlistStrikesProps
   const [activeTab, setActiveTab] = useState<RiskLevel>('moderate');
   const [budget, setBudget] = useState(2000);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<WatchlistStrikesResult | null>(null);
+  const [result, setResult] = useState<WatchlistStrikesResult | StrikeSnapshotResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Snapshot state
@@ -160,16 +115,13 @@ export default function WatchlistStrikes({ selectedDate }: WatchlistStrikesProps
   // Count how many tickers have results for each risk level
   const countForLevel = (level: RiskLevel): number => {
     if (!result) return 0;
-    return Object.values(result.results).filter((data) => {
-      const pair = data[level] as {
-        recommended_call: StrikeRecommendation | null;
-        recommended_put: StrikeRecommendation | null;
-      } | undefined;
-      return pair?.recommended_call != null || pair?.recommended_put != null;
-    }).length;
+    return Object.values(result.results).filter(
+      (data) => data[level].recommended_call != null || data[level].recommended_put != null,
+    ).length;
   };
 
   const tickers = result ? Object.keys(result.results).sort() : [];
+  const snapshotBudget = result && 'snapshot_date' in result ? result.budget : null;
 
   return (
     <div className="space-y-4">
@@ -177,42 +129,20 @@ export default function WatchlistStrikes({ selectedDate }: WatchlistStrikesProps
       {isToday && (
         <div className="bg-card border border-border rounded-lg p-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-end gap-4">
-            {/* Budget slider */}
-            <div className="flex-1 w-full sm:w-auto space-y-1">
-              <div className="flex justify-between text-xs text-text-secondary">
-                <span>Max Budget per Contract</span>
-                <span className="font-mono text-text-primary">${budget.toLocaleString()}</span>
-              </div>
-              <input
-                type="range"
-                min={50}
-                max={10000}
-                step={50}
-                value={budget}
-                onChange={(e) => setBudget(Number(e.target.value))}
-                className="w-full h-1.5 rounded-full appearance-none bg-border cursor-pointer accent-accent-500"
-              />
-              <div className="flex justify-between text-[9px] text-text-secondary">
-                <span>$50</span>
-                <span>$10,000</span>
-              </div>
-            </div>
+            <BudgetSlider
+              value={budget}
+              onChange={setBudget}
+              label="Max Budget per Contract"
+              size="md"
+              className="flex-1 w-full sm:w-auto"
+            />
 
-            {/* Scan + Save buttons */}
             <div className="flex gap-2">
-              <button
-                onClick={handleScan}
-                disabled={loading}
-                className="px-4 py-2 text-sm font-semibold rounded bg-accent-700/80 text-white hover:bg-accent-600/80 disabled:opacity-40 transition-colors whitespace-nowrap"
-              >
+              <button onClick={handleScan} disabled={loading} className="btn-primary whitespace-nowrap">
                 {loading ? 'Scanning...' : 'Scan Watchlist'}
               </button>
               {result && !snapshotLoaded && (
-                <button
-                  onClick={handleSave}
-                  disabled={saving}
-                  className="px-4 py-2 text-sm font-semibold rounded bg-green-800/60 text-green-300 hover:bg-green-700/60 disabled:opacity-40 transition-colors whitespace-nowrap"
-                >
+                <button onClick={handleSave} disabled={saving} className="btn-secondary whitespace-nowrap">
                   {saving ? 'Saving...' : 'Save Snapshot'}
                 </button>
               )}
@@ -232,21 +162,14 @@ export default function WatchlistStrikes({ selectedDate }: WatchlistStrikesProps
         <div className="bg-card border border-border rounded-lg px-4 py-2">
           <p className="text-xs text-text-secondary">
             Saved snapshot from {selectedDate}
-            {'budget' in result && (result as unknown as { budget: number | null }).budget != null && (
-              <> &middot; Budget: ${(result as unknown as { budget: number }).budget.toLocaleString()}</>
-            )}
+            {snapshotBudget != null && <> &middot; Budget: {fmtPrice(snapshotBudget, 0)}</>}
           </p>
         </div>
       )}
 
       {error && <p className="text-sm text-red-400">{error}</p>}
 
-      {loading && (
-        <div className="flex items-center justify-center py-6">
-          <div className="w-5 h-5 border-2 border-text-secondary border-t-transparent rounded-full animate-spin" />
-          <span className="ml-2 text-sm text-text-secondary">Loading...</span>
-        </div>
-      )}
+      {loading && <LoadingRow label="Loading..." py="py-6" />}
 
       {/* No snapshot for historical date */}
       {!isToday && !loading && !snapshotLoaded && (
@@ -258,42 +181,28 @@ export default function WatchlistStrikes({ selectedDate }: WatchlistStrikesProps
       {/* Results */}
       {result && !loading && (
         <div className="space-y-3">
-          {/* Summary + risk tabs */}
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <p className="text-xs text-text-secondary">
               {result.scanned} tickers &middot; {result.with_results} with options data
             </p>
-            <div className="flex gap-1">
-              {RISK_LEVELS.map((level) => {
-                const count = countForLevel(level);
-                return (
-                  <button
-                    key={level}
-                    onClick={() => setActiveTab(level)}
-                    className={`px-3 py-1.5 text-xs font-semibold rounded capitalize transition-colors ${
-                      activeTab === level
-                        ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
-                        : 'bg-card border border-border text-text-secondary hover:text-text-primary'
-                    }`}
-                  >
-                    {level}
-                    <span className={`ml-1.5 text-[10px] ${activeTab === level ? 'text-accent-400' : 'text-text-secondary'}`}>
-                      ({count})
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+            <RiskLevelTabs
+              active={activeTab}
+              onChange={setActiveTab}
+              indicator={(level, isActive) => (
+                <span className={`ml-1.5 text-[10px] ${isActive ? 'text-accent-400' : 'text-text-secondary'}`}>
+                  ({countForLevel(level)})
+                </span>
+              )}
+            />
           </div>
 
-          {/* Ticker cards */}
           {tickers.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {tickers.map((ticker) => (
                 <TickerStrikeRow
                   key={ticker}
                   ticker={ticker}
-                  data={result.results[ticker] as { current_price: number | null }}
+                  data={result.results[ticker]}
                   riskLevel={activeTab}
                 />
               ))}

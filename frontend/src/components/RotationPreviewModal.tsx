@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { previewRotateOut, commitRotateOut } from '../utils/api';
 import { useRotationStatus } from '../hooks/useEdgeFlow';
+import { LoadingRow } from './ui/feedback';
 import type { RotationPreviewItem, RotationCommitPair } from '../types';
 
 interface RotationPreviewModalProps {
@@ -16,8 +17,30 @@ export default function RotationPreviewModal({ tickers, onClose, onCommitted }: 
   const [items, setItems] = useState<RotationPreviewItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [committedAdds, setCommittedAdds] = useState<string[]>([]);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   const rotation = useRotationStatus(phase === 'progress');
+  // Only an in-flight commit blocks dismissal. Once committed, the swap already happened
+  // server-side, so leaving early must still tell the parent to refetch (onCommitted).
+  const locked = phase === 'committing';
+  const dismiss = phase === 'progress' ? onCommitted : onClose;
+
+  useEffect(() => {
+    dialogRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (phase === 'preview') cancelRef.current?.focus();
+  }, [phase]);
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !locked) dismiss();
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [locked, dismiss]);
 
   useEffect(() => {
     let cancelled = false;
@@ -76,38 +99,45 @@ export default function RotationPreviewModal({ tickers, onClose, onCommitted }: 
       const s = tickerStates[t];
       return s === 'done' || s === 'error';
     });
+  // Never strand the user: a failed poll or a run the backend no longer reports
+  // (e.g. container restart) also unlocks Done.
+  const canFinish =
+    allDone || rotation.error != null || (rotation.data != null && !rotation.data.running);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={locked ? undefined : dismiss}
+    >
       <div
-        className="bg-card border border-border rounded-lg shadow-xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="rotate-title"
+        tabIndex={-1}
+        className="bg-card border border-border rounded-lg shadow-xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-5 outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-text-primary">Rotate out</h3>
+          <h3 id="rotate-title" className="text-lg font-bold text-text-primary">Rotate out</h3>
           <button
-            onClick={onClose}
-            className="text-text-secondary hover:text-text-primary text-xl leading-none"
+            type="button"
+            onClick={dismiss}
+            disabled={locked}
+            aria-label="Close"
+            className="text-text-secondary hover:text-text-primary text-xl leading-none disabled:opacity-40"
           >
             ×
           </button>
         </div>
 
-        {phase === 'loading' && (
-          <div className="flex items-center justify-center py-10">
-            <div className="w-5 h-5 border-2 border-text-secondary border-t-transparent rounded-full animate-spin" />
-            <span className="ml-2 text-sm text-text-secondary">Scoring candidates…</span>
-          </div>
-        )}
+        {phase === 'loading' && <LoadingRow label="Scoring candidates…" py="py-10" />}
 
         {phase === 'error' && (
           <div className="py-4">
             <p className="text-sm text-red-400">{error}</p>
             <div className="mt-4 flex justify-end">
-              <button
-                onClick={onClose}
-                className="px-3 py-1.5 text-xs font-semibold rounded bg-border text-text-primary"
-              >
+              <button type="button" onClick={onClose} className="btn-secondary">
                 Close
               </button>
             </div>
@@ -178,12 +208,16 @@ export default function RotationPreviewModal({ tickers, onClose, onCommitted }: 
 
             <div className="mt-4 flex justify-end gap-2">
               <button
+                ref={cancelRef}
+                type="button"
                 onClick={onClose}
-                className="px-3 py-1.5 text-xs font-semibold rounded bg-border text-text-secondary hover:text-text-primary"
+                disabled={phase === 'committing'}
+                className="btn-secondary"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleConfirm}
                 disabled={allowed.length === 0 || phase === 'committing'}
                 className="px-3 py-1.5 text-xs font-semibold rounded bg-amber-500 text-black hover:bg-amber-400 disabled:opacity-40"
@@ -225,13 +259,16 @@ export default function RotationPreviewModal({ tickers, onClose, onCommitted }: 
                 );
               })}
             </div>
+            {rotation.error && (
+              <p className="mt-3 text-xs text-red-400">{rotation.error}</p>
+            )}
             <div className="mt-4 flex justify-end">
               <button
                 onClick={onCommitted}
-                disabled={!allDone}
+                disabled={!canFinish}
                 className="px-3 py-1.5 text-xs font-semibold rounded bg-new-entrant text-black hover:opacity-90 disabled:opacity-40"
               >
-                {allDone ? 'Done' : 'Working…'}
+                {canFinish ? 'Done' : 'Working…'}
               </button>
             </div>
           </div>

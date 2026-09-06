@@ -3711,7 +3711,7 @@ async def outcomes_summary(
         # Per-signal attribution (T+5 / T+20 only — T+1 is mostly noise)
         for sig in (signals or []):
             points = sig.get("points") if isinstance(sig, dict) else None
-            name = sig.get("name") if isinstance(sig, dict) else None
+            name = (sig.get("signal") or sig.get("name")) if isinstance(sig, dict) else None
             if not name or not points:
                 continue
             sign = 1 if points > 0 else -1

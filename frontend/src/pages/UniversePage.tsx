@@ -7,28 +7,27 @@ import {
   approveCandidate,
   dismissCandidate,
   triggerDiscovery,
+  getApiErrorMessage,
 } from '../utils/api';
+import { PALETTE, SECTORS } from '../utils/theme';
+import { fmtMarketCap, fmtPrice, fmtSigned } from '../utils/format';
+import { SegmentedControl } from '../components/ui/SegmentedControl';
+import { EmptyCard, ErrorBox, LoadingRow } from '../components/ui/feedback';
 
 const SOURCE_COLORS: Record<string, string> = {
-  SEED: '#8b949e',
-  MANUAL: '#a371f7',
-  DISCOVERED: '#58a6ff',
+  SEED: PALETTE.gray,
+  MANUAL: PALETTE.purple,
+  DISCOVERED: PALETTE.blue,
 };
 
 const DISCOVERY_SOURCE_COLORS: Record<string, string> = {
-  MOST_ACTIVE: '#58a6ff',
-  GAINER: '#56d364',
-  LOSER: '#f85149',
-  NEWS_TRENDING: '#d29922',
+  MOST_ACTIVE: PALETTE.blue,
+  GAINER: PALETTE.greenLight,
+  LOSER: PALETTE.red,
+  NEWS_TRENDING: PALETTE.amber,
 };
 
-const SECTORS = [
-  'AI/Semiconductors',
-  'Fintech/Payments',
-  'Energy/Commodities',
-  'Healthcare/Biotech',
-  'Consumer/Cloud/Enterprise',
-];
+type Tab = 'universe' | 'candidates';
 
 // ── Stock card in the universe tab ─────────────────────────────────────────
 
@@ -39,6 +38,7 @@ function StockCard({
   stock: UniverseStock;
   onRemove: (ticker: string) => void;
 }) {
+  const sourceColor = SOURCE_COLORS[stock.source] ?? PALETTE.gray;
   return (
     <div className="bg-card border border-border rounded-lg px-3 py-2 flex items-center justify-between group hover:border-text-secondary transition-colors">
       <div className="flex items-center gap-2 min-w-0">
@@ -52,10 +52,7 @@ function StockCard({
       <div className="flex items-center gap-2 shrink-0">
         <span
           className="text-[10px] font-medium px-1.5 py-0.5 rounded"
-          style={{
-            color: SOURCE_COLORS[stock.source] ?? '#8b949e',
-            backgroundColor: `${SOURCE_COLORS[stock.source] ?? '#8b949e'}18`,
-          }}
+          style={{ color: sourceColor, backgroundColor: `${sourceColor}18` }}
         >
           {stock.source}
         </span>
@@ -77,17 +74,20 @@ function StockCard({
 
 function CandidateCard({
   candidate,
+  sectors,
   onApprove,
   onDismiss,
 }: {
   candidate: DiscoveryCandidate;
+  sectors: string[];
   onApprove: (id: number, sector: string) => void;
   onDismiss: (id: number) => void;
 }) {
-  const [sector, setSector] = useState(candidate.suggested_sector ?? SECTORS[0]);
-  const sourceColor = DISCOVERY_SOURCE_COLORS[candidate.source] ?? '#8b949e';
+  const [sector, setSector] = useState(candidate.suggested_sector ?? sectors[0]);
+  const sourceColor = DISCOVERY_SOURCE_COLORS[candidate.source] ?? PALETTE.gray;
   const changePct = candidate.change_pct;
-  const changeColor = changePct != null ? (changePct >= 0 ? '#56d364' : '#f85149') : '#8b949e';
+  const changeColor =
+    changePct != null ? (changePct >= 0 ? PALETTE.greenLight : PALETTE.red) : PALETTE.gray;
 
   return (
     <div className="bg-card border border-border rounded-lg p-3 hover:border-text-secondary transition-colors">
@@ -104,7 +104,7 @@ function CandidateCard({
         </div>
         {candidate.price != null && (
           <span className="text-sm text-text-primary font-medium">
-            ${candidate.price.toFixed(2)}
+            {fmtPrice(candidate.price)}
           </span>
         )}
       </div>
@@ -118,7 +118,7 @@ function CandidateCard({
         )}
         {changePct != null && (
           <span className="text-xs font-medium" style={{ color: changeColor }}>
-            {changePct >= 0 ? '+' : ''}{changePct.toFixed(1)}%
+            {fmtSigned(changePct, 1, '%')}
           </span>
         )}
       </div>
@@ -126,7 +126,7 @@ function CandidateCard({
       {/* Market cap */}
       {candidate.market_cap != null && (
         <div className="text-xs text-text-secondary mb-2">
-          Mkt Cap: ${(candidate.market_cap / 1e9).toFixed(1)}B
+          Mkt Cap: {fmtMarketCap(candidate.market_cap)}
         </div>
       )}
 
@@ -142,9 +142,9 @@ function CandidateCard({
         <select
           value={sector}
           onChange={(e) => setSector(e.target.value)}
-          className="flex-1 text-xs bg-background border border-border rounded px-2 py-1 text-text-primary"
+          className="flex-1 text-xs bg-page border border-border rounded px-2 py-1 text-text-primary"
         >
-          {SECTORS.map((s) => (
+          {sectors.map((s) => (
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
@@ -154,10 +154,7 @@ function CandidateCard({
         >
           Approve
         </button>
-        <button
-          onClick={() => onDismiss(candidate.id)}
-          className="text-xs px-2.5 py-1 rounded bg-red-900/30 text-red-400 hover:bg-red-900/50 transition-colors font-medium"
-        >
+        <button onClick={() => onDismiss(candidate.id)} className="btn-danger">
           Dismiss
         </button>
       </div>
@@ -168,28 +165,30 @@ function CandidateCard({
 // ── Main page ──────────────────────────────────────────────────────────────
 
 export default function UniversePage() {
-  const [tab, setTab] = useState<'universe' | 'candidates'>('universe');
+  const [tab, setTab] = useState<Tab>('universe');
   const [addTicker, setAddTicker] = useState('');
   const [addSector, setAddSector] = useState(SECTORS[0]);
   const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
   const [discovering, setDiscovering] = useState(false);
 
   const universe = useUniverse();
   const candidates = useDiscoveryCandidates();
 
+  const sectorNames = universe.data?.sectors.map((s) => s.name) ?? SECTORS;
   const pendingCount = candidates.data?.length ?? universe.data?.pending_candidates ?? 0;
 
   const handleAdd = useCallback(async () => {
     const ticker = addTicker.trim().toUpperCase();
     if (!ticker) return;
     setAdding(true);
+    setAddError(null);
     try {
       await addToUniverse(ticker, addSector);
       setAddTicker('');
       universe.refetch();
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Failed to add';
-      alert(msg);
+      setAddError(getApiErrorMessage(e, 'Failed to add ticker'));
     } finally {
       setAdding(false);
     }
@@ -250,34 +249,23 @@ export default function UniversePage() {
           )}
         </h1>
 
-        {/* Tabs */}
-        <div className="flex items-center gap-1 bg-card border border-border rounded-lg p-0.5">
-          <button
-            onClick={() => setTab('universe')}
-            className={`text-xs px-3 py-1.5 rounded-md transition-colors font-medium ${
-              tab === 'universe'
-                ? 'bg-accent-500/20 text-accent-400'
-                : 'text-text-secondary hover:text-text-primary'
-            }`}
-          >
-            Universe
-          </button>
-          <button
-            onClick={() => setTab('candidates')}
-            className={`text-xs px-3 py-1.5 rounded-md transition-colors font-medium relative ${
-              tab === 'candidates'
-                ? 'bg-accent-500/20 text-accent-400'
-                : 'text-text-secondary hover:text-text-primary'
-            }`}
-          >
-            Candidates
-            {pendingCount > 0 && (
-              <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
-                {pendingCount > 99 ? '99+' : pendingCount}
-              </span>
-            )}
-          </button>
-        </div>
+        <SegmentedControl<Tab>
+          value={tab}
+          onChange={setTab}
+          options={[
+            { key: 'universe', label: 'Universe' },
+            {
+              key: 'candidates',
+              label: 'Candidates',
+              badge: () =>
+                pendingCount > 0 ? (
+                  <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                    {pendingCount > 99 ? '99+' : pendingCount}
+                  </span>
+                ) : null,
+            },
+          ]}
+        />
       </div>
 
       {/* Universe tab */}
@@ -291,28 +279,29 @@ export default function UniversePage() {
               onChange={(e) => setAddTicker(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
               placeholder="Add ticker..."
-              className="text-sm bg-card border border-border rounded-lg px-3 py-1.5 text-text-primary placeholder:text-text-secondary/50 w-32 focus:outline-none focus:border-accent-500"
+              className="text-sm bg-card border border-border rounded-lg px-3 py-1.5 text-text-primary placeholder:text-text-secondary/50 w-32 focus:border-accent-500"
             />
             <select
               value={addSector}
               onChange={(e) => setAddSector(e.target.value)}
               className="text-sm bg-card border border-border rounded-lg px-3 py-1.5 text-text-primary"
             >
-              {SECTORS.map((s) => (
+              {sectorNames.map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
             <button
               onClick={handleAdd}
               disabled={adding || !addTicker.trim()}
-              className="text-xs px-3 py-1.5 rounded-lg bg-accent-500/20 text-accent-400 hover:bg-accent-500/30 transition-colors font-medium disabled:opacity-50"
+              className="btn-primary"
             >
               {adding ? 'Adding...' : 'Add'}
             </button>
           </div>
+          {addError && <ErrorBox message={addError} size="xs" />}
 
           {universe.loading && !universe.data ? (
-            <div className="text-center text-text-secondary py-12">Loading universe...</div>
+            <LoadingRow label="Loading universe…" py="py-12" />
           ) : universe.data ? (
             <div className="space-y-4">
               {universe.data.sectors.map((sector) => (
@@ -346,11 +335,7 @@ export default function UniversePage() {
         <>
           {/* Discovery button */}
           <div className="flex items-center gap-3">
-            <button
-              onClick={handleDiscover}
-              disabled={discovering}
-              className="text-xs px-3 py-1.5 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors font-medium disabled:opacity-50"
-            >
+            <button onClick={handleDiscover} disabled={discovering} className="btn-primary">
               {discovering ? 'Discovering...' : 'Run Discovery'}
             </button>
             <span className="text-xs text-text-secondary">
@@ -359,25 +344,26 @@ export default function UniversePage() {
           </div>
 
           {candidates.loading && !candidates.data ? (
-            <div className="text-center text-text-secondary py-12">Loading candidates...</div>
+            <LoadingRow label="Loading candidates…" py="py-12" />
           ) : candidates.data && candidates.data.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {candidates.data.map((c) => (
                 <CandidateCard
                   key={c.id}
                   candidate={c}
+                  sectors={sectorNames}
                   onApprove={handleApprove}
                   onDismiss={handleDismiss}
                 />
               ))}
             </div>
           ) : (
-            <div className="text-center py-12">
-              <p className="text-text-secondary text-sm">No pending candidates</p>
+            <EmptyCard>
+              <p>No pending candidates</p>
               <p className="text-text-secondary/60 text-xs mt-1">
                 Run discovery or wait for the daily scan to surface new stocks
               </p>
-            </div>
+            </EmptyCard>
           )}
         </>
       )}

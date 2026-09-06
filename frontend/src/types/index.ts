@@ -27,15 +27,6 @@ export interface StrikeRecommendation {
   explanation: string;
 }
 
-export interface StrikeRecommenderResult {
-  ticker: string;
-  current_price: number | null;
-  risk_level: string;
-  max_budget: number | null;
-  recommended_call: StrikeRecommendation | null;
-  recommended_put: StrikeRecommendation | null;
-}
-
 export interface StrikeRiskPair {
   recommended_call: StrikeRecommendation | null;
   recommended_put: StrikeRecommendation | null;
@@ -56,16 +47,22 @@ export interface WatchlistStrikesResult {
   with_results: number;
 }
 
+export interface StrikeSnapshotResult extends WatchlistStrikesResult {
+  snapshot_date: string;
+  budget: number | null;
+}
+
+export type RecAction = 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
+
+// Mirrors SuggestedOptionResponse (backend/utils/schemas.py): contract fields are
+// optional there because research-fallback rows are rebuilt from stored JSON.
 export interface SuggestedOption {
   id: number;
-  contract_type: 'CALL' | 'PUT';
-  strike: number;
-  expiry: string;
+  contract_type: 'CALL' | 'PUT' | null;
+  strike: number | null;
+  expiry: string | null;
   premium_estimate: number | null;
   delta_estimate: number | null;
-  gamma_estimate: number | null;
-  theta_estimate: number | null;
-  vega_estimate: number | null;
   strategy: string | null;
   strategy_rationale: string | null;
   days_to_expiry: number | null;
@@ -76,7 +73,7 @@ export interface Recommendation {
   id: number;
   recommendation_date: string;
   ticker: string;
-  action: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
+  action: RecAction;
   sector: string | null;
   conviction_score: number | null;
   signal_count: number | null;
@@ -92,7 +89,7 @@ export interface Recommendation {
   // Revision tracking — revision_number=0 means first run, prior_* will be null.
   // When >0, this row was overwritten by a later same-day run; UI renders a
   // "revised" badge with hover tooltip showing prior_action / prior_conviction_score.
-  prior_action: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL' | null;
+  prior_action: RecAction | null;
   prior_conviction_score: number | null;
   revision_number: number;
   revised_at: string | null;
@@ -262,7 +259,7 @@ export interface ResearchResult {
   company_name: string | null;
   sector: string | null;
   analyzed_at: string;
-  action: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
+  action: RecAction;
   conviction_score: number | null;
   signal_count: number | null;
   signals: SignalDetail[] | null;
@@ -284,7 +281,7 @@ export interface ResearchResult {
     unusual_activity: boolean;
     unusual_activity_detail: string | null;
   } | null;
-  suggested_options: SuggestedOption[];
+  suggested_options: SuggestedOption[] | null;
   // Deep-news enrichment (Tier 1)
   news_summary: string | null;
   news_clusters: {
@@ -530,6 +527,15 @@ export interface DiscoveryCandidate {
 export type PositionType = 'CALL' | 'PUT' | 'STOCK';
 export type PositionStatus = 'OPEN' | 'CLOSED';
 
+export type HealthSeverity = 'info' | 'warn' | 'critical';
+
+/** Position-aware overlay flag computed server-side on every read (empty for CLOSED positions). */
+export interface PositionHealthFlag {
+  code: 'EXPIRED' | 'DTE_WARNING' | 'STOP_BREACH' | 'TARGET_HIT' | 'SIGNAL_CONFLICT' | 'CONVICTION_DROP';
+  severity: HealthSeverity;
+  message: string;
+}
+
 export interface Position {
   id: number;
   ticker: string;
@@ -553,6 +559,8 @@ export interface Position {
   days_to_expiry: number | null;
   is_on_watchlist: boolean;
   recommendation: Recommendation | null;
+  recommendation_id: number | null;
+  health_flags: PositionHealthFlag[];
   notes: string | null;
 }
 
@@ -574,11 +582,7 @@ export interface PositionCreateRequest {
 
 export type ScannerTier = 'HOT' | 'WATCH' | 'MONITOR' | 'IGNORE';
 
-export interface ScannerSignal {
-  signal: string;
-  points: number;
-  detail: string;
-}
+export type ScannerSignal = SignalDetail;
 
 export interface ScannerResult {
   id: number;
@@ -637,11 +641,7 @@ export interface ScannerRunStatus {
 
 // ── Industry recommendations ────────────────────────────────────────────
 
-export interface IndustrySignal {
-  signal: string;
-  points: number;
-  detail: string;
-}
+export type IndustrySignal = SignalDetail;
 
 export interface IndustryRepresentativeTicker {
   ticker: string;
@@ -757,4 +757,36 @@ export interface ChartDatasetInfo {
 
 export interface ChartDatasetsResponse {
   datasets: ChartDatasetInfo[];
+}
+
+// ── Recommendation outcomes (performance) ──────────────────────────────
+
+export interface OutcomeBucket {
+  n: number;
+  avg_return_pct: number | null;
+  directional_n: number;
+  hit_rate: number | null;
+  avg_adj_return_pct: number | null;
+}
+
+export interface OutcomeSignalHorizon {
+  n: number;
+  hit_rate: number | null;
+  avg_adj_return_pct: number | null;
+}
+
+export interface OutcomeSignalRow {
+  name: string;
+  count: number;
+  avg_points: number;
+  t5: OutcomeSignalHorizon;
+  t20: OutcomeSignalHorizon;
+}
+
+export interface OutcomesSummary {
+  window_days: number;
+  rows: number;
+  overall: Record<string, OutcomeBucket>;
+  by_action: Record<string, Record<string, OutcomeBucket>>;
+  signals: OutcomeSignalRow[];
 }

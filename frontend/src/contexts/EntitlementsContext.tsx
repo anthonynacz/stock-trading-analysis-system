@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import api from '../utils/api';
 import { useAuth } from './AuthContext';
 
@@ -42,7 +42,6 @@ export interface EntitlementsResponse {
 interface State {
   data: EntitlementsResponse | null;
   loading: boolean;
-  error: string | null;
   isUnlimited: (n: number) => boolean;
   isAdmin: boolean;
   refresh: () => Promise<void>;
@@ -52,26 +51,27 @@ const Ctx = createContext<State | undefined>(undefined);
 
 export function EntitlementsProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  const userId = user?.id;
   const [data, setData] = useState<EntitlementsResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
+  // Keyed on the id, not the user object: every /me refetch yields a new
+  // object, which would otherwise trigger a redundant entitlements fetch.
   const refresh = useCallback(async () => {
-    if (!user) {
+    if (userId == null) {
       setData(null);
       return;
     }
     setLoading(true);
-    setError(null);
     try {
       const res = await api.get<EntitlementsResponse>('/me/entitlements');
       setData(res.data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load entitlements');
+    } catch {
+      // Non-fatal: consumers render without tier/credit info until the next refresh.
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [userId]);
 
   useEffect(() => {
     refresh();
@@ -82,20 +82,18 @@ export function EntitlementsProvider({ children }: { children: ReactNode }) {
     [data],
   );
 
-  return (
-    <Ctx.Provider
-      value={{
-        data,
-        loading,
-        error,
-        isUnlimited,
-        isAdmin: data?.tier === 'ADMIN',
-        refresh,
-      }}
-    >
-      {children}
-    </Ctx.Provider>
+  const value = useMemo<State>(
+    () => ({
+      data,
+      loading,
+      isUnlimited,
+      isAdmin: data?.tier === 'ADMIN',
+      refresh,
+    }),
+    [data, loading, isUnlimited, refresh],
   );
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 export function useEntitlements(): State {

@@ -1,4 +1,6 @@
-import type { Recommendation, WatchlistItem } from '../types';
+import { memo, useMemo } from 'react';
+import type { RecAction, Recommendation, WatchlistItem } from '../types';
+import { ACTION_RANK } from '../utils/recommendation';
 import { ACTION_COLORS } from '../utils/theme';
 
 interface WatchlistGridProps {
@@ -15,16 +17,7 @@ interface WatchlistGridProps {
 }
 
 /** Numeric rank for sorting: higher = more bullish (sorted first / left). */
-function actionRank(action: string): number {
-  switch (action) {
-    case 'STRONG_BUY': return 5;
-    case 'BUY': return 4;
-    case 'HOLD': return 3;
-    case 'SELL': return 2;
-    case 'STRONG_SELL': return 1;
-    default: return 0;
-  }
-}
+const rank = (a?: string) => (a ? ACTION_RANK[a as RecAction] ?? -1 : -1);
 
 function statusClasses(status: WatchlistItem['status']): string {
   switch (status) {
@@ -55,35 +48,34 @@ function StatusBadge({ status }: { status: WatchlistItem['status'] }) {
   return null;
 }
 
-export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggleLock, selectedTicker, recommendations, selected, onToggleSelect }: WatchlistGridProps) {
+function WatchlistGrid({ items, onTickerClick, onRemove, onToggleLock, selectedTicker, recommendations, selected, onToggleSelect }: WatchlistGridProps) {
+  const grouped = useMemo(() => {
+    const acc: Record<string, WatchlistItem[]> = {};
+    for (const item of items) {
+      const sector = item.sector ?? 'Other';
+      (acc[sector] ??= []).push(item);
+    }
+    // Sort each sector: greenest (STRONG_BUY / highest conviction) first
+    for (const sectorItems of Object.values(acc)) {
+      sectorItems.sort((a, b) => {
+        const recA = recommendations?.get(a.ticker);
+        const recB = recommendations?.get(b.ticker);
+        const rankA = rank(recA?.action);
+        const rankB = rank(recB?.action);
+        if (rankA !== rankB) return rankB - rankA; // higher rank first
+        // Tie-break by conviction score within same action
+        return (recB?.conviction_score ?? 0) - (recA?.conviction_score ?? 0);
+      });
+    }
+    return acc;
+  }, [items, recommendations]);
+
   if (items.length === 0) {
     return (
       <p className="text-text-secondary text-sm text-center py-8">
         No stocks on watchlist
       </p>
     );
-  }
-
-  const grouped = items.reduce<Record<string, WatchlistItem[]>>((acc, item) => {
-    const sector = item.sector ?? 'Other';
-    if (!acc[sector]) acc[sector] = [];
-    acc[sector].push(item);
-    return acc;
-  }, {});
-
-  // Sort each sector: greenest (STRONG_BUY / highest conviction) first
-  for (const sectorItems of Object.values(grouped)) {
-    sectorItems.sort((a, b) => {
-      const recA = recommendations?.get(a.ticker);
-      const recB = recommendations?.get(b.ticker);
-      const rankA = recA ? actionRank(recA.action) : 0;
-      const rankB = recB ? actionRank(recB.action) : 0;
-      if (rankA !== rankB) return rankB - rankA; // higher rank first
-      // Tie-break by conviction score within same action
-      const convA = recA?.conviction_score ?? 0;
-      const convB = recB?.conviction_score ?? 0;
-      return convB - convA;
-    });
   }
 
   return (
@@ -109,26 +101,69 @@ export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggle
                     ? 'border-cyan-700/60 ring-1 ring-cyan-500/20'
                     : statusClasses(item.status);
               return (
-                <button
+                <div
                   key={item.id}
-                  onClick={() => onTickerClick?.(item.ticker)}
-                  className={`bg-card border ${ringClass} rounded-lg p-3 text-left hover:bg-border/40 transition-colors relative group`}
+                  className={`bg-card border ${ringClass} rounded-lg hover:bg-border/40 transition-colors relative group`}
                 >
+                  <button
+                    type="button"
+                    onClick={() => onTickerClick?.(item.ticker)}
+                    className="w-full h-full text-left p-3 rounded-lg"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`text-sm font-bold text-text-primary ${item.status === 'REMOVED' ? 'line-through opacity-60' : ''}`}
+                        >
+                          {item.ticker}
+                        </span>
+                        {item.is_locked && (
+                          <span className="text-[10px] text-amber-400" title="Locked from rotation">🔒</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {item.rotation_protected && !item.is_manual && !item.is_locked && (
+                          <span
+                            className="text-[10px] text-cyan-400"
+                            title={item.protection_reasons.join('; ')}
+                          >
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm-1 15l-4-4 1.41-1.41L11 14.17l6.59-6.59L19 9l-8 8z" />
+                            </svg>
+                          </span>
+                        )}
+                        {item.is_manual && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-accent-900/60 text-accent-400">
+                            MANUAL
+                          </span>
+                        )}
+                        <StatusBadge status={item.status} />
+                      </div>
+                    </div>
+                    {item.company_name && (
+                      <p className="text-text-secondary text-xs mt-1 truncate">
+                        {item.company_name}
+                      </p>
+                    )}
+                  </button>
+
                   {/* Rotate-out selection checkbox */}
                   {canSelect && (
-                    <span
+                    <button
+                      type="button"
                       role="checkbox"
                       aria-checked={isChecked}
+                      aria-label="Select for rotation"
                       title={isChecked ? 'Unselect for rotation' : 'Select to rotate out'}
                       onClick={(e) => { e.stopPropagation(); onToggleSelect?.(item.ticker); }}
-                      className={`absolute top-1 left-1 z-10 flex items-center justify-center w-4 h-4 rounded border text-[10px] leading-none transition-opacity ${
+                      className={`absolute top-1 left-1 z-10 flex items-center justify-center w-4 h-4 rounded border text-[10px] leading-none transition-opacity focus-visible:opacity-100 ${
                         isChecked
                           ? 'bg-amber-500 border-amber-500 text-black'
                           : 'bg-card/80 border-text-secondary/50 text-transparent opacity-60 md:opacity-0 md:group-hover:opacity-100'
                       }`}
                     >
                       ✓
-                    </span>
+                    </button>
                   )}
 
                   {/* Conviction indicator bar */}
@@ -140,10 +175,11 @@ export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggle
                   {/* Top-right action buttons. Shown always on phones (no hover),
                       desktop keeps the hover-to-reveal behavior. */}
                   {item.status !== 'REMOVED' && (
-                    <div className="absolute top-1 right-1 flex md:hidden md:group-hover:flex items-center gap-0.5">
+                    <div className="absolute top-1 right-1 z-10 flex md:hidden md:group-hover:flex md:group-focus-within:flex items-center gap-0.5">
                       {onToggleLock && (
-                        <span
-                          role="button"
+                        <button
+                          type="button"
+                          aria-label={item.is_locked ? 'Unlock from rotation' : 'Lock from rotation'}
                           title={item.is_locked ? 'Unlock from rotation' : 'Lock from rotation'}
                           onClick={(e) => { e.stopPropagation(); onToggleLock(item.ticker); }}
                           className={`flex items-center justify-center w-7 h-7 sm:w-5 sm:h-5 rounded-full text-[13px] sm:text-[11px] leading-none transition-colors ${
@@ -153,55 +189,22 @@ export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggle
                           }`}
                         >
                           {item.is_locked ? '🔒' : '🔓'}
-                        </span>
+                        </button>
                       )}
                       {item.is_manual && onRemove && (
-                        <span
-                          role="button"
+                        <button
+                          type="button"
+                          aria-label="Remove from watchlist"
+                          title="Remove from watchlist"
                           onClick={(e) => { e.stopPropagation(); onRemove(item.ticker); }}
                           className="flex items-center justify-center w-7 h-7 sm:w-5 sm:h-5 rounded-full bg-red-900/60 text-red-400 hover:bg-red-800 text-[14px] sm:text-[10px] leading-none"
                         >
                           ×
-                        </span>
+                        </button>
                       )}
                     </div>
                   )}
-                  <div className="flex items-center justify-between gap-1">
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className={`text-sm font-bold text-text-primary ${item.status === 'REMOVED' ? 'line-through opacity-60' : ''}`}
-                      >
-                        {item.ticker}
-                      </span>
-                      {item.is_locked && (
-                        <span className="text-[10px] text-amber-400" title="Locked from rotation">🔒</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {item.rotation_protected && !item.is_manual && !item.is_locked && (
-                        <span
-                          className="text-[10px] text-cyan-400"
-                          title={item.protection_reasons.join('; ')}
-                        >
-                          <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm-1 15l-4-4 1.41-1.41L11 14.17l6.59-6.59L19 9l-8 8z" />
-                          </svg>
-                        </span>
-                      )}
-                      {item.is_manual && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-accent-900/60 text-accent-400">
-                          MANUAL
-                        </span>
-                      )}
-                      <StatusBadge status={item.status} />
-                    </div>
-                  </div>
-                  {item.company_name && (
-                    <p className="text-text-secondary text-xs mt-1 truncate">
-                      {item.company_name}
-                    </p>
-                  )}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -210,3 +213,5 @@ export default function WatchlistGrid({ items, onTickerClick, onRemove, onToggle
     </div>
   );
 }
+
+export default memo(WatchlistGrid);

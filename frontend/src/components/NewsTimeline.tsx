@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react';
+import { memo, useState, useMemo } from 'react';
+import { EmptyCard } from './ui/feedback';
 import type { NewsItem } from '../types';
 import { SENTIMENT_COLOR, IMPACT_COLORS } from '../utils/theme';
 
@@ -23,7 +24,7 @@ function formatTime(dateStr: string | null): string {
 
 const PAGE_SIZE = 15;
 
-export default function NewsTimeline({
+function NewsTimeline({
   items,
   showTickers = false,
   industries,
@@ -43,13 +44,17 @@ export default function NewsTimeline({
     let result = items;
     if (categoryFilter) result = result.filter((n) => n.category === categoryFilter);
     if (impactFilter) result = result.filter((n) => n.impact_level === impactFilter);
-    return result;
+    // Non-mutating sorted copy: the API array is shared state held by useNews
+    return result.map((n) => ({
+      ...n,
+      related_tickers: [...(n.related_tickers ?? [])]
+        .sort((a, b) => b.relevance_score - a.relevance_score)
+        .slice(0, 5),
+    }));
   }, [items, categoryFilter, impactFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  // Reset page when filters change and current page is out of bounds
   const safePage = Math.min(page, totalPages - 1);
-  if (safePage !== page) setPage(safePage);
 
   const paged = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
 
@@ -61,7 +66,7 @@ export default function NewsTimeline({
           <select
             value={industry ?? ''}
             onChange={(e) => { onIndustryChange(e.target.value); setPage(0); }}
-            className="bg-card border border-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-text-secondary"
+            className="bg-card border border-border rounded px-2 py-1 text-xs text-text-primary focus:border-text-secondary"
           >
             <option value="">All Industries</option>
             {industries.map((ind) => (
@@ -72,7 +77,7 @@ export default function NewsTimeline({
         <select
           value={categoryFilter}
           onChange={(e) => { setCategoryFilter(e.target.value); setPage(0); }}
-          className="bg-card border border-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-text-secondary"
+          className="bg-card border border-border rounded px-2 py-1 text-xs text-text-primary focus:border-text-secondary"
         >
           <option value="">All Categories</option>
           {categories.map((c) => (
@@ -82,7 +87,7 @@ export default function NewsTimeline({
         <select
           value={impactFilter}
           onChange={(e) => { setImpactFilter(e.target.value); setPage(0); }}
-          className="bg-card border border-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-text-secondary"
+          className="bg-card border border-border rounded px-2 py-1 text-xs text-text-primary focus:border-text-secondary"
         >
           <option value="">All Impact</option>
           <option value="HIGH">High</option>
@@ -97,27 +102,17 @@ export default function NewsTimeline({
         {totalPages > 1 && (
           <div className="flex items-center gap-1 ml-auto">
             <button
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              onClick={() => setPage(Math.max(0, safePage - 1))}
               disabled={safePage === 0}
               className="px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-border/60 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
               Prev
             </button>
-            {Array.from({ length: totalPages }, (_, i) => (
-              <button
-                key={i}
-                onClick={() => setPage(i)}
-                className={`w-7 h-7 rounded text-xs font-medium transition-colors ${
-                  i === safePage
-                    ? 'bg-accent-500/20 text-accent-400'
-                    : 'text-text-secondary hover:text-text-primary hover:bg-border/60'
-                }`}
-              >
-                {i + 1}
-              </button>
-            ))}
+            <span className="text-xs text-text-secondary tabular-nums">
+              {safePage + 1} / {totalPages}
+            </span>
             <button
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              onClick={() => setPage(Math.min(totalPages - 1, safePage + 1))}
               disabled={safePage === totalPages - 1}
               className="px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-border/60 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
@@ -129,7 +124,7 @@ export default function NewsTimeline({
 
       {/* Items */}
       {filtered.length === 0 ? (
-        <p className="text-text-secondary text-sm text-center py-6">No news available</p>
+        <EmptyCard>No news available</EmptyCard>
       ) : (
         <div className="space-y-1">
           {paged.map((item) => (
@@ -182,19 +177,16 @@ export default function NewsTimeline({
                   )}
                   {showTickers && item.related_tickers?.length > 0 && (
                     <>
-                      {item.related_tickers
-                        .sort((a, b) => b.relevance_score - a.relevance_score)
-                        .slice(0, 5)
-                        .map((r) => (
-                          <span
-                            key={r.ticker}
-                            className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-accent-900/30 text-accent-400 border border-accent-700/30"
-                            style={{ opacity: 0.4 + r.relevance_score * 0.6 }}
-                            title={`${r.relevance_source} (${r.relevance_score})`}
-                          >
-                            {r.ticker}
-                          </span>
-                        ))}
+                      {item.related_tickers.map((r) => (
+                        <span
+                          key={r.ticker}
+                          className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-accent-900/30 text-accent-400 border border-accent-700/30"
+                          style={{ opacity: 0.4 + r.relevance_score * 0.6 }}
+                          title={`${r.relevance_source} (${r.relevance_score})`}
+                        >
+                          {r.ticker}
+                        </span>
+                      ))}
                     </>
                   )}
                 </div>
@@ -216,7 +208,8 @@ export default function NewsTimeline({
           ))}
         </div>
       )}
-
     </div>
   );
 }
+
+export default memo(NewsTimeline);

@@ -1,6 +1,10 @@
+import { SegmentedControl } from './ui/SegmentedControl';
+
+type NewsMode = 'general' | 'watchlist' | 'ticker';
+
 interface NewsModeSelectorProps {
-  mode: 'general' | 'watchlist' | 'ticker';
-  onModeChange: (mode: 'general' | 'watchlist' | 'ticker') => void;
+  mode: NewsMode;
+  onModeChange: (mode: NewsMode) => void;
   ticker: string;
   onTickerChange: (ticker: string) => void;
   watchlistTickers: string[];
@@ -21,27 +25,13 @@ export default function NewsModeSelector({
 }: NewsModeSelectorProps) {
   return (
     <div className="flex items-center gap-2">
-      <div className="flex gap-0.5">
-        {MODES.map((m) => (
-          <button
-            key={m.key}
-            onClick={() => onModeChange(m.key)}
-            className={`px-3 py-1.5 sm:px-2.5 sm:py-1 text-[11px] font-semibold rounded transition-colors ${
-              mode === m.key
-                ? 'bg-accent-900/60 text-accent-300 border border-accent-600/60'
-                : 'bg-card border border-border text-text-secondary hover:text-text-primary'
-            }`}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl<NewsMode> options={MODES} value={mode} onChange={onModeChange} />
 
       {mode === 'ticker' && (
         <select
           value={ticker}
           onChange={(e) => onTickerChange(e.target.value)}
-          className="bg-card border border-border rounded px-2 py-1 text-xs text-text-primary focus:outline-none focus:border-accent-600/60"
+          className="bg-card border border-border rounded px-2 py-1 text-xs text-text-primary focus:border-accent-600/60"
         >
           <option value="">Select ticker...</option>
           {watchlistTickers.map((t) => (

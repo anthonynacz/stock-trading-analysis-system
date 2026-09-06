@@ -9,9 +9,9 @@ import type {
   WatchlistChanges,
   PipelineDates,
   PipelineRunStatus,
-  StrikeRecommenderResult,
   StrikeAllResult,
   WatchlistStrikesResult,
+  StrikeSnapshotResult,
   TrendData,
   ResearchResult,
   UniverseSummary,
@@ -19,6 +19,7 @@ import type {
   DiscoveryCandidate,
   Position,
   PositionCreateRequest,
+  SuggestedOption,
   DeepOptionsAnalysis,
   ScannerResult,
   ScannerUniverseItem,
@@ -37,9 +38,38 @@ import type {
   RotationCommitResponse,
   RotationCommitPair,
   RotationStatus,
+  OutcomesSummary,
 } from '../types';
 
 export const TOKEN_STORAGE_KEY = 'vela.access_token';
+
+/** Shape of a structured FastAPI `detail` body (quota / feature-lock errors). */
+export interface ApiErrorDetail {
+  error?: string;
+  feature?: string;
+  tier?: string;
+  message?: string;
+  denied_phases?: string[];
+}
+
+/** Extract a human-readable message from any thrown value (axios or otherwise). */
+export function getApiErrorMessage(err: unknown, fallback = 'Request failed'): string {
+  if (axios.isAxiosError(err)) {
+    if (err.code === 'ECONNABORTED') return 'Request timed out';
+    if (!err.response) return 'Network error — is the backend reachable?';
+    const d = err.response.data?.detail;
+    if (typeof d === 'string') return d;
+    if (d && typeof d === 'object') return (d as ApiErrorDetail).message ?? JSON.stringify(d);
+    return `${err.response.status} ${err.response.statusText}`;
+  }
+  return err instanceof Error ? err.message : fallback;
+}
+
+export const isQuotaError = (err: unknown) =>
+  axios.isAxiosError(err) && err.response?.status === 402;
+
+/** Fired on `window` when a stored token is rejected with 401 (token cleared first). */
+export const UNAUTHORIZED_EVENT = 'vela:unauthorized';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -53,6 +83,20 @@ api.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
+});
+
+// A 401 while holding a token means it expired or was revoked: drop it and let
+// AuthProvider (listening for UNAUTHORIZED_EVENT) bounce the user to /login.
+api.interceptors.response.use(undefined, (err: unknown) => {
+  if (
+    axios.isAxiosError(err) &&
+    err.response?.status === 401 &&
+    localStorage.getItem(TOKEN_STORAGE_KEY)
+  ) {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
+  return Promise.reject(err);
 });
 
 export default api;
@@ -76,12 +120,26 @@ export const getWatchlist = (sector?: string, date?: string) =>
     .then((r) => r.data);
 
 const REC_NUMERIC = [
-  'conviction_score', 'prior_conviction_score',
+  'conviction_score', 'prior_conviction_score', 'weighted_conviction_score',
   'current_price', 'target_price', 'stop_loss_price',
 ];
 const OPT_NUMERIC = [
   'strike', 'premium_estimate', 'delta_estimate', 'breakeven_price',
 ];
+const OPTIONS_SNAPSHOT_NUMERIC = [
+  'stock_price', 'iv_rank', 'iv_percentile', 'put_call_ratio',
+];
+
+function parseSuggestedOptions(list: SuggestedOption[]): SuggestedOption[] {
+  return list.map((o) => parseNumericFields(o, OPT_NUMERIC));
+}
+
+function parseRecommendation(rec: Recommendation): Recommendation {
+  return {
+    ...parseNumericFields(rec, REC_NUMERIC),
+    suggested_options: parseSuggestedOptions(rec.suggested_options),
+  };
+}
 
 export type RecommendationSort = 'conviction' | 'revised_at';
 
@@ -95,24 +153,12 @@ export const getRecommendations = (
     .get<Recommendation[]>('/recommendations', {
       params: { action, min_conviction: minConviction, date, sort },
     })
-    .then((r) =>
-      r.data.map((rec) => ({
-        ...parseNumericFields(rec, REC_NUMERIC),
-        suggested_options: rec.suggested_options.map((o) =>
-          parseNumericFields(o, OPT_NUMERIC),
-        ),
-      })),
-    );
+    .then((r) => r.data.map(parseRecommendation));
 
 export const getTickerRecommendations = (ticker: string, date?: string) =>
-  api.get<Recommendation[]>(`/recommendations/${ticker}`, { params: { date } }).then((r) =>
-    r.data.map((rec) => ({
-      ...parseNumericFields(rec, REC_NUMERIC),
-      suggested_options: rec.suggested_options.map((o) =>
-        parseNumericFields(o, OPT_NUMERIC),
-      ),
-    })),
-  );
+  api
+    .get<Recommendation[]>(`/recommendations/${ticker}`, { params: { date } })
+    .then((r) => r.data.map(parseRecommendation));
 
 export const getNews = (params?: {
   ticker?: string;
@@ -135,17 +181,10 @@ export const getCatalysts = () =>
 export const getOptions = (ticker: string) =>
   api
     .get<OptionsSnapshot>(`/options/${ticker}`)
-    .then((r) =>
-      parseNumericFields(r.data, [
-        'stock_price', 'iv_rank', 'iv_percentile', 'put_call_ratio',
-      ]),
-    );
+    .then((r) => parseNumericFields(r.data, OPTIONS_SNAPSHOT_NUMERIC));
 
 export const getStatus = () =>
   api.get<SystemStatus>('/status').then((r) => r.data);
-
-export const triggerRefresh = () =>
-  api.post<{ status: string }>('/refresh').then((r) => r.data);
 
 export const startPipeline = (phases?: string[]) =>
   api.post<{ status: string; phases: string[] }>('/pipeline/run', phases ? { phases } : {}).then((r) => r.data);
@@ -191,17 +230,6 @@ export const commitRotateOut = (pairs: RotationCommitPair[]) =>
 export const getRotationStatus = () =>
   api.get<RotationStatus>('/watchlist/rotate-out/status').then((r) => r.data);
 
-export const getStrikeRecommendations = (
-  ticker: string,
-  risk: string = 'moderate',
-  budget?: number,
-) =>
-  api
-    .get<StrikeRecommenderResult>(`/options/${ticker}/strikes`, {
-      params: { risk, budget },
-    })
-    .then((r) => r.data);
-
 export const getStrikeRecommendationsAll = (ticker: string, budget?: number) =>
   api
     .get<StrikeAllResult>(`/options/${ticker}/strikes/all`, {
@@ -218,14 +246,15 @@ export const getWatchlistStrikes = (budget?: number) =>
 
 export const saveStrikeSnapshot = (budget: number | undefined, results: Record<string, unknown>) =>
   api
-    .post('/strikes/snapshots', { budget, results })
+    .post<{ status: string; snapshot_date: string; tickers_saved: number }>('/strikes/snapshots', {
+      budget,
+      results,
+    })
     .then((r) => r.data);
 
 export const getStrikeSnapshot = (date: string) =>
   api
-    .get<WatchlistStrikesResult & { snapshot_date: string; budget: number | null }>('/strikes/snapshots', {
-      params: { date },
-    })
+    .get<StrikeSnapshotResult>('/strikes/snapshots', { params: { date } })
     .then((r) => r.data);
 
 export const getTickerTrends = (ticker: string, days = 20, sma = 5) =>
@@ -235,21 +264,16 @@ export const getTickerTrends = (ticker: string, days = 20, sma = 5) =>
 
 // ── Research ────────────────────────────────────────────────────────────────
 
-const RESEARCH_NUMERIC = [
-  'conviction_score', 'current_price', 'target_price', 'stop_loss_price',
-];
+// Same Decimal columns as recommendations; extra names are no-ops in parseNumericFields.
+const RESEARCH_NUMERIC = REC_NUMERIC;
 
 function parseResearchResult(r: ResearchResult): ResearchResult {
   const parsed = parseNumericFields(r, RESEARCH_NUMERIC);
   if (parsed.options_data) {
-    parsed.options_data = parseNumericFields(parsed.options_data, [
-      'stock_price', 'iv_rank', 'iv_percentile', 'put_call_ratio',
-    ]);
+    parsed.options_data = parseNumericFields(parsed.options_data, OPTIONS_SNAPSHOT_NUMERIC);
   }
   if (parsed.suggested_options) {
-    parsed.suggested_options = parsed.suggested_options.map((o) =>
-      parseNumericFields(o, OPT_NUMERIC),
-    );
+    parsed.suggested_options = parseSuggestedOptions(parsed.suggested_options);
   }
   return parsed;
 }
@@ -261,9 +285,6 @@ export const getResearchResults = (ticker?: string, limit = 50, offset = 0) =>
   api
     .get<ResearchResult[]>('/research', { params: { ticker, limit, offset } })
     .then((r) => r.data.map(parseResearchResult));
-
-export const getResearchResult = (id: number) =>
-  api.get<ResearchResult>(`/research/${id}`).then((r) => parseResearchResult(r.data));
 
 export const deleteResearchResult = (id: number) =>
   api.delete(`/research/${id}`);
@@ -289,9 +310,6 @@ export const getDeepOptionsResults = (ticker?: string, limit = 50, offset = 0) =
       params: { ticker, limit, offset },
     })
     .then((r) => r.data.map(parseDeepOptions));
-
-export const getDeepOptionsResult = (id: number) =>
-  api.get<DeepOptionsAnalysis>(`/options/deep/${id}`).then((r) => parseDeepOptions(r.data));
 
 export const deleteDeepOptionsResult = (id: number) =>
   api.delete(`/options/deep/${id}`);
@@ -329,12 +347,7 @@ const POS_NUMERIC = [
 function parsePosition(p: Position): Position {
   const parsed = parseNumericFields(p, POS_NUMERIC);
   if (parsed.recommendation) {
-    parsed.recommendation = {
-      ...parseNumericFields(parsed.recommendation, REC_NUMERIC),
-      suggested_options: parsed.recommendation.suggested_options.map((o) =>
-        parseNumericFields(o, OPT_NUMERIC),
-      ),
-    };
+    parsed.recommendation = parseRecommendation(parsed.recommendation);
   }
   return parsed;
 }
@@ -342,9 +355,6 @@ function parsePosition(p: Position): Position {
 export const getPositions = (status?: string, ticker?: string) =>
   api.get<Position[]>('/positions', { params: { status, ticker } })
     .then((r) => r.data.map(parsePosition));
-
-export const getPosition = (id: number) =>
-  api.get<Position>(`/positions/${id}`).then((r) => parsePosition(r.data));
 
 export const createPosition = (data: PositionCreateRequest) =>
   api.post<Position>('/positions', data).then((r) => parsePosition(r.data));
@@ -359,7 +369,7 @@ export const deletePosition = (id: number) =>
   api.delete(`/positions/${id}`);
 
 export const refreshAllPositions = () =>
-  api.post<Position[]>('/positions/refresh-all').then((r) => r.data);
+  api.post<Position[]>('/positions/refresh-all').then((r) => r.data.map(parsePosition));
 
 export interface PnlDaily {
   date: string;
@@ -408,9 +418,6 @@ const SCANNER_NUMERIC = [
   'avg_pt',
   'pt_chase_ratio',
 ];
-
-export const getScannerUniverse = () =>
-  api.get<ScannerUniverseItem[]>('/scanner/universe').then((r) => r.data);
 
 export const addScannerUniverse = (ticker: string, theme?: string) =>
   api
@@ -470,7 +477,7 @@ export const getIndustryDetail = (industry: string) =>
         history: d.history.map((h) =>
           parseNumericFields<IndustryHistoryPoint>(h, ['conviction_score']),
         ),
-        members: d.members,
+        members: d.members.map(parseRecommendation),
         top_components: (d.top_components ?? []).map((c) =>
           parseNumericFields<IndustryTopComponent>(c, [
             'conviction',
@@ -542,36 +549,6 @@ export const getScheduleUpcoming = (hours = 24) =>
   api.get<ScheduleUpcoming[]>('/schedule/upcoming', { params: { hours } }).then((r) => r.data);
 
 // ── Recommendation outcomes (performance) ────────────────────────────────
-
-export interface OutcomeBucket {
-  n: number;
-  avg_return_pct: number | null;
-  directional_n: number;
-  hit_rate: number | null;
-  avg_adj_return_pct: number | null;
-}
-
-export interface OutcomeSignalHorizon {
-  n: number;
-  hit_rate: number | null;
-  avg_adj_return_pct: number | null;
-}
-
-export interface OutcomeSignalRow {
-  name: string;
-  count: number;
-  avg_points: number;
-  t5: OutcomeSignalHorizon;
-  t20: OutcomeSignalHorizon;
-}
-
-export interface OutcomesSummary {
-  window_days: number;
-  rows: number;
-  overall: Record<string, OutcomeBucket>;
-  by_action: Record<string, Record<string, OutcomeBucket>>;
-  signals: OutcomeSignalRow[];
-}
 
 export const getOutcomesSummary = (days = 90) =>
   api.get<OutcomesSummary>('/outcomes/summary', { params: { days } }).then((r) => r.data);
