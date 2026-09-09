@@ -50,6 +50,13 @@ export default function Dashboard() {
   const [newsMode, setNewsMode] = useState<'general' | 'watchlist' | 'ticker'>('general');
   const [newsTicker, setNewsTicker] = useState('');
   const [newsIndustry, setNewsIndustry] = useState('');
+  const [watchlistOpen, setWatchlistOpen] = useState<boolean>(
+    () => localStorage.getItem('vela.watchlist_open') === '1',
+  );
+  useEffect(() => {
+    localStorage.setItem('vela.watchlist_open', watchlistOpen ? '1' : '0');
+  }, [watchlistOpen]);
+  const detailRef = useRef<HTMLElement | null>(null);
   const [recSort, setRecSort] = useState<RecSort>(() => {
     const stored = localStorage.getItem('vela.rec_sort');
     return stored === 'revised_at' ? 'revised_at' : 'conviction';
@@ -69,6 +76,11 @@ export default function Dashboard() {
     return () => {
       document.body.style.overflow = prev;
     };
+  }, [selectedTicker]);
+  useEffect(() => {
+    if (!selectedTicker || !window.matchMedia('(min-width: 1024px)').matches) return;
+    const el = detailRef.current;
+    if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }, [selectedTicker]);
 
   const pipelineDates = usePipelineDates();
@@ -223,6 +235,64 @@ export default function Dashboard() {
           </section>
         )}
 
+        {/* Recommendations + Ticker Detail — two-column layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          <section className="lg:col-span-3">
+            <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+              <h2 className="text-xl font-bold text-text-primary">Recommendations</h2>
+              <SegmentedControl
+                variant="joined"
+                options={REC_SORT_OPTIONS}
+                value={recSort}
+                onChange={setRecSort}
+              />
+            </div>
+            {recommendations.loading && !recommendations.data ? (
+              <LoadingRow />
+            ) : recommendations.error ? (
+              <ErrorBox message={recommendations.error} />
+            ) : (
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
+                {(recommendations.data ?? []).map((rec) => (
+                  <RecommendationCard
+                    key={rec.id}
+                    recommendation={rec}
+                    selectable={selectableTickers.has(rec.ticker)}
+                    selected={selected.has(rec.ticker)}
+                    onToggleSelect={toggleSelect}
+                    onOpenDetail={setSelectedTicker}
+                  />
+                ))}
+                {recommendations.data?.length === 0 && (
+                  <EmptyCard className="xl:col-span-2">No recommendations available</EmptyCard>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="lg:col-span-2" ref={detailRef}>
+            {selectedTicker ? (
+              <div
+                className="fixed inset-0 z-40 bg-page overflow-y-auto p-3
+                           lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:overflow-visible lg:p-0"
+              >
+                <TickerDetail
+                  ticker={selectedTicker}
+                  companyName={selectedCompany}
+                  selectedDate={selectedDate}
+                  onClose={closeDetail}
+                  rotationProtected={selectedItem?.rotation_protected}
+                  protectionReasons={selectedItem?.protection_reasons}
+                />
+              </div>
+            ) : (
+              <EmptyCard className="hidden lg:block mt-11">
+                Open a recommendation's details or pick a watchlist ticker
+              </EmptyCard>
+            )}
+          </section>
+        </div>
+
         {/* Industry Recommendations */}
         {industries.length > 0 && (
           <section>
@@ -247,86 +317,6 @@ export default function Dashboard() {
             </div>
           </section>
         )}
-
-        {/* Watchlist + Ticker Detail — two-column layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          <section className="lg:col-span-3">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-text-primary">Watchlist</h2>
-              <AddTickerForm onAdd={handleAddTicker} />
-            </div>
-            {watchlist.loading && !watchlist.data ? (
-              <LoadingRow />
-            ) : watchlist.error ? (
-              <ErrorBox message={watchlist.error} />
-            ) : (
-              <WatchlistGrid
-                items={watchlist.data ?? []}
-                onTickerClick={setSelectedTicker}
-                onRemove={handleRemoveTicker}
-                onToggleLock={handleToggleLock}
-                selectedTicker={selectedTicker}
-                recommendations={recMap}
-                selected={selected}
-                onToggleSelect={toggleSelect}
-              />
-            )}
-          </section>
-
-          <section className="lg:col-span-2">
-            {selectedTicker ? (
-              <div
-                className="fixed inset-0 z-40 bg-page overflow-y-auto p-3
-                           lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:overflow-visible lg:p-0"
-              >
-                <TickerDetail
-                  ticker={selectedTicker}
-                  companyName={selectedCompany}
-                  selectedDate={selectedDate}
-                  onClose={closeDetail}
-                  rotationProtected={selectedItem?.rotation_protected}
-                  protectionReasons={selectedItem?.protection_reasons}
-                />
-              </div>
-            ) : (
-              <EmptyCard className="hidden lg:block mt-9">Click a ticker to view details</EmptyCard>
-            )}
-          </section>
-        </div>
-
-        {/* Recommendations */}
-        <section>
-          <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-            <h2 className="text-xl font-bold text-text-primary">Recommendations</h2>
-            <SegmentedControl
-              variant="joined"
-              options={REC_SORT_OPTIONS}
-              value={recSort}
-              onChange={setRecSort}
-            />
-          </div>
-          {recommendations.loading && !recommendations.data ? (
-            <LoadingRow />
-          ) : recommendations.error ? (
-            <ErrorBox message={recommendations.error} />
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-              {(recommendations.data ?? []).map((rec) => (
-                <RecommendationCard
-                  key={rec.id}
-                  recommendation={rec}
-                  selectable={selectableTickers.has(rec.ticker)}
-                  selected={selected.has(rec.ticker)}
-                  onToggleSelect={toggleSelect}
-                  onOpenDetail={setSelectedTicker}
-                />
-              ))}
-              {recommendations.data?.length === 0 && (
-                <EmptyCard className="md:col-span-2">No recommendations available</EmptyCard>
-              )}
-            </div>
-          )}
-        </section>
 
         {/* Strike Scanner */}
         <section>
@@ -377,6 +367,49 @@ export default function Dashboard() {
             </div>
           </section>
         </div>
+        {/* Watchlist — collapsed by default; recommendations are the primary view */}
+        <section>
+          <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setWatchlistOpen((v) => !v)}
+              aria-expanded={watchlistOpen}
+              className="flex items-center gap-2 text-xl font-bold text-text-primary hover:text-accent-300 transition-colors"
+            >
+              <span
+                className={`text-sm text-text-secondary transition-transform ${watchlistOpen ? 'rotate-90' : ''}`}
+                aria-hidden="true"
+              >
+                ▶
+              </span>
+              Watchlist
+              {watchlist.data && (
+                <span className="text-sm font-normal text-text-secondary">
+                  ({watchlist.data.length})
+                </span>
+              )}
+            </button>
+            <AddTickerForm onAdd={handleAddTicker} />
+          </div>
+          {watchlistOpen &&
+            (watchlist.loading && !watchlist.data ? (
+              <LoadingRow />
+            ) : watchlist.error ? (
+              <ErrorBox message={watchlist.error} />
+            ) : (
+              <WatchlistGrid
+                items={watchlist.data ?? []}
+                onTickerClick={setSelectedTicker}
+                onRemove={handleRemoveTicker}
+                onToggleLock={handleToggleLock}
+                selectedTicker={selectedTicker}
+                recommendations={recMap}
+                selected={selected}
+                onToggleSelect={toggleSelect}
+              />
+            ))}
+        </section>
+
       </div>
 
       {/* Rotate-out selection bar + preview/confirm modal */}

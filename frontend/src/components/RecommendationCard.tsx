@@ -167,6 +167,16 @@ function RecommendationCard({ recommendation: rec, selectable, selected, onToggl
             </svg>
             Options Lab
           </button>
+          {onOpenDetail && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onOpenDetail(rec.ticker); }}
+              title={`Open the ${rec.ticker} detail panel`}
+              className="px-2 py-0.5 rounded text-[10px] font-semibold bg-border/60 text-text-secondary hover:text-text-primary hover:bg-border transition-colors shrink-0"
+            >
+              Details
+            </button>
+          )}
           <svg
             className={`w-3.5 h-3.5 text-text-secondary transition-transform shrink-0 ${expanded ? 'rotate-180' : ''}`}
             fill="none"

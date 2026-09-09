@@ -53,14 +53,14 @@ cd frontend && npm run build                # tsc + vite build (what the Dockerf
 
 The app uses react-router-dom with routes: `/` (Dashboard), `/universe` (Universe), `/research` (Research), `/options-lab` (Options Lab), `/scanner` (Scanner), `/industries` (Industries), `/charts` (Charts), `/positions` (Positions), `/performance` (Performance), `/schedule` (Schedule), `/settings` (Settings), `/knowledge` (Knowledge), `/login` (public). A top nav bar (`AppNav`) links all protected pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
 
-The Dashboard has the following sections:
+The Dashboard has the following sections (recommendations are the primary view; the watchlist is a secondary, collapsed section):
 1. **StatusBar** — Date stepper (left/right arrows to navigate pipeline days), refresh button, system status
 2. **WatchlistChanges** — Horizontal bar showing NEW_ENTRANT (green) and REMOVED (red) badges for the selected date
-2a. **Industries** — Compact `IndustryCard` grid (`compact` prop hides the detail rows) linking to `/industries?industry=`
-3. **Watchlist + TickerDetail** — 3:2 column layout. Left: sector-grouped stock cards with status/manual/lock badges and add-ticker input. Right: detail panel on click with trend charts (price/conviction + IV/sentiment with configurable SMA), price, signals, options flow (sentiment-rated), and strike recommender.
-4. **Recommendations** — Expandable cards with signal bullet lists, price/risk row, entry/exit strategy. Header has a `Top conviction | Recently revised` segmented toggle (persisted to `localStorage["vela.rec_sort"]`) that switches the API's `sort=` param. `RecommendationCard` shows a `REV · Xh ago` chip on rows revised within the last 4h, with hover tooltip surfacing `revision_reason` (e.g. the intraday news headline that triggered the rescore). `StatusBar` shows "News Xm ago" pulled from `last_refresh.intraday_news`.
+3. **Recommendations + TickerDetail** — 3:2 column layout. Left: expandable cards with signal bullet lists, price/risk row, entry/exit strategy; each card header has a `Details` button (and the expanded body a `View details` button) that opens the ticker in the right-hand detail panel (trend charts, price, signals, options flow, strike recommender; a full-screen overlay below `lg`). Header has a `Top conviction | Recently revised` segmented toggle (persisted to `localStorage["vela.rec_sort"]`) that switches the API's `sort=` param. `RecommendationCard` shows a `REV · Xh ago` chip on rows revised within the last 4h, with hover tooltip surfacing `revision_reason`. `StatusBar` shows "News Xm ago" pulled from `last_refresh.intraday_news`. On desktop the panel scrolls into view when a ticker is picked from a lower section.
+4. **Industries** — Compact `IndustryCard` grid (`compact` prop hides the detail rows) linking to `/industries?industry=`
 5. **Strike Scanner** — Budget slider, "Scan Watchlist" button, "Save Snapshot" button. Historical dates auto-load the saved snapshot for that date; today shows the live scan. Results in 2-column grid with risk level tabs.
 6. **News + Catalysts** — 3:2 column layout. News timeline with mode selector (All/Watchlist/Ticker) and upcoming earnings calendar with countdown (days/hours). Ticker and Watchlist modes show relevance-scored ticker badges on each article.
+7. **Watchlist** — Collapsible section at the bottom (collapsed by default; state persisted to `localStorage["vela.watchlist_open"]`). Header shows the count and the add-ticker input even when collapsed; expanded, it renders the sector-grouped `WatchlistGrid` (status/manual/lock badges, click opens the detail panel in section 3).
 
 ## Key UI Features
 
