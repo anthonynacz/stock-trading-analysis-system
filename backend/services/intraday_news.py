@@ -82,9 +82,10 @@ def filter_material_news(
 ) -> list[_NewsTrigger]:
     """Pure-function materiality filter — easy to unit test.
 
-    A (ticker, article) pair is material when ANY of:
+    A (ticker, article) pair is material when relevance_score ≥
+    RELEVANCE_THRESHOLD (ticker named in headline/summary) AND ANY of:
       - impact_level == HIGH
-      - relevance_score ≥ RELEVANCE_THRESHOLD AND |sentiment| ≥ SENTIMENT_THRESHOLD_DEFAULT
+      - |sentiment| ≥ SENTIMENT_THRESHOLD_DEFAULT
       - category ∈ MATERIAL_CATEGORIES AND |sentiment| ≥ SENTIMENT_THRESHOLD_CATEGORY
 
     The sentiment check is symmetric on |score| so positive surprise and
@@ -103,9 +104,16 @@ def filter_material_news(
         impact = news.impact_level
         category = news.category
 
+        # The ticker must actually be named in the headline or summary.
+        # API_RELATED tags (0.5) come from the per-ticker news query and are
+        # frequently tangential ("X down 21%" tagged NVDA), and upstream marks
+        # >50% of articles HIGH impact, so without this floor the HIGH path
+        # rescores and alerts on stories that never mention the ticker.
+        if relevance < RELEVANCE_THRESHOLD:
+            continue
         is_material = (
             impact == "HIGH"
-            or (relevance >= RELEVANCE_THRESHOLD and abs_sent >= SENTIMENT_THRESHOLD_DEFAULT)
+            or abs_sent >= SENTIMENT_THRESHOLD_DEFAULT
             or (category in MATERIAL_CATEGORIES and abs_sent >= SENTIMENT_THRESHOLD_CATEGORY)
         )
         if not is_material:

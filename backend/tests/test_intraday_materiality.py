@@ -92,23 +92,22 @@ def test_low_relevance_blocks_default_branch():
     assert triggers == []
 
 
-def test_low_relevance_does_not_block_high_impact():
-    """HIGH impact bypasses the relevance gate (the news is news regardless)."""
+def test_low_relevance_blocks_high_impact():
+    """The relevance floor applies to every path: a HIGH-impact story that
+    does not name the ticker (relevance < 0.7) must not fire for it."""
     news = _News(id=1, headline="x", sentiment_score=Decimal("0.0"),
                  impact_level="HIGH", category="PRODUCT")
-    rels = [_Rel(news.id, "AAPL", Decimal("0.2"))]
-    triggers = filter_material_news([news], rels)
-    assert len(triggers) == 1
+    assert filter_material_news([news], [_Rel(news.id, "AAPL", Decimal("0.2"))]) == []
+    assert len(filter_material_news([news], [_Rel(news.id, "AAPL", Decimal("0.7"))])) == 1
 
 
-def test_low_relevance_does_not_block_category_branch():
-    """ANALYST/EARNINGS/GEOPOLITICAL also bypass the relevance gate when
-    |sentiment| ≥ 0.3 — the category is the strong signal."""
+def test_low_relevance_blocks_category_branch():
+    """ANALYST/EARNINGS/GEOPOLITICAL with |sentiment| ≥ 0.3 still needs the
+    ticker to be named in the text."""
     news = _News(id=1, headline="x", sentiment_score=Decimal("0.35"),
                  impact_level="MEDIUM", category="ANALYST")
-    rels = [_Rel(news.id, "AAPL", Decimal("0.2"))]
-    triggers = filter_material_news([news], rels)
-    assert len(triggers) == 1
+    assert filter_material_news([news], [_Rel(news.id, "AAPL", Decimal("0.2"))]) == []
+    assert len(filter_material_news([news], [_Rel(news.id, "AAPL", Decimal("0.7"))])) == 1
 
 
 def test_dedup_per_ticker_news_pair():
@@ -155,3 +154,12 @@ def test_null_sentiment_treated_as_zero():
                  impact_level="MEDIUM", category="PRODUCT")
     triggers = filter_material_news(*_make(news))
     assert triggers == []
+
+
+def test_api_related_tag_never_material_even_when_high_impact():
+    """relevance 0.5 = API_RELATED: the ticker is not named in the text, so a
+    HIGH-impact story about another company must not rescore/alert it."""
+    news = _News(id=9, headline="Why Is The Bancorp Stock Down 21% Today?",
+                 sentiment_score=Decimal("-0.97"), impact_level="HIGH", category="MACRO")
+    assert filter_material_news(*_make(news, ticker="NVDA", relevance=0.5)) == []
+    assert len(filter_material_news(*_make(news, ticker="NVDA", relevance=0.7))) == 1
