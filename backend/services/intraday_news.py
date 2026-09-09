@@ -202,6 +202,7 @@ async def run_intraday_news_scan() -> dict:
         "persisted": 0,
         "skipped_no_rec": 0,
         "skipped_delta": 0,
+        "alerts_pushed": 0,
     }
     error: str | None = None
 
@@ -264,6 +265,7 @@ async def run_intraday_news_scan() -> dict:
             session, data_client, analyst_tracker, earnings_svc, scanner, options_analyzer,
         )
 
+        revised: dict[str, dict] = {}
         for ticker, ticker_triggers in by_ticker.items():
             if not await _has_today_recommendation(session, ticker):
                 stats["skipped_no_rec"] += 1
@@ -283,10 +285,24 @@ async def run_intraday_news_scan() -> dict:
                 stats["tickers_rescored"] += 1
                 if rec is not None:
                     stats["persisted"] += 1
+                    revised[ticker] = {
+                        "action": rec.action,
+                        "conviction": float(rec.conviction_score or 0),
+                        "prior_action": rec.prior_action,
+                        "prior_conviction": float(rec.prior_conviction_score or 0),
+                    }
                 else:
                     stats["skipped_delta"] += 1
             except Exception:
                 logger.exception("Intraday rescore failed for %s", ticker)
+
+        # Push material headlines to Discord now rather than on the next
+        # 30-min alerts scan (same dedup key, so the scan won't repeat them).
+        try:
+            from services.alerts import dispatch_breaking_news
+            stats["alerts_pushed"] = await dispatch_breaking_news(session, triggers, revised)
+        except Exception:
+            logger.exception("Intraday breaking-news push failed")
 
         logger.info(
             "Intraday news scan complete: %d new news, %d triggers, "

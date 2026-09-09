@@ -62,6 +62,7 @@ DATABASE_URL=postgresql+asyncpg://edgeflow:<password>@db:5432/edgeflow  # Docker
 
 # Auth / multi-tenancy
 LEGACY_MODE=true                      # default; bypasses JWT, returns legacy admin user
+PUBLIC_APP_URL=                       # optional; portal base URL for deep links in Discord alerts (e.g. http://204.168.198.65:3000)
 LEGACY_USER_EMAIL=anthonynacouzy@gmail.com  # owner of all pre-retrofit rows
 JWT_JWKS_URL=                         # OIDC JWKS endpoint (Supabase / Clerk / Auth0)
 JWT_HS256_SECRET=                     # HS256 shared secret (dev / simple flows)

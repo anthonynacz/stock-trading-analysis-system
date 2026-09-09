@@ -19,6 +19,7 @@ GET  /api/pipeline-dates               # Distinct snapshot dates (last 90 days)
 GET  /api/recommendations              # Recs; ?action=&min_conviction=&date=&sort=conviction|revised_at  (default conviction; revised_at suppresses the personalized weighted re-sort)
 GET  /api/recommendations/{ticker}     # Ticker rec history (last 30 days)
 GET  /api/news                         # News feed; ?mode=general|ticker|watchlist&ticker=&min_relevance=0.3&category=&impact_level=&limit=
+GET  /api/news/breaking                # Material headlines (intraday materiality rule) for watchlist + held tickers; ?hours=4&limit=20. Each item lists tickers with today's rec + revision diff when that headline triggered the rescore (services/breaking_news.py)
 GET  /api/catalysts                    # Upcoming earnings (14 days) with fiscal quarter + EPS
 GET  /api/reports/daily                # Download PDF daily report; ?date= (default today)
 GET  /api/options/watchlist/strikes     # Strike recs for all watchlist tickers; ?budget=

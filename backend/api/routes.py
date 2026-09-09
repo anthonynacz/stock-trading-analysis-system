@@ -1239,6 +1239,20 @@ async def get_news(
     return [MarketNewsResponse.from_news(n) for n in news_items]
 
 
+@router.get("/news/breaking")
+async def get_breaking_news_route(
+    hours: int = Query(4, ge=1, le=48),
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Material headlines (same rule as the intraday rescore) for watchlist +
+    held tickers in the last `hours`, newest first, with today's rec and its
+    revision diff when that headline triggered a rescore."""
+    from services.breaking_news import get_breaking_news
+    return await get_breaking_news(db, user.id, hours, limit)
+
+
 # ── Catalysts ───────────────────────────────────────────────────────────────
 
 

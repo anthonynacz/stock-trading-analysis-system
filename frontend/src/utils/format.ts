@@ -68,3 +68,16 @@ export function fmtMarketCap(v: Num): string {
 export function fmtDelta(v: Num, digits = 2, fallback = DASH): string {
   return fmtNum(v, digits, fallback);
 }
+
+/** "just now" / "12m ago" / "3h ago" / "2d ago" for an ISO timestamp. */
+export function formatRelativeTime(iso: string): string {
+  const ts = new Date(iso).getTime();
+  if (Number.isNaN(ts)) return '';
+  const diffMin = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffH = Math.round(diffMin / 60);
+  if (diffH < 24) return `${diffH}h ago`;
+  return `${Math.round(diffH / 24)}d ago`;
+}
+

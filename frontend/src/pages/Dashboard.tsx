@@ -8,6 +8,7 @@ import {
   useCatalysts,
   useStatus,
   usePipelineDates,
+  useBreakingNews,
   useWatchlistChanges,
 } from '../hooks/useEdgeFlow';
 import { addToWatchlist, removeFromWatchlist, toggleLockTicker, getIndustries } from '../utils/api';
@@ -23,6 +24,7 @@ import NewsModeSelector from '../components/NewsModeSelector';
 import CatalystCalendar from '../components/CatalystCalendar';
 import WatchlistStrikes from '../components/WatchlistStrikes';
 import IndustryCard from '../components/IndustryCard';
+import BreakingNews, { type DetailFocus } from '../components/BreakingNews';
 import { AddTickerForm } from '../components/AddTickerForm';
 import { LoadingRow, ErrorBox, EmptyCard } from '../components/ui/feedback';
 import { SegmentedControl, type SegmentOption } from '../components/ui/SegmentedControl';
@@ -42,7 +44,14 @@ export default function Dashboard() {
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().slice(0, 10),
   );
-  const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get('ticker')?.toUpperCase() || null,
+  );
+  const [detailFocus, setDetailFocus] = useState<DetailFocus>(null);
+  const openDetail = useCallback((ticker: string, focus: DetailFocus = null) => {
+    setDetailFocus(focus);
+    setSelectedTicker(ticker);
+  }, []);
   // Rotate-out selection — a set of tickers checked across the watchlist grid
   // and the recommendations list (keyed by ticker so the two views stay in sync).
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -87,6 +96,7 @@ export default function Dashboard() {
   const watchlist = useWatchlist(undefined, selectedDate);
   const recommendations = useRecommendations(undefined, undefined, selectedDate, recSort);
   const watchlistChanges = useWatchlistChanges(selectedDate);
+  const breaking = useBreakingNews(4, 12);
   const news = useNews({
     mode: newsMode,
     ticker: newsMode === 'ticker' && newsTicker ? newsTicker : undefined,
@@ -206,7 +216,10 @@ export default function Dashboard() {
     [watchlist.refetch],
   );
 
-  const closeDetail = useCallback(() => setSelectedTicker(null), []);
+  const closeDetail = useCallback(() => {
+    setSelectedTicker(null);
+    setDetailFocus(null);
+  }, []);
 
   return (
     <div className="min-h-screen bg-page text-text-primary">
@@ -220,6 +233,15 @@ export default function Dashboard() {
       />
 
       <div className="max-w-7xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-6 sm:space-y-8">
+        {/* Breaking news — material headlines for watchlist + held tickers */}
+        <BreakingNews
+          items={breaking.data}
+          loading={breaking.loading}
+          error={breaking.error}
+          hours={4}
+          onOpenDetail={openDetail}
+        />
+
         {/* Watchlist Changes (Entrants / Exiters) */}
         {watchlistChanges.data &&
           (watchlistChanges.data.entrants.length > 0 ||
@@ -260,7 +282,7 @@ export default function Dashboard() {
                     selectable={selectableTickers.has(rec.ticker)}
                     selected={selected.has(rec.ticker)}
                     onToggleSelect={toggleSelect}
-                    onOpenDetail={setSelectedTicker}
+                    onOpenDetail={openDetail}
                   />
                 ))}
                 {recommendations.data?.length === 0 && (
@@ -283,6 +305,7 @@ export default function Dashboard() {
                   onClose={closeDetail}
                   rotationProtected={selectedItem?.rotation_protected}
                   protectionReasons={selectedItem?.protection_reasons}
+                  focus={detailFocus}
                 />
               </div>
             ) : (

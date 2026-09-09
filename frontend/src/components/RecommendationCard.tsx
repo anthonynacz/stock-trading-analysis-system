@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Recommendation } from '../types';
 import { ACTION_COLORS, getActionLabel, shortSectorLabel } from '../utils/theme';
 import { buildDemotionTooltip, detectDemotion } from '../utils/recommendation';
-import { fmtPrice, fmtSigned } from '../utils/format';
+import { fmtPrice, fmtSigned, formatRelativeTime } from '../utils/format';
 import { ActionBadge, DemotionChip, RiskBadge } from './ui/badges';
 import { ConvictionBar } from './ui/ConvictionBar';
 import { SignalBullet } from './SignalBullet';
@@ -16,19 +16,7 @@ interface RecommendationCardProps {
   selected?: boolean;
   onToggleSelect?: (ticker: string) => void;
   /** Opens the full TickerDetail panel for this ticker (Dashboard wires it to setSelectedTicker). */
-  onOpenDetail?: (ticker: string) => void;
-}
-
-function formatRelativeTime(iso: string): string {
-  const now = Date.now();
-  const ts = new Date(iso).getTime();
-  if (Number.isNaN(ts)) return '';
-  const diffMin = Math.max(0, Math.round((now - ts) / 60000));
-  if (diffMin < 1) return 'just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffH = Math.round(diffMin / 60);
-  if (diffH < 24) return `${diffH}h ago`;
-  return `${Math.round(diffH / 24)}d ago`;
+  onOpenDetail?: (ticker: string, focus?: 'strikes') => void;
 }
 
 /** `REV · Xh ago` chip; the tooltip carries the reason plus the prior→current action/conviction diff. */
@@ -64,6 +52,13 @@ export function RevisionBadge({ rec }: { rec: Recommendation }) {
   );
 }
 
+/** `intraday_news[CAT/IMPACT]: headline` → headline; null for other revision reasons. */
+function newsHeadline(reason: string | null): string | null {
+  if (!reason || !reason.startsWith('intraday_news[')) return null;
+  const idx = reason.indexOf(']: ');
+  return idx === -1 ? null : reason.slice(idx + 3);
+}
+
 function RecommendationCard({ recommendation: rec, selectable, selected, onToggleSelect, onOpenDetail }: RecommendationCardProps) {
   const [expanded, setExpanded] = useState(false);
   const borderColor = ACTION_COLORS[rec.action] ?? '#21262d';
@@ -87,6 +82,7 @@ function RecommendationCard({ recommendation: rec, selectable, selected, onToggl
   };
 
   const isRevised = (rec.revision_number ?? 0) > 0;
+  const headline = isRevised ? newsHeadline(rec.revision_reason) : null;
   const sectorShort = shortSectorLabel(rec.sector);
   const demotion = detectDemotion(
     rec.conviction_score,
@@ -188,6 +184,24 @@ function RecommendationCard({ recommendation: rec, selectable, selected, onToggl
           </svg>
         </div>
         {rec.conviction_score != null && <ConvictionBar score={rec.conviction_score} showValue />}
+        {headline && (
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="shrink-0" aria-hidden="true">📰</span>
+            <span className="text-text-secondary truncate min-w-0 flex-1" title={headline}>
+              {headline}
+            </span>
+            {onOpenDetail && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onOpenDetail(rec.ticker, 'strikes'); }}
+                title={`Open ${rec.ticker} and find strikes for this move`}
+                className="btn-primary px-2 py-0.5 text-[10px] shrink-0"
+              >
+                Strikes
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Expanded view */}

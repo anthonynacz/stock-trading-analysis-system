@@ -3,6 +3,7 @@ import {
   getWatchlist,
   getRecommendations,
   getNews,
+  getBreakingNews,
   getCatalysts,
   getStatus,
   getPipelineDates,
@@ -16,6 +17,7 @@ import {
   type RecommendationSort,
 } from '../utils/api';
 import type {
+  BreakingNewsItem,
   WatchlistItem,
   Recommendation,
   NewsItem,
@@ -159,6 +161,11 @@ export function useNews(filters?: {
     [filters?.ticker, filters?.mode, filters?.category, filters?.impact_level, filters?.industry, filters?.min_relevance, filters?.limit],
   );
   return usePolledQuery(fetcher, 'Failed to fetch news', { pollMs: 120_000 });
+}
+
+export function useBreakingNews(hours = 4, limit = 12): HookResult<BreakingNewsItem[]> {
+  const fetcher = useCallback(() => getBreakingNews({ hours, limit }), [hours, limit]);
+  return usePolledQuery(fetcher, 'Failed to fetch breaking news', { pollMs: 120_000, dedupe: true });
 }
 
 export function useCatalysts(): HookResult<CatalystEvent[]> {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import type { StrikeAllResult } from '../types';
 import { getStrikeRecommendationsAll } from '../utils/api';
@@ -10,9 +10,12 @@ import { StrikeCard } from './StrikeCard';
 
 interface StrikeRecommenderProps {
   ticker: string;
+  /** Fetch strikes immediately on mount and scroll into view (breaking-news "Strikes" shortcut). */
+  autoRun?: boolean;
 }
 
-export default function StrikeRecommender({ ticker }: StrikeRecommenderProps) {
+export default function StrikeRecommender({ ticker, autoRun = false }: StrikeRecommenderProps) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<RiskLevel>(
     (user?.risk_profile as RiskLevel) ?? 'moderate',
@@ -36,6 +39,13 @@ export default function StrikeRecommender({ ticker }: StrikeRecommenderProps) {
     }
   };
 
+  useEffect(() => {
+    if (!autoRun) return;
+    rootRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    void handleFind();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, ticker]);
+
   const activePair = result ? result[activeTab] : null;
 
   const hasResults = (level: RiskLevel): boolean => {
@@ -44,7 +54,7 @@ export default function StrikeRecommender({ ticker }: StrikeRecommenderProps) {
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" ref={rootRef}>
       <h4 className="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">
         Strike Recommender
       </h4>

@@ -24,9 +24,11 @@ interface TickerDetailProps {
   onClose: () => void;
   rotationProtected?: boolean;
   protectionReasons?: string[];
+  /** 'strikes' auto-runs the strike recommender and scrolls to it. */
+  focus?: 'strikes' | null;
 }
 
-function TickerDetail({ ticker, companyName, selectedDate, onClose, rotationProtected, protectionReasons }: TickerDetailProps) {
+function TickerDetail({ ticker, companyName, selectedDate, onClose, rotationProtected, protectionReasons, focus }: TickerDetailProps) {
   const navigate = useNavigate();
   const [rec, setRec] = useState<Recommendation | null>(null);
   const [options, setOptions] = useState<OptionsSnapshot | null>(null);
@@ -229,7 +231,7 @@ function TickerDetail({ ticker, companyName, selectedDate, onClose, rotationProt
 
           {/* Strike Recommender — always visible */}
           <div className="border-t border-border/40 pt-3">
-            <StrikeRecommender ticker={ticker} />
+            <StrikeRecommender ticker={ticker} autoRun={focus === 'strikes'} />
           </div>
 
           {/* Open Position — pre-fills from the recommendation when one exists */}

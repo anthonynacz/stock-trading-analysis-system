@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type {
+  BreakingNewsItem,
   WatchlistItem,
   Recommendation,
   NewsItem,
@@ -172,6 +173,9 @@ export const getNews = (params?: {
   api
     .get<NewsItem[]>('/news', { params })
     .then((r) => r.data.map((n) => parseNumericFields(n, ['sentiment_score'])));
+
+export const getBreakingNews = (params?: { hours?: number; limit?: number }) =>
+  api.get<BreakingNewsItem[]>('/news/breaking', { params }).then((r) => r.data);
 
 export const getCatalysts = () =>
   api.get<CatalystEvent[]>('/catalysts').then((r) =>

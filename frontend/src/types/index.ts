@@ -160,6 +160,66 @@ export interface NewsTickerRelevance {
   relevance_source: string;
 }
 
+export interface BreakingNewsRec {
+  id: number;
+  action: RecAction;
+  conviction_score: number | null;
+  prior_action: RecAction | null;
+  prior_conviction_score: number | null;
+  revised_at: string | null;
+  /** True when this exact headline produced the recommendation's latest revision. */
+  triggered_revision: boolean;
+}
+
+export interface BreakingNewsTicker {
+  ticker: string;
+  relevance_score: number;
+  held: boolean;
+  recommendation: BreakingNewsRec | null;
+}
+
+export interface BreakingNewsItem {
+  id: number;
+  headline: string;
+  source: string | null;
+  source_url: string | null;
+  category: string | null;
+  impact_level: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  sentiment_score: number | null;
+  published_at: string | null;
+  tickers: BreakingNewsTicker[];
+}
+
+export interface BreakingNewsRec {
+  id: number;
+  action: RecAction;
+  conviction_score: number | null;
+  prior_action: RecAction | null;
+  prior_conviction_score: number | null;
+  revised_at: string | null;
+  /** True when this exact headline produced the recommendation's latest revision. */
+  triggered_revision: boolean;
+}
+
+export interface BreakingNewsTicker {
+  ticker: string;
+  relevance_score: number;
+  held: boolean;
+  recommendation: BreakingNewsRec | null;
+}
+
+export interface BreakingNewsItem {
+  id: number;
+  headline: string;
+  source: string | null;
+  source_url: string | null;
+  category: string | null;
+  impact_level: 'HIGH' | 'MEDIUM' | 'LOW' | null;
+  sentiment_score: number | null;
+  published_at: string | null;
+  tickers: BreakingNewsTicker[];
+}
+
 export interface NewsItem {
   id: number;
   ticker: string | null;

@@ -94,8 +94,16 @@ def _format_alert(alert_type: str, ticker: str | None, payload: dict[str, Any]) 
         return (f"🐋 **{t}** {detail} — calls {payload.get('call_volume')} "
                 f"/ puts {payload.get('put_volume')}")
     if alert_type == "news_spike":
-        return (f"📰 **{t}** news spike ({payload.get('sentiment'):+.2f} "
-                f"{payload.get('source') or ''}): {payload.get('headline')}")
+        msg = (f"📰 **{t}** news spike ({payload.get('sentiment'):+.2f} "
+               f"{payload.get('source') or ''}): {payload.get('headline')}")
+        rec = payload.get("rec_change")
+        if rec:
+            msg += (f"\n↪ Rec revised: {rec.get('prior_action')} → **{rec.get('action')}** "
+                    f"(conv {rec.get('prior_conviction'):+.0f} → {rec.get('conviction'):+.0f})")
+        link = payload.get("link")
+        if link:
+            msg += f"\n{link}"
+        return msg
     return f"🔔 **{t}** {alert_type}: {payload}"
 
 
@@ -468,3 +476,65 @@ async def run_alerts_scan() -> dict[str, Any]:
         meta={k: v for k, v in summary.items() if k not in {"started_at", "finished_at"}},
     )
     return summary
+
+
+# ── Immediate push from the intraday news tick ──────────────────────────────
+
+async def dispatch_breaking_news(
+    session: AsyncSession,
+    triggers: list[Any],
+    revised: dict[str, dict[str, Any]],
+) -> int:
+    """Called by intraday_news right after a tick so material headlines reach
+    Discord within minutes instead of waiting for the 30-min alerts scan.
+
+    `triggers` are intraday_news._NewsTrigger rows; `revised` maps ticker →
+    {action, conviction, prior_action, prior_conviction} for tickers whose
+    recommendation was actually rewritten this tick. Uses the same dedup key
+    as _scan_news_spike so the periodic scan never double-sends.
+    """
+    if not triggers:
+        return 0
+    from config import settings
+
+    users_q = await session.execute(select(User).where(User.is_active.is_(True)))
+    fired = 0
+    for user in users_q.scalars().all():
+        pref_res = await session.execute(
+            select(UserPreferences).where(UserPreferences.user_id == user.id)
+        )
+        pref = pref_res.scalars().first()
+        cfg = (pref.alerts_config if pref else None) or {}
+        if not cfg.get("news_spike"):
+            continue
+        sub = await get_subscription(session, user)
+        tier = get_tier_for(user, sub)
+        ent = get_entitlements_for(tier)
+        if (not ent.alerts_enabled and tier != "ADMIN") or not _tier_meets_min(
+            tier, _ALERT_TIER_MIN.get("news_spike")
+        ):
+            continue
+        scope = await _scope_tickers(session, user)
+        for t in triggers:
+            if t.ticker not in scope:
+                continue
+            payload: dict[str, Any] = {
+                "headline": (t.headline or "")[:200],
+                "sentiment": round(float(t.sentiment_score), 2),
+                "category": t.category,
+                "impact_level": t.impact_level,
+                "source": None,
+            }
+            if t.ticker in revised:
+                payload["rec_change"] = revised[t.ticker]
+            if settings.PUBLIC_APP_URL:
+                payload["link"] = f"{settings.PUBLIC_APP_URL.rstrip('/')}/?ticker={t.ticker}"
+            key = f"news_spike:{t.ticker}:{t.news_id}"
+            try:
+                if await _dispatch_alert(session, user, cfg, "news_spike", t.ticker, key, payload):
+                    fired += 1
+            except Exception:
+                logger.exception("breaking-news dispatch failed user=%s key=%s", user.id, key)
+                await session.rollback()
+        await session.commit()
+    return fired
