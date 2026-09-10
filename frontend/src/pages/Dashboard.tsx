@@ -40,6 +40,40 @@ const REC_SORT_OPTIONS: SegmentOption<RecSort>[] = [
   },
 ];
 
+type RecGroup = 'flat' | 'entry';
+
+const REC_GROUP_OPTIONS: SegmentOption<RecGroup>[] = [
+  { key: 'flat', label: 'All', title: 'One flat list' },
+  { key: 'entry', label: 'By entry', title: 'Group BUY / STRONG_BUY by entry strategy' },
+];
+
+const POSITIVE_ACTIONS = new Set(['STRONG_BUY', 'BUY']);
+
+/** Display order + copy for the engine's entry strategies (see backend/services/CLAUDE.md § Entry Strategy). */
+const ENTRY_GROUPS: { key: string; label: string; hint: string }[] = [
+  { key: 'PRE_POSITION', label: 'Pre-position', hint: 'Enter ahead of the catalyst' },
+  { key: 'REACTIVE', label: 'Reactive', hint: 'Catalyst already in motion — enter on confirmation' },
+  { key: 'WAIT', label: 'Wait', hint: 'Bullish but waiting for confirmation' },
+];
+
+function groupByEntry(recs: Recommendation[]) {
+  const positive = recs.filter((r) => POSITIVE_ACTIONS.has(r.action));
+  const others = recs.filter((r) => !POSITIVE_ACTIONS.has(r.action));
+  const known = new Set(ENTRY_GROUPS.map((g) => g.key));
+  const groups = ENTRY_GROUPS.map((g) => ({
+    ...g,
+    recs: positive.filter((r) => (r.entry_strategy ?? 'WAIT') === g.key),
+  }));
+  const unknown = positive.filter((r) => r.entry_strategy && !known.has(r.entry_strategy));
+  for (const r of unknown) {
+    const key = r.entry_strategy as string;
+    const existing = groups.find((g) => g.key === key);
+    if (existing) existing.recs.push(r);
+    else groups.push({ key, label: key.replace(/_/g, ' '), hint: '', recs: [r] });
+  }
+  return { groups: groups.filter((g) => g.recs.length > 0), others };
+}
+
 export default function Dashboard() {
   const [selectedDate, setSelectedDate] = useState(
     new Date().toISOString().slice(0, 10),
@@ -73,6 +107,12 @@ export default function Dashboard() {
   useEffect(() => {
     localStorage.setItem('vela.rec_sort', recSort);
   }, [recSort]);
+  const [recGroup, setRecGroup] = useState<RecGroup>(() =>
+    localStorage.getItem('vela.rec_group') === 'entry' ? 'entry' : 'flat',
+  );
+  useEffect(() => {
+    localStorage.setItem('vela.rec_group', recGroup);
+  }, [recGroup]);
 
   // Lock body scroll while the TickerDetail mobile overlay is open. Desktop
   // (lg+) still keeps the panel in-grid; this is purely a no-op there.
@@ -136,6 +176,10 @@ export default function Dashboard() {
   const selectedCompany = selectedItem?.company_name ?? undefined;
 
   // Build ticker → recommendation map for watchlist card sorting/coloring
+  const recGroups = useMemo(
+    () => groupByEntry(recommendations.data ?? []),
+    [recommendations.data],
+  );
   const recMap = useMemo(() => {
     const map = new Map<string, Recommendation>();
     for (const rec of recommendations.data ?? []) {
@@ -262,18 +306,28 @@ export default function Dashboard() {
           <section className="lg:col-span-3">
             <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
               <h2 className="text-xl font-bold text-text-primary">Recommendations</h2>
-              <SegmentedControl
-                variant="joined"
-                options={REC_SORT_OPTIONS}
-                value={recSort}
-                onChange={setRecSort}
-              />
+              <div className="flex items-center gap-2 flex-wrap">
+                <SegmentedControl
+                  variant="joined"
+                  options={REC_GROUP_OPTIONS}
+                  value={recGroup}
+                  onChange={setRecGroup}
+                />
+                <SegmentedControl
+                  variant="joined"
+                  options={REC_SORT_OPTIONS}
+                  value={recSort}
+                  onChange={setRecSort}
+                />
+              </div>
             </div>
             {recommendations.loading && !recommendations.data ? (
               <LoadingRow />
             ) : recommendations.error ? (
               <ErrorBox message={recommendations.error} />
-            ) : (
+            ) : recommendations.data?.length === 0 ? (
+              <EmptyCard>No recommendations available</EmptyCard>
+            ) : recGroup === 'flat' ? (
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
                 {(recommendations.data ?? []).map((rec) => (
                   <RecommendationCard
@@ -285,8 +339,55 @@ export default function Dashboard() {
                     onOpenDetail={openDetail}
                   />
                 ))}
-                {recommendations.data?.length === 0 && (
-                  <EmptyCard className="xl:col-span-2">No recommendations available</EmptyCard>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {recGroups.groups.map((g) => (
+                  <div key={g.key}>
+                    <div className="flex items-baseline gap-2 mb-2">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-accent-300">
+                        {g.label}
+                      </h3>
+                      <span className="text-[10px] text-text-secondary">
+                        {g.recs.length}
+                        {g.hint ? ` · ${g.hint}` : ''}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
+                      {g.recs.map((rec) => (
+                        <RecommendationCard
+                          key={rec.id}
+                          recommendation={rec}
+                          selectable={selectableTickers.has(rec.ticker)}
+                          selected={selected.has(rec.ticker)}
+                          onToggleSelect={toggleSelect}
+                          onOpenDetail={openDetail}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {recGroups.groups.length === 0 && (
+                  <EmptyCard>No BUY / STRONG_BUY recommendations today</EmptyCard>
+                )}
+                {recGroups.others.length > 0 && (
+                  <details className="group">
+                    <summary className="cursor-pointer text-xs font-bold uppercase tracking-wider text-text-secondary hover:text-text-primary transition-colors mb-2">
+                      Hold / Sell ({recGroups.others.length})
+                    </summary>
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-2.5">
+                      {recGroups.others.map((rec) => (
+                        <RecommendationCard
+                          key={rec.id}
+                          recommendation={rec}
+                          selectable={selectableTickers.has(rec.ticker)}
+                          selected={selected.has(rec.ticker)}
+                          onToggleSelect={toggleSelect}
+                          onOpenDetail={openDetail}
+                        />
+                      ))}
+                    </div>
+                  </details>
                 )}
               </div>
             )}
