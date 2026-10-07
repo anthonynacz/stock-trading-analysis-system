@@ -194,10 +194,10 @@ export default function RadarPage() {
             />
           </div>
           {hidden.size > 0 && (
-            <p className="text-xs text-text-secondary leading-snug mb-2">
+            <p className="text-xs text-sky-200/90 leading-snug mb-2 rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1">
               {hidden.size} hidden by the call filters:{' '}
               {[...hidden.values()].map((h) => `${h.ticker} (${h.why})`).join(', ')}.{' '}
-              <button type="button" onClick={() => setShowHidden((x) => !x)} className="text-accent-300 hover:text-accent-200">
+              <button type="button" onClick={() => setShowHidden((x) => !x)} className="font-semibold text-sky-300 hover:text-sky-100 underline-offset-2 hover:underline">
                 {showHidden ? 'Hide them' : 'Show them faded'}
               </button>
             </p>

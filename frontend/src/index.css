@@ -22,6 +22,18 @@
   .btn-danger {
     @apply btn bg-red-900/40 text-red-400 hover:bg-red-900/60;
   }
+  /* Compact slider (radar sensitivity): thin track, small thumb, colour from `color` (currentColor). */
+  .range-sm {
+    @apply w-full h-1.5 cursor-pointer appearance-none rounded-full bg-border/80;
+  }
+  .range-sm::-webkit-slider-thumb {
+    @apply h-3.5 w-3.5 appearance-none rounded-full border-2 border-card shadow;
+    background: currentColor;
+  }
+  .range-sm::-moz-range-thumb {
+    @apply h-3 w-3 rounded-full border-2 border-card;
+    background: currentColor;
+  }
   .detail-panel {
     @apply bg-card border border-border rounded-lg lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto;
   }
