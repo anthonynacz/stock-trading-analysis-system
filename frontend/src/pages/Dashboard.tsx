@@ -25,6 +25,7 @@ import CatalystCalendar from '../components/CatalystCalendar';
 import WatchlistStrikes from '../components/WatchlistStrikes';
 import IndustryCard from '../components/IndustryCard';
 import BreakingNews, { type DetailFocus } from '../components/BreakingNews';
+import RadarStrip from '../components/radar/RadarStrip';
 import { AddTickerForm } from '../components/AddTickerForm';
 import { LoadingRow, ErrorBox, EmptyCard } from '../components/ui/feedback';
 import { SegmentedControl, type SegmentOption } from '../components/ui/SegmentedControl';
@@ -285,6 +286,9 @@ export default function Dashboard() {
           hours={4}
           onOpenDetail={openDetail}
         />
+
+        {/* Momentum Radar — live members only; renders nothing when empty */}
+        <RadarStrip />
 
         {/* Watchlist Changes (Entrants / Exiters) */}
         {watchlistChanges.data &&

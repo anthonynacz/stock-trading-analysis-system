@@ -30,8 +30,11 @@ import type {
   DiscoveryCandidate,
   Position,
   RotationStatus,
+  RadarResponse,
 } from '../types';
 import { usePolling } from './usePolling';
+import { getRadar } from '../components/radar/radarApi';
+import { RADAR_POLL_LIVE_MS, radarPollMs } from '../components/radar/clock';
 
 interface RefetchOptions {
   /** Skip the loading spinner (poll ticks); foreground fetches show it. */
@@ -296,4 +299,28 @@ export function useDiscoveryCandidates(): HookResult<DiscoveryCandidate[]> {
 export function usePositions(status?: string): HookResult<Position[]> {
   const fetcher = useCallback(() => getPositions(status), [status]);
   return usePolledQuery(fetcher, 'Failed to fetch positions', { pollMs: 60_000 });
+}
+
+/**
+ * Momentum Radar snapshot (`GET /api/radar`). Polls every 30 s while the radar
+ * is scanning and every 5 min while the session is closed (switching back to
+ * 30 s shortly before the next session's first scan). The interval is
+ * re-evaluated every 30 s against the wall clock, because a closed snapshot
+ * never changes on its own when the session opens. `dedupe` keeps the same
+ * object across unchanged polls (most 30 s polls fall between 5-minute scans),
+ * so lists and expanded rows do not re-render.
+ */
+export function useRadar(): HookResult<RadarResponse> {
+  const fetcher = useCallback(() => getRadar(), []);
+  const [pollMs, setPollMs] = useState(RADAR_POLL_LIVE_MS);
+  const query = usePolledQuery(fetcher, 'Failed to load the radar', { pollMs, dedupe: true });
+  const { data } = query;
+  useEffect(() => {
+    // Same-value updates bail out, so this only re-renders on a real switch.
+    const update = () => setPollMs(radarPollMs(data, Date.now()));
+    update();
+    const id = setInterval(update, RADAR_POLL_LIVE_MS);
+    return () => clearInterval(id);
+  }, [data]);
+  return query;
 }

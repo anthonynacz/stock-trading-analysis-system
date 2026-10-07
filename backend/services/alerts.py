@@ -14,6 +14,9 @@ Triggers (one entry in alerts_config gates each):
   - unusual_flow       — options_snapshots.unusual_activity flips True
   - news_spike         — news_sentiment magnitude >= 0.5 today
   - insider_filing     — new analyst_ratings or insider entries (not yet — placeholder)
+  - radar_entry        — a stock enters the Momentum Radar. Market-wide, not
+                         scope-filtered, and NOT scanned here: the radar worker
+                         pushes it via dispatch_radar_entries after each tick.
 
 Tier gating: an alert fires only if the user's tier permits it
 (`ALERT_KEYS[k].tier_min` from services/preferences.py). Alerts saved by a
@@ -28,12 +31,15 @@ Dedup keys are deterministic so duplicate detection is cheap. Examples:
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import and_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from db.connection import async_session
 from db.models import (
@@ -100,6 +106,17 @@ def _format_alert(alert_type: str, ticker: str | None, payload: dict[str, Any]) 
         if rec:
             msg += (f"\n↪ Rec revised: {rec.get('prior_action')} → **{rec.get('action')}** "
                     f"(conv {rec.get('prior_conviction'):+.0f} → {rec.get('conviction'):+.0f})")
+        link = payload.get("link")
+        if link:
+            msg += f"\n{link}"
+        return msg
+    if alert_type == "radar_entry":
+        arrow = "↓" if payload.get("direction") == "down" else "↑"
+        msg = f"📡 **{t}** racing {arrow}"
+        if payload.get("detail"):
+            msg += f" — {payload['detail']}"
+        if payload.get("intensity") is not None:
+            msg += f" (intensity {payload['intensity']})"
         link = payload.get("link")
         if link:
             msg += f"\n{link}"
@@ -537,4 +554,134 @@ async def dispatch_breaking_news(
                 logger.exception("breaking-news dispatch failed user=%s key=%s", user.id, key)
                 await session.rollback()
         await session.commit()
+    return fired
+
+
+# ── Immediate push from the Momentum Radar worker ───────────────────────────
+
+def _radar_entry_payload(event: dict[str, Any], link: str | None) -> dict[str, Any]:
+    """alert_log payload (and Discord line inputs) for one radar ENTER event.
+
+    Intensity is shown as a whole number: it ranks movers and is never a
+    probability or a confidence, so decimals would only suggest precision.
+    """
+    try:
+        intensity: int | None = int(round(float(event["intensity"])))
+    except (KeyError, TypeError, ValueError):
+        intensity = None
+    payload: dict[str, Any] = {
+        "event_id": event["id"],
+        "direction": "down" if event.get("dir") == "down" else "up",
+        "detail": (event.get("detail") or "")[:160],
+        "intensity": intensity,
+        "price": event.get("price"),
+        "ts": event.get("ts"),
+        "late": bool(event.get("late")),
+    }
+    if link:
+        payload["link"] = link
+    return payload
+
+
+@asynccontextmanager
+async def _loop_local_session() -> AsyncIterator[AsyncSession]:
+    """A session on a throwaway NullPool engine, disposed on the caller's loop.
+
+    The radar worker is synchronous and calls
+    `asyncio.run(dispatch_radar_entries(...))` after every tick, so each call
+    runs on a brand-new event loop. asyncpg connections pooled by the shared
+    `db.connection.engine` stay bound to the loop that opened them, and the
+    next tick's loop would fail on them. A NullPool engine opens one fresh
+    connection for this call and closes it before the loop ends.
+    """
+    from config import settings
+
+    eng = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    try:
+        async with AsyncSession(eng, expire_on_commit=False) as session:
+            yield session
+    finally:
+        await eng.dispose()
+
+
+async def dispatch_radar_entries(
+    events: list[dict[str, Any]],
+    *,
+    session: AsyncSession | None = None,
+) -> int:
+    """Push new Momentum Radar entries to every user who opted in.
+
+    Called by the radar worker (radar/worker.py) right after a successful
+    tick with the ENTER events newer than its alert cursor; the periodic
+    `run_alerts_scan` never looks at radar data. Mirrors
+    `dispatch_breaking_news`: same tier gating and the same `_dispatch_alert`
+    dedup on `alert_log` (key `radar_entry:{event_id}`), so a re-sent batch
+    after a worker restart never double-posts. Radar data is market-wide, so
+    unlike the watchlist alerts there is no per-user ticker scope.
+
+    `session` is for tests and callers that already own one; the worker
+    passes nothing and gets a loop-safe session (see `_loop_local_session`).
+    Returns the number of alerts newly recorded (sent or logged undelivered).
+    """
+    entries = [
+        e for e in (events or [])
+        if isinstance(e, dict) and e.get("type") == "ENTER" and e.get("id") and e.get("ticker")
+    ]
+    if not entries:
+        return 0
+    if session is not None:
+        return await _dispatch_radar_entries(session, entries)
+    async with _loop_local_session() as own:
+        return await _dispatch_radar_entries(own, entries)
+
+
+async def _dispatch_radar_entries(session: AsyncSession, entries: list[dict[str, Any]]) -> int:
+    from config import settings
+
+    base = (settings.PUBLIC_APP_URL or "").rstrip("/")
+    link = f"{base}/radar" if base else None
+    tier_min = _ALERT_TIER_MIN.get("radar_entry")
+
+    # Ids, not ORM rows: a rollback expires every loaded instance, and touching
+    # an expired attribute outside the async machinery raises MissingGreenlet.
+    # Each user is (re)loaded with session.get, which refreshes safely.
+    ids_q = await session.execute(
+        select(User.id).where(User.is_active.is_(True)).order_by(User.id)
+    )
+    fired = 0
+    for user_id in ids_q.scalars().all():
+        user = await session.get(User, user_id)
+        if user is None:
+            continue
+        pref_res = await session.execute(
+            select(UserPreferences).where(UserPreferences.user_id == user_id)
+        )
+        pref = pref_res.scalars().first()
+        cfg = dict((pref.alerts_config if pref else None) or {})
+        if not cfg.get("radar_entry"):
+            continue
+        sub = await get_subscription(session, user)
+        tier = get_tier_for(user, sub)
+        ent = get_entitlements_for(tier)
+        if (not ent.alerts_enabled and tier != "ADMIN") or not _tier_meets_min(tier, tier_min):
+            continue
+        for ev in entries:
+            key = f"radar_entry:{ev['id']}"
+            try:
+                if await _dispatch_alert(
+                    session, user, cfg, "radar_entry", ev["ticker"], key,
+                    _radar_entry_payload(ev, link),
+                ):
+                    fired += 1
+                # Commit per alert: the Discord message is already out, so its
+                # dedup row must survive a failure on a later event.
+                await session.commit()
+            except Exception:
+                logger.exception("radar-entry dispatch failed user=%s key=%s", user_id, key)
+                await session.rollback()
+                user = await session.get(User, user_id)
+                if user is None:
+                    break
+    if fired:
+        logger.info("Radar entries dispatched: %d alert(s) for %d event(s)", fired, len(entries))
     return fired

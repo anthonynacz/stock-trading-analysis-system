@@ -1,5 +1,6 @@
 """EdgeFlow API routes."""
 
+import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -12,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.connection import get_db
+
+logger = logging.getLogger(__name__)
 
 
 def _jsonable(obj):
@@ -3839,3 +3842,388 @@ async def get_schedule_upcoming(
 
     out.sort(key=lambda x: x["fires_at"])
     return out
+
+
+# ── Momentum Radar ──────────────────────────────────────────────────────────
+#
+# The radar worker (radar/worker.py, its own container) writes the radar_*
+# tables every 5 minutes. These routes only read them, plus one admin-only
+# housekeeping trigger. Radar data is market-wide and shared: every
+# authenticated user sees the same snapshot. Everything here is educational
+# analysis of what is moving now, not financial advice.
+
+import functools  # noqa: E402
+import os  # noqa: E402
+import re  # noqa: E402
+from typing import Any  # noqa: E402
+
+from fastapi.concurrency import run_in_threadpool  # noqa: E402
+from sqlalchemy import inspect as sa_inspect  # noqa: E402
+from sqlalchemy.exc import SQLAlchemyError  # noqa: E402
+
+from db.models import RadarBackupManifest, RadarHousekeepingRun, RadarTableMetric  # noqa: E402
+
+_RADAR_BAR_S = 300            # one 5-minute bar: the first scan is due one bar after the open
+_RADAR_FINAL_GRACE_S = 300    # radar.html FINAL_GRACE: the final tick may land minutes after close + offset
+_RADAR_EVENTS_LIMIT = 500
+_RADAR_SCAN_LOG_TAIL = 50
+_RADAR_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+_RADAR_NO_DATA_MESSAGE = "The radar has not published any data yet."
+
+# Manual housekeeping run started from the API. Mutated in place (never
+# reassigned) so /radar/health reads stay coherent, like _rotation_run_state.
+_radar_hk_state: dict[str, Any] = {
+    "running": False,
+    "run_id": None,
+    "mode": None,
+    "started_at": None,
+    "finished_at": None,
+    "status": None,
+    "error": None,
+}
+
+
+@functools.lru_cache(maxsize=1)
+def _radar_store_singleton():
+    from radar.store import RadarStore
+
+    return RadarStore()
+
+
+def get_radar_store():
+    """FastAPI dependency: the process-wide RadarStore.
+
+    One instance per process because RadarStore owns a sync SQLAlchemy engine
+    and its pool; building one per request would open a new pool on every
+    30-second poll. Imported lazily so a broken radar package cannot stop the
+    rest of the API from booting. Tests override this dependency with a fake.
+    """
+    return _radar_store_singleton()
+
+
+def _radar_epoch(value: Any) -> float | None:
+    """Epoch seconds of an ISO-8601 string ("...Z") or a datetime; None if absent or unparseable."""
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str) and value:
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def radar_is_stale(state: dict, now: datetime) -> bool:
+    """True when scans are due and none has landed for RUNTIME.stale_warning_min.
+
+    Port of radar.html `freshness()` so the page and the API agree:
+    - scans are due from open + one bar until close + tick offset + grace
+      (half days included); outside that window nothing is stale;
+    - the scanner's own session times win over the local calendar when its
+      snapshot is dated today (an unscheduled closure or a late calendar fix);
+    - a failed tick still rewrites the snapshot (`generated_at`), so a radar
+      that is running but failing is reported by `status`, not as stale;
+    - before today's first scan lands, the clock runs from when it was due,
+      so "no scan yet today" also turns stale.
+    """
+    from radar import calendar_nyse as cal
+    from radar.config import RUNTIME
+
+    stale_s = float(RUNTIME["stale_warning_min"]) * 60.0
+    offset_s = float(RUNTIME["tick_offset_s"])
+    now_s = now.timestamp()
+    today = now.astimezone(cal.ET).date()
+
+    session = cal.session_for(today)
+    open_s = float(session.open_epoch) if session else None
+    close_s = float(session.close_epoch) if session else None
+    snap_session = state.get("session") or {}
+    if snap_session.get("date") == today.isoformat():
+        snap_open = _radar_epoch(snap_session.get("open"))
+        snap_close = _radar_epoch(snap_session.get("close"))
+        if snap_open is not None and snap_close is not None:
+            open_s, close_s = snap_open, snap_close
+    if open_s is None or close_s is None:
+        return False
+
+    first_scan = open_s + _RADAR_BAR_S
+    if not first_scan <= now_s < close_s + offset_s + _RADAR_FINAL_GRACE_S:
+        return False
+    tick = _radar_epoch(state.get("tick_id"))
+    if tick is not None and tick >= first_scan:
+        last = _radar_epoch(state.get("generated_at")) or tick
+    else:
+        last = first_scan + offset_s
+    return now_s - last > stale_s
+
+
+def _radar_ticker(raw: str) -> str:
+    sym = (raw or "").strip().upper()
+    if not _RADAR_TICKER_RE.match(sym):
+        raise HTTPException(status_code=400, detail=f"Invalid ticker: {raw!r}")
+    return sym
+
+
+def _radar_session_date(raw: str) -> str:
+    try:
+        return date.fromisoformat(raw.strip()).isoformat()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session must be YYYY-MM-DD") from None
+
+
+def _radar_default_session(state: dict, now: datetime) -> str:
+    """ET date of the latest processed bar, else today's ET date.
+
+    Not `state.session.date`: after the close the heartbeat is already labelled
+    with the next session, which has no rows yet.
+    """
+    from radar.calendar_nyse import ET
+
+    last_bar = _radar_epoch((state or {}).get("last_bar"))
+    moment = datetime.fromtimestamp(last_bar, tz=timezone.utc) if last_bar is not None else now
+    return moment.astimezone(ET).date().isoformat()
+
+
+def _radar_model_dict(obj: Any) -> dict:
+    """Every mapped column of an ORM row, JSON-safe."""
+    return _jsonable({a.key: getattr(obj, a.key) for a in sa_inspect(type(obj)).column_attrs})
+
+
+async def _radar_ops_status(db: AsyncSession) -> dict:
+    """Latest housekeeping run, latest measurement set and the backup manifest.
+
+    PORT_SPEC section 4 pins no RadarStore read for these ops tables
+    (radar.housekeeping writes them on its own engine), so they are read here,
+    read-only, like any other table. Newest by timestamp, id breaking ties
+    (all metrics of one run share a measured_at).
+    """
+    run = (await db.execute(
+        select(RadarHousekeepingRun)
+        .order_by(RadarHousekeepingRun.started_at.desc(), RadarHousekeepingRun.id.desc())
+        .limit(1)
+    )).scalars().first()
+    latest_measured = (
+        select(RadarTableMetric.run_id)
+        .order_by(RadarTableMetric.measured_at.desc(), RadarTableMetric.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    metrics = (await db.execute(
+        select(RadarTableMetric)
+        .where(RadarTableMetric.run_id == latest_measured)
+        .order_by(RadarTableMetric.table_name)
+    )).scalars().all()
+    manifest = (await db.execute(
+        select(RadarBackupManifest).order_by(RadarBackupManifest.table_name, RadarBackupManifest.month)
+    )).scalars().all()
+    return {
+        "housekeeping": _radar_model_dict(run) if run is not None else None,
+        "table_metrics": [_radar_model_dict(m) for m in metrics],
+        "backup_manifest": [_radar_model_dict(m) for m in manifest],
+    }
+
+
+@router.get("/radar")
+async def radar_snapshot(
+    store=Depends(get_radar_store),
+    user: User = Depends(get_current_user),
+):
+    """Current radar snapshot (github-spec section 6 state.json) plus `stale`.
+
+    Before the worker has written anything this is still a 200, with
+    `status: "no_data"` and no `schema` / `tick_id` (the frontend tells the
+    two shapes apart by those keys).
+    """
+    state = await run_in_threadpool(store.load_state)
+    if not state:
+        return {"status": "no_data", "stale": False, "message": _RADAR_NO_DATA_MESSAGE}
+    return {**state, "stale": radar_is_stale(state, datetime.now(timezone.utc))}
+
+
+@router.get("/radar/events")
+async def radar_events(
+    days: int = Query(1, ge=1, le=90),
+    ticker: str | None = Query(None, max_length=12),
+    store=Depends(get_radar_store),
+    user: User = Depends(get_current_user),
+):
+    """ENTER / EXIT events of the last `days` days, newest first (max 500)."""
+    sym = _radar_ticker(ticker) if ticker else None
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = await run_in_threadpool(
+        store.recent_events, since=since, ticker=sym, limit=_RADAR_EVENTS_LIMIT,
+    )
+    rows = sorted(rows or [], key=lambda e: _radar_epoch(e.get("ts")) or 0.0, reverse=True)
+    return _jsonable(rows[:_RADAR_EVENTS_LIMIT])
+
+
+@router.get("/radar/ticker/{ticker}")
+async def radar_ticker_ticks(
+    ticker: str,
+    session: str | None = Query(None, description="Session date YYYY-MM-DD; default: the latest scanned session"),
+    store=Depends(get_radar_store),
+    user: User = Depends(get_current_user),
+):
+    """One ticker's member / heating rows for a session, oldest first (detail chart)."""
+    sym = _radar_ticker(ticker)
+    if session:
+        session_date = _radar_session_date(session)
+    else:
+        state = await run_in_threadpool(store.load_state)
+        session_date = _radar_default_session(state, datetime.now(timezone.utc))
+    rows = await run_in_threadpool(store.member_ticks, sym, session_date)
+    rows = sorted(rows or [], key=lambda r: _radar_epoch(r.get("tick")) or 0.0)
+    return {"ticker": sym, "session": session_date, "ticks": _jsonable(rows)}
+
+
+@router.get("/radar/health")
+async def radar_health(
+    db: AsyncSession = Depends(get_db),
+    store=Depends(get_radar_store),
+    user: User = Depends(get_current_user),
+):
+    """Scan-log tail (50 newest runs), latest housekeeping run and table
+    metrics, the backup manifest, and the state of an API-started run."""
+    scan_log = await run_in_threadpool(store.scan_log_tail, _RADAR_SCAN_LOG_TAIL)
+    ops = await _radar_ops_status(db)
+    return {
+        "scan_log": _jsonable(scan_log or []),
+        **ops,
+        "manual_housekeeping": dict(_radar_hk_state),
+    }
+
+
+def _radar_backup_dir_problem(store, backup_dir: str, now: datetime) -> dict | None:
+    """Why a housekeeping run started here must not use `backup_dir`, else None.
+
+    The worker archives into radar.config.BACKUP_DIR (the radar_backups
+    volume) and indexes every partition in radar_backup_manifest; a run
+    started from the API reconciles that same manifest with the files this
+    container sees. So both modes, dry-run included, need:
+    - a writable directory: an unmounted volume path is absent or read-only;
+    - the worker's files: when the manifest lists live partitions (inside
+      retention) and the directory holds none of them, it is not the worker's
+      volume (typically a fresh, empty mount point). The run would report
+      every partition as missing and record a false ERROR that freezes the
+      tables on /radar/health.
+    One partition missing out of several is real damage, and expired entries
+    are dropped by housekeeping's retention: both are left to the run.
+    Blocking (filesystem and one small query): call it in the threadpool.
+    """
+    from radar import housekeeping
+    from radar.config import HOUSEKEEPING
+
+    def problem(reason: str, message: str) -> dict:
+        return {"error": "backup_dir_unavailable", "reason": reason, "backup_dir": backup_dir, "message": message}
+
+    if not os.path.isdir(backup_dir):
+        return problem("missing", (
+            f"Backup directory {backup_dir} does not exist in the API container. Mount the radar_backups "
+            "volume there, at the radar worker's RADAR_BACKUP_DIR, before running housekeeping."))
+    if not os.access(backup_dir, os.W_OK | os.X_OK):
+        return problem("not_writable", (
+            f"Backup directory {backup_dir} is not writable in the API container. Mount the radar_backups "
+            "volume read-write there before running housekeeping."))
+
+    table = RadarBackupManifest.__table__
+    try:
+        with store.engine.connect() as conn:
+            entries = conn.execute(select(table.c.table_name, table.c.month)).all()
+    except SQLAlchemyError:
+        logger.warning("Radar housekeeping pre-check could not read %s", table.name, exc_info=True)
+        return None   # the run itself reports why the radar tables cannot be read
+    cutoff = housekeeping.retention_cutoff(
+        now.astimezone(timezone.utc).date(), int(HOUSEKEEPING.get("retention_months", 3)))
+    live = sorted(
+        (name, month) for name, month in entries
+        if name in housekeeping.POLICIES and housekeeping.month_bounds(month)[1] > cutoff
+    )
+    if live and not any(os.path.isfile(housekeeping.partition_path(backup_dir, name, month))
+                        for name, month in live):
+        listed = ", ".join(f"{name}/{month}" for name, month in live[:3]) + (", ..." if len(live) > 3 else "")
+        return problem("manifest_partitions_absent", (
+            f"Backup directory {backup_dir} holds none of the {len(live)} backup partitions listed in "
+            f"radar_backup_manifest ({listed}): it is not the radar_backups volume the radar worker writes. "
+            f"Mount radar_backups at {backup_dir} in the backend service. If the volume itself was lost, "
+            "the nightly housekeeping run reports the missing partitions."))
+    return None
+
+
+def _radar_hk_refuse_overlap() -> None:
+    if _radar_hk_state["running"]:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "already_running", "run_id": _radar_hk_state["run_id"],
+                    "mode": _radar_hk_state["mode"]},
+        )
+
+
+def _radar_housekeeping_task(run_id: str, mode: str, store, backup_dir: str) -> None:
+    """Background body of POST /radar/housekeeping.
+
+    A plain (sync) function on purpose: Starlette runs sync background tasks
+    in its threadpool, so the blocking DB, file and VACUUM work never stalls
+    the event loop. housekeeping.run works on the API's RadarStore (the
+    database these routes read) and on the backup directory the trigger
+    checked, radar.config.BACKUP_DIR, the one the worker's nightly run uses.
+    It serializes against the nightly run (advisory lock; a clash reports
+    status "busy"). Failures land in `_radar_hk_state`, never raised.
+    """
+    try:
+        from radar import housekeeping
+
+        # record_dry_run: keep a radar_housekeeping_runs row of the plan, so an
+        # admin's dry-run shows up on /radar/health under the promised run id.
+        report = housekeeping.run(mode=mode, trigger="manual", run_id=run_id, record_dry_run=True,
+                                  store=store, backup_dir=backup_dir)
+        _radar_hk_state.update(status=str((report or {}).get("status") or "done"))
+    except Exception as exc:
+        logger.exception("Radar housekeeping %s (%s) failed", run_id, mode)
+        _radar_hk_state.update(status="error", error=f"{type(exc).__name__}: {exc}")
+    finally:
+        _radar_hk_state.update(running=False, finished_at=datetime.now(timezone.utc).isoformat())
+
+
+@router.post("/radar/housekeeping", status_code=202)
+async def radar_housekeeping_trigger(
+    background_tasks: BackgroundTasks,
+    mode: str = Query("dry-run", pattern="^(dry-run|apply)$"),
+    store=Depends(get_radar_store),
+    user: User = Depends(get_current_user),
+):
+    """Admin only: run radar housekeeping (measure, archive, retention) now.
+
+    Returns 202 with the run id at once; follow it on GET /radar/health.
+    `dry-run` (the default) only plans, `apply` archives and purges. Both are
+    refused with 503 `backup_dir_unavailable` unless this container sees the
+    worker's backup directory (see `_radar_backup_dir_problem`): apply would
+    archive onto the wrong disk and then delete the hot rows, and a dry-run
+    would record a false ERROR run for partitions it cannot see.
+    """
+    if user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Radar housekeeping is admin only")
+    _radar_hk_refuse_overlap()
+    from radar import config as radar_config
+    from radar import housekeeping
+
+    # Read at call time (RADAR_BACKUP_DIR, the default of the worker's run) and
+    # handed to the run, so it uses exactly the directory checked here.
+    backup_dir = radar_config.BACKUP_DIR
+    problem = await run_in_threadpool(_radar_backup_dir_problem, store, backup_dir, datetime.now(timezone.utc))
+    if problem:
+        raise HTTPException(status_code=503, detail=problem)
+    _radar_hk_refuse_overlap()   # again: another request may have started a run during the check
+
+    started = datetime.now(timezone.utc)
+    run_id = housekeeping.new_run_id(started)
+    _radar_hk_state.clear()
+    _radar_hk_state.update(
+        running=True, run_id=run_id, mode=mode, started_at=started.isoformat(),
+        finished_at=None, status="running", error=None,
+    )
+    background_tasks.add_task(_radar_housekeeping_task, run_id, mode, store, backup_dir)
+    return {"status": "accepted", "run_id": run_id, "mode": mode}

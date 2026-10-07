@@ -4,7 +4,16 @@ import { TabBar } from '../components/ui/TabBar';
 import { LoadingRow } from '../components/ui/feedback';
 import { BRAND } from './knowledge/shared';
 
-type Section = 'guide' | 'signals' | 'classification' | 'watchlist' | 'strikes' | 'optionslab' | 'strategies' | 'pipeline';
+type Section =
+  | 'guide'
+  | 'signals'
+  | 'classification'
+  | 'watchlist'
+  | 'strikes'
+  | 'optionslab'
+  | 'strategies'
+  | 'radar'
+  | 'pipeline';
 
 const TABS: { key: Section; label: string }[] = [
   { key: 'guide', label: 'Trading Guide' },
@@ -14,6 +23,7 @@ const TABS: { key: Section; label: string }[] = [
   { key: 'strikes', label: 'Strike Profiles' },
   { key: 'optionslab', label: 'Options Lab' },
   { key: 'strategies', label: 'Strategies' },
+  { key: 'radar', label: 'Radar' },
   { key: 'pipeline', label: 'Pipeline & Data' },
 ];
 
@@ -27,6 +37,7 @@ const TAB_COMPONENTS: Record<Section, React.LazyExoticComponent<() => JSX.Elemen
   strikes: lazy(() => import('./knowledge/StrikesTab')),
   optionslab: lazy(() => import('./knowledge/OptionsLabTab')),
   strategies: lazy(() => import('./knowledge/StrategiesTab')),
+  radar: lazy(() => import('./knowledge/RadarTab')),
   pipeline: lazy(() => import('./knowledge/PipelineTab')),
 };
 

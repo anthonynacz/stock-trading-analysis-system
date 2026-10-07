@@ -88,6 +88,8 @@ ALERT_KEYS: list[dict[str, Any]] = [
     {"key": "unusual_flow",      "label": "Unusual options flow",        "description": "Call or put volume ≥3x the 20-day historical average.",         "tier_min": "PRO"},
     {"key": "news_spike",        "label": "News sentiment spike",        "description": "FinBERT magnitude crosses ±0.5 for a watchlist name.",          "tier_min": "PRO"},
     {"key": "insider_filing",    "label": "Insider filings",             "description": "New insider buy/sell on a watchlist name.",                    "tier_min": "PRO"},
+    # Market-wide (not watchlist-scoped): pushed by the radar worker after each 5-minute tick.
+    {"key": "radar_entry",       "label": "Momentum Radar entry",        "description": "A stock enters the 5-minute Momentum Radar (racing up or down)", "tier_min": "PRO"},
 ]
 
 
@@ -110,6 +112,7 @@ def _default_alerts_config() -> dict[str, Any]:
         "unusual_flow": False,
         "news_spike": False,
         "insider_filing": False,
+        "radar_entry": False,
         "discord_webhook_url": None,
     }
 
@@ -218,7 +221,7 @@ def _validate_alerts(payload: Any) -> dict[str, Any]:
         return defaults
     out = dict(defaults)
     bool_keys = {"rec_change", "conviction_breach", "earnings_proximity",
-                 "unusual_flow", "news_spike", "insider_filing"}
+                 "unusual_flow", "news_spike", "insider_filing", "radar_entry"}
     for k in bool_keys:
         if k in payload:
             out[k] = bool(payload[k])

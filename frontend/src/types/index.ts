@@ -850,3 +850,185 @@ export interface OutcomesSummary {
   by_action: Record<string, Record<string, OutcomeBucket>>;
   signals: OutcomeSignalRow[];
 }
+
+// ── Momentum Radar (GET /api/radar) ────────────────────────────────────
+// The engine's state.json document (backend/radar/docs/github-spec.md §6 and
+// §12), passed through by the API plus `stale`. Timestamps are ISO-8601 UTC
+// strings ("…Z"). Percent fields are already percents (4.9 = 4.9%), `z*`
+// fields are sigma units, and `intensity` is a 0-100 ranking score: never a
+// probability or a confidence.
+
+export type RadarDirection = 'up' | 'down';
+export type RadarScanStatus = 'ok' | 'degraded' | 'no_data' | 'closed' | 'error';
+export type RadarMemberState = 'racing' | 'cooling' | 'halted';
+export type RadarExitReason =
+  | 'FADE'
+  | 'DRY'
+  | 'STALL'
+  | 'REVERSAL'
+  | 'GIVEBACK'
+  | 'VWAP_CROSS'
+  | 'SESSION_END'
+  | 'HALT_LONG'
+  | 'DATA_STALE'
+  | 'DISPLACED';
+
+export interface RadarSession {
+  date: string | null;
+  phase: 'pre' | 'regular' | 'post' | 'closed' | string;
+  open: string | null;
+  close: string | null;
+  half_day: boolean;
+}
+
+export interface RadarSource {
+  name: string;
+  status: 'ok' | 'degraded' | 'down' | null;
+  consecutive_failures: number | null;
+  last_ok_at: string | null;
+}
+
+export interface RadarMarket {
+  mode: 'normal' | 'market';
+  dir: RadarDirection | null;
+  spy_chg_day_pct: number | null;
+  spy_z30: number | null;
+  /** Net share of stocks moving the same way over 30 min, as a fraction (0.66 = 66%). */
+  breadth30: number | null;
+}
+
+export interface RadarCounts {
+  universe: number | null;
+  stage_b: number | null;
+  members: number | null;
+  heating: number | null;
+  entered_today: number | null;
+  exited_today: number | null;
+}
+
+export interface RadarSpark {
+  t0: string;
+  step_s: number;
+  /** Index in `p` of the entry close. */
+  entry_i: number;
+  /** 5-minute closes from up to 6 slots before entry through now (≤ 80 points). */
+  p: number[];
+}
+
+export interface RadarMember {
+  ticker: string;
+  name: string;
+  sector: string;
+  direction: RadarDirection;
+  state: RadarMemberState;
+  /** Added during a catch-up scan, more than 10 minutes after the move was confirmed. */
+  late: boolean;
+  entered_at: string;
+  entry_price: number | null;
+  last_price: number | null;
+  last_bar_at: string | null;
+  minutes_on_radar: number | null;
+  move_since_entry_pct: number | null;
+  peak_since_entry_pct: number | null;
+  chg_5m_pct: number | null;
+  chg_15m_pct: number | null;
+  chg_30m_pct: number | null;
+  chg_day_pct: number | null;
+  rvol: number | null;
+  rvol_day: number | null;
+  vwap_dist_pct: number | null;
+  z15: number | null;
+  z30: number | null;
+  zday: number | null;
+  intensity: number | null;
+  reasons: string[];
+  soft_fails: number;
+  /** 1 for the first time on the radar today, 2+ when it came back. */
+  episode: number;
+  spark: RadarSpark | null;
+}
+
+/** Passed the entry checks on the last bar; waits one more bar to confirm. Not a member. */
+export interface RadarHeating {
+  ticker: string;
+  name: string;
+  direction: RadarDirection;
+  since: string | null;
+  price: number | null;
+  chg_day_pct: number | null;
+  intensity: number | null;
+  reasons: string[];
+}
+
+export interface RadarExit {
+  ticker: string;
+  name: string;
+  direction: RadarDirection;
+  entered_at: string | null;
+  exited_at: string | null;
+  minutes_on_radar: number | null;
+  move_since_entry_pct: number | null;
+  exit_reason: RadarExitReason | string;
+  /** Engine sentence that already starts with the reason (SPEC 12.5); shown alone when present. */
+  exit_detail: string;
+}
+
+/** Names the per-sector cap kept off the radar (never members). */
+export interface RadarSectorBanner {
+  sector: string;
+  direction: RadarDirection;
+  /** How many names were held back beyond the cap. */
+  count: number | null;
+  tickers: string[];
+}
+
+export interface RadarHealth {
+  ticks_today: number | null;
+  ticks_skipped: number | null;
+  last_tick_ms: number | null;
+  loop_run_id: string | null;
+  loop_started_at: string | null;
+  /** Earlier scans delivered late (always 0 in Vela; kept for schema parity). */
+  published_late: number | null;
+}
+
+export interface RadarState {
+  schema: 1;
+  generated_at: string | null;
+  tick_id: string;
+  last_bar: string | null;
+  status: RadarScanStatus;
+  /** Scanner's own sentence for degraded / no_data / error scans; shown as is. */
+  message: string;
+  session: RadarSession;
+  /** Expected start of the next scan (5-minute boundary + 50 s). */
+  next_tick_at: string | null;
+  params_version: string;
+  source: RadarSource;
+  market: RadarMarket;
+  counts: RadarCounts;
+  members: RadarMember[];
+  heating: RadarHeating[];
+  /** Current session, newest first, ≤ 30. A closed heartbeat keeps the last session's exits. */
+  recent_exits: RadarExit[];
+  sector_banners: RadarSectorBanner[];
+  health: RadarHealth;
+  disclaimer: string;
+}
+
+/** `GET /api/radar` once the radar has written a snapshot. */
+export interface RadarSnapshot extends RadarState {
+  /** Server-side check: session open and no scan for more than RUNTIME.stale_warning_min. */
+  stale: boolean;
+}
+
+/** `GET /api/radar` before the radar has written anything (still a 200). */
+export interface RadarNoData {
+  status: 'no_data';
+  schema?: undefined;
+  tick_id?: undefined;
+  stale?: boolean;
+  message?: string;
+}
+
+export type RadarResponse = RadarSnapshot | RadarNoData;

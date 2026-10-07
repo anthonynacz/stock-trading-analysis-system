@@ -4,17 +4,23 @@ from typing import Optional
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -867,3 +873,240 @@ class IndustryRecommendation(Base):
     signals: Mapped[Optional[list]] = mapped_column(JSON)
     rationale: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ── Momentum Radar (5-minute racing-stocks scanner) ─────────────────────────
+#
+# Written by the `radar` worker container (radar/worker.py -> radar/tick.py)
+# through radar/store.py, the only module that talks to these tables. Shared
+# data, no user_id: every user sees the same radar. The JSON documents keep
+# the GitHub version's shapes (backend/radar/docs/github-spec.md section 6)
+# because the API and the page read them as is. The hot tables
+# (member_ticks, events, scan_log) are archived and trimmed by
+# radar/housekeeping.py. Migration: alembic/versions/d6e2a4c8b1f9_radar_tables.py.
+# Keep the two in step (tests/radar/test_store.py checks it): every unique key
+# is a named UniqueConstraint (the migration declares it inside CREATE TABLE
+# under the same name) and every DB default in the migration is a
+# server_default here, so autogenerate reports no radar changes.
+
+# BIGSERIAL on Postgres. SQLite only auto-increments an INTEGER PRIMARY KEY,
+# and the store tests run on SQLite, hence the variant.
+_RADAR_BIGINT_PK = BigInteger().with_variant(Integer, "sqlite")
+
+
+class RadarSnapshot(Base):
+    """Singleton (id = 1): the latest published state.json document.
+
+    GET /api/radar serves `state` as is, so it stays one JSON document rather
+    than normalized rows. Every tick overwrites it.
+    """
+
+    __tablename__ = "radar_snapshot"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_radar_snapshot_singleton"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    state: Mapped[Optional[dict]] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RadarRuntime(Base):
+    """Singleton (id = 1): the engine's carry-over between ticks.
+
+    `engine` is the engine.json document (schema, session, engine, source_health,
+    dynamic_adds, pack_gaps, ops, loop). `source_health_live` is written by the
+    Fetcher's on_health during a tick, so the circuit breaker still advances
+    when the worker kills a hung tick; a committed tick clears it.
+    `alert_cursor` is the last radar event id dispatched to alerts.
+    """
+
+    __tablename__ = "radar_runtime"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_radar_runtime_singleton"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    engine: Mapped[Optional[dict]] = mapped_column(JSON)
+    source_health_live: Mapped[Optional[dict]] = mapped_column(JSON)
+    alert_cursor: Mapped[Optional[str]] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RadarBaseline(Base):
+    """One gzip'd BaselinePack per (session_date, kind).
+
+    `main` is the session's universe pack (built at warmup), `extra` holds that
+    session's dynamic adds and pack-gap fills. The tick accepts a stored pack
+    only when its params_version matches radar.config.PARAMS.
+    """
+
+    __tablename__ = "radar_baselines"
+    __table_args__ = (
+        UniqueConstraint("session_date", "kind", name="uq_radar_baselines_date_kind"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_date: Mapped[date] = mapped_column(Date, nullable=False)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)  # main, extra
+    params_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    pack_gz: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)  # gzip of BaselinePack.to_json()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RadarMemberTick(Base):
+    """One row per radar member or heating name per processed 5-minute slot.
+
+    `tick` is the bar close (slot start + 300 s). Unique on (tick, ticker), so
+    a re-run tick inserts nothing twice (ON CONFLICT DO NOTHING).
+    """
+
+    __tablename__ = "radar_member_ticks"
+    __table_args__ = (
+        UniqueConstraint("tick", "ticker", name="uq_radar_member_ticks_tick_ticker"),
+        Index("ix_radar_member_ticks_ticker_tick", "ticker", "tick"),
+        Index("ix_radar_member_ticks_tick", "tick"),
+    )
+
+    id: Mapped[int] = mapped_column(_RADAR_BIGINT_PK, primary_key=True)
+    tick: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    session_date: Mapped[date] = mapped_column(Date, nullable=False)
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False)
+    role: Mapped[Optional[str]] = mapped_column(String(10))  # member, heating
+    dir: Mapped[Optional[str]] = mapped_column(String(4))  # up, down
+    state: Mapped[Optional[str]] = mapped_column(String(10))  # racing, cooling, halted, heating
+    price: Mapped[Optional[float]] = mapped_column(Float)
+    chg_day_pct: Mapped[Optional[float]] = mapped_column(Float)
+    chg_5m_pct: Mapped[Optional[float]] = mapped_column(Float)
+    move_since_entry_pct: Mapped[Optional[float]] = mapped_column(Float)  # NULL for heating rows
+    vol_5m: Mapped[Optional[int]] = mapped_column(BigInteger)
+    intensity: Mapped[Optional[float]] = mapped_column(Float)
+    signals: Mapped[Optional[dict]] = mapped_column(JSON)
+
+
+class RadarEvent(Base):
+    """ENTER / EXIT events. `id` is the github-spec event id
+    (`<YYYYMMDDTHHMMZ>-<TICKER>-<ENTER|EXIT>-<episode>`), so a re-run tick
+    cannot duplicate an event."""
+
+    __tablename__ = "radar_events"
+    __table_args__ = (
+        Index("ix_radar_events_ts", "ts"),
+        Index("ix_radar_events_ticker_ts", "ticker", "ts"),
+    )
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    session_date: Mapped[date] = mapped_column(Date, nullable=False)
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False)
+    type: Mapped[str] = mapped_column(String(8), nullable=False)  # ENTER, EXIT
+    dir: Mapped[Optional[str]] = mapped_column(String(4))
+    price: Mapped[Optional[float]] = mapped_column(Float)
+    intensity: Mapped[Optional[float]] = mapped_column(Float)
+    reason: Mapped[Optional[str]] = mapped_column(String(20))  # ENTRY or an exit code (FADE, DRY, ...)
+    detail: Mapped[Optional[str]] = mapped_column(Text)
+    episode: Mapped[Optional[int]] = mapped_column(Integer)
+    held_min: Mapped[Optional[int]] = mapped_column(Integer)
+    move_since_entry_pct: Mapped[Optional[float]] = mapped_column(Float)
+    late: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    signals: Mapped[Optional[dict]] = mapped_column(JSON)
+    params_version: Mapped[Optional[str]] = mapped_column(String(40))
+
+
+class RadarScanLog(Base):
+    """One row per tick run (scan, warmup, closed heartbeat or failure).
+
+    `row` is the full github-spec scan_log document; the other columns are
+    copies for indexing and filtering. Unique on (tick, run_id), so a re-run
+    tick is idempotent.
+    """
+
+    __tablename__ = "radar_scan_log"
+    __table_args__ = (
+        UniqueConstraint("tick", "run_id", name="uq_radar_scan_log_tick_run"),
+        Index("ix_radar_scan_log_tick", "tick"),
+    )
+
+    id: Mapped[int] = mapped_column(_RADAR_BIGINT_PK, primary_key=True)
+    tick: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    written_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    session_date: Mapped[Optional[date]] = mapped_column(Date)  # NULL for closed heartbeats
+    phase: Mapped[Optional[str]] = mapped_column(String(16))
+    status: Mapped[Optional[str]] = mapped_column(String(16))
+    row: Mapped[Optional[dict]] = mapped_column(JSON)
+
+
+class RadarBackupManifest(Base):
+    """One row per monthly backup partition `<BACKUP_DIR>/<table>/<YYYY-MM>.jsonl.gz`
+    written by radar/housekeeping.py. `sha256` (of the .gz) and
+    `content_sha256` (of the canonical rows) let `verify` detect a corrupt or
+    missing file."""
+
+    __tablename__ = "radar_backup_manifest"
+    __table_args__ = (
+        UniqueConstraint("table_name", "month", name="uq_radar_backup_manifest_table_month"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    table_name: Mapped[str] = mapped_column(String(40), nullable=False)
+    month: Mapped[str] = mapped_column(String(7), nullable=False)  # YYYY-MM
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    rows: Mapped[Optional[int]] = mapped_column(BigInteger)
+    bytes: Mapped[Optional[int]] = mapped_column(BigInteger)
+    raw_bytes: Mapped[Optional[int]] = mapped_column(BigInteger)
+    sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    content_sha256: Mapped[Optional[str]] = mapped_column(String(64))
+    min_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    max_ts: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    writes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    last_run_id: Mapped[Optional[str]] = mapped_column(String(64))
+
+
+class RadarHousekeepingRun(Base):
+    """One row per radar housekeeping run (measure, archive, retention).
+    `report` is the report radar.housekeeping.run returns."""
+
+    __tablename__ = "radar_housekeeping_runs"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_radar_housekeeping_runs_run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    trigger: Mapped[Optional[str]] = mapped_column(String(20))  # schedule, manual, worker_request
+    mode: Mapped[Optional[str]] = mapped_column(String(10))  # apply, dry-run
+    status: Mapped[Optional[str]] = mapped_column(String(20))
+    report: Mapped[Optional[dict]] = mapped_column(JSON)
+
+
+class RadarTableMetric(Base):
+    """Per hot table and housekeeping run: size, lookup latency and the
+    OK / WARN / DEGRADED / ERROR verdict that decides whether rows are archived."""
+
+    __tablename__ = "radar_table_metrics"
+    __table_args__ = (
+        Index("ix_radar_table_metrics_table_measured", "table_name", "measured_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    table_name: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False)  # OK, WARN, DEGRADED, ERROR
+    reasons: Mapped[Optional[list]] = mapped_column(JSON)
+    rows: Mapped[Optional[int]] = mapped_column(BigInteger)
+    bytes: Mapped[Optional[int]] = mapped_column(BigInteger)  # NULL where the size is unknown (SQLite)
+    lookup_ms: Mapped[Optional[dict]] = mapped_column(JSON)
+    lookup_max_ms: Mapped[Optional[float]] = mapped_column(Float)
+    write_p95_ms: Mapped[Optional[float]] = mapped_column(Float)
+    action: Mapped[Optional[str]] = mapped_column(String(40))
+    archived_rows: Mapped[Optional[int]] = mapped_column(BigInteger)
+    purged_rows: Mapped[Optional[int]] = mapped_column(BigInteger)
+    rows_after: Mapped[Optional[int]] = mapped_column(BigInteger)

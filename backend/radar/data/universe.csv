@@ -1,0 +1,543 @@
+symbol,name,sector,industry,in_sp500,in_ndx,is_etf
+A,Agilent Technologies,Health Care,Life Sciences Tools & Services,True,False,False
+AAPL,Apple Inc.,Information Technology,"Technology Hardware, Storage & Peripherals",True,True,False
+ABBV,AbbVie,Health Care,Biotechnology,True,False,False
+ABNB,Airbnb,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",True,True,False
+ABT,Abbott Laboratories,Health Care,Health Care Equipment,True,False,False
+ACGL,Arch Capital Group,Financials,Property & Casualty Insurance,True,False,False
+ACN,Accenture,Information Technology,IT Consulting & Other Services,True,False,False
+ADBE,Adobe Inc.,Information Technology,Application Software,True,True,False
+ADI,Analog Devices,Information Technology,Semiconductors,True,True,False
+ADM,Archer Daniels Midland,Consumer Staples,Agricultural Products & Services,True,False,False
+ADP,Automatic Data Processing,Industrials,Human Resource & Employment Services,True,True,False
+ADSK,Autodesk,Information Technology,Application Software,True,True,False
+AEE,Ameren,Utilities,Multi-Utilities,True,False,False
+AEP,American Electric Power,Utilities,Electric Utilities,True,True,False
+AES,AES Corporation,Utilities,Independent Power Producers & Energy Traders,True,False,False
+AFL,Aflac,Financials,Life & Health Insurance,True,False,False
+AIG,American International Group,Financials,Multi-line Insurance,True,False,False
+AIZ,Assurant,Financials,Multi-line Insurance,True,False,False
+AJG,Arthur J. Gallagher & Co.,Financials,Insurance Brokers,True,False,False
+AKAM,Akamai Technologies,Information Technology,Internet Services & Infrastructure,True,False,False
+ALAB,"Astera Labs, Inc.",Information Technology,Semiconductors,False,True,False
+ALB,Albemarle Corporation,Materials,Specialty Chemicals,True,False,False
+ALGN,Align Technology,Health Care,Health Care Supplies,True,False,False
+ALL,Allstate,Financials,Property & Casualty Insurance,True,False,False
+ALLE,Allegion,Industrials,Building Products,True,False,False
+ALNY,"Alnylam Pharmaceuticals, Inc.",Health Care,Biotechnology,False,True,False
+AMAT,Applied Materials,Information Technology,Semiconductor Materials & Equipment,True,True,False
+AMCR,Amcor,Materials,Paper & Plastic Packaging Products & Materials,True,False,False
+AMD,Advanced Micro Devices,Information Technology,Semiconductors,True,True,False
+AME,Ametek,Industrials,Electrical Components & Equipment,True,False,False
+AMGN,Amgen,Health Care,Biotechnology,True,True,False
+AMP,Ameriprise Financial,Financials,Asset Management & Custody Banks,True,False,False
+AMT,American Tower,Real Estate,Telecom Tower REITs,True,False,False
+AMZN,Amazon,Consumer Discretionary,Broadline Retail,True,True,False
+ANET,Arista Networks,Information Technology,Communications Equipment,True,False,False
+AON,Aon plc,Financials,Insurance Brokers,True,False,False
+AOS,A. O. Smith,Industrials,Building Products,True,False,False
+APA,APA Corporation,Energy,Oil & Gas Exploration & Production,True,False,False
+APD,Air Products,Materials,Industrial Gases,True,False,False
+APH,Amphenol,Information Technology,Electronic Components,True,False,False
+APO,Apollo Global Management,Financials,Asset Management & Custody Banks,True,False,False
+APP,AppLovin,Communication Services,Advertising,True,True,False
+APTV,Aptiv,Consumer Discretionary,Automotive Parts & Equipment,True,False,False
+ARE,Alexandria Real Estate Equities,Real Estate,Office REITs,True,False,False
+ARES,Ares Management,Financials,Asset Management & Custody Banks,True,False,False
+ARKK,ARK Innovation ETF,ETF,ETF,False,False,True
+ARM,Arm Holdings plc,Information Technology,Semiconductors,False,True,False
+ASML,ASML Holding N.V.,Information Technology,Semiconductor Equipment & Materials,False,True,False
+ATO,Atmos Energy,Utilities,Gas Utilities,True,False,False
+AVGO,Broadcom,Information Technology,Semiconductors,True,True,False
+AVY,Avery Dennison,Materials,Paper & Plastic Packaging Products & Materials,True,False,False
+AWK,American Water Works,Utilities,Water Utilities,True,False,False
+AXON,Axon Enterprise,Industrials,Aerospace & Defense,True,True,False
+AXP,American Express,Financials,Consumer Finance,True,False,False
+AZO,AutoZone,Consumer Discretionary,Automotive Retail,True,False,False
+BA,Boeing,Industrials,Aerospace & Defense,True,False,False
+BAC,Bank of America,Financials,Diversified Banks,True,False,False
+BALL,Ball Corporation,Materials,"Metal, Glass & Plastic Containers",True,False,False
+BAX,Baxter International,Health Care,Health Care Equipment,True,False,False
+BBY,Best Buy,Consumer Discretionary,Computer & Electronics Retail,True,False,False
+BDX,Becton Dickinson,Health Care,Health Care Equipment,True,False,False
+BE,Bloom Energy,Industrials,Electrical Components & Equipment,True,False,False
+BEN,Franklin Resources,Financials,Asset Management & Custody Banks,True,False,False
+BF-B,Brown–Forman,Consumer Staples,Distillers & Vintners,True,False,False
+BG,Bunge Global,Consumer Staples,Agricultural Products & Services,True,False,False
+BIIB,Biogen,Health Care,Biotechnology,True,False,False
+BKNG,Booking Holdings,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",True,True,False
+BKR,Baker Hughes,Energy,Oil & Gas Equipment & Services,True,True,False
+BLK,BlackRock,Financials,Asset Management & Custody Banks,True,False,False
+BMY,Bristol Myers Squibb,Health Care,Pharmaceuticals,True,False,False
+BNY,BNY Mellon,Financials,Asset Management & Custody Banks,True,False,False
+BR,Broadridge Financial Solutions,Industrials,Data Processing & Outsourced Services,True,False,False
+BRK-B,Berkshire Hathaway,Financials,Multi-Sector Holdings,True,False,False
+BRO,Brown & Brown,Financials,Insurance Brokers,True,False,False
+BSX,Boston Scientific,Health Care,Health Care Equipment,True,False,False
+BX,Blackstone Inc.,Financials,Asset Management & Custody Banks,True,False,False
+BXP,"BXP, Inc.",Real Estate,Office REITs,True,False,False
+C,Citigroup,Financials,Diversified Banks,True,False,False
+CAH,Cardinal Health,Health Care,Health Care Distributors,True,False,False
+CARR,Carrier Global,Industrials,Building Products,True,False,False
+CASY,Casey's,Consumer Staples,Food Retail,True,False,False
+CAT,Caterpillar Inc.,Industrials,Construction Machinery & Heavy Transportation Equipment,True,False,False
+CB,Chubb Limited,Financials,Property & Casualty Insurance,True,False,False
+CBOE,Cboe Global Markets,Financials,Financial Exchanges & Data,True,False,False
+CBRE,CBRE Group,Real Estate,Real Estate Services,True,False,False
+CCEP,Coca-Cola Europacific Partners PLC,Consumer Staples,Beverages—Non-Alcoholic,False,True,False
+CCI,Crown Castle,Real Estate,Telecom Tower REITs,True,False,False
+CCL,Carnival Corporation,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",True,False,False
+CDNS,Cadence Design Systems,Information Technology,Application Software,True,True,False
+CDW,CDW Corporation,Information Technology,Technology Distributors,True,False,False
+CEG,Constellation Energy,Utilities,Electric Utilities,True,True,False
+CF,CF Industries,Materials,Fertilizers & Agricultural Chemicals,True,False,False
+CFG,Citizens Financial Group,Financials,Regional Banks,True,False,False
+CHD,Church & Dwight,Consumer Staples,Household Products,True,False,False
+CHRW,C.H. Robinson,Industrials,Air Freight & Logistics,True,False,False
+CHTR,Charter Communications,Communication Services,Cable & Satellite,True,False,False
+CI,Cigna,Health Care,Health Care Services,True,False,False
+CIEN,Ciena,Information Technology,Communications Equipment,True,False,False
+CINF,Cincinnati Financial,Financials,Property & Casualty Insurance,True,False,False
+CL,Colgate-Palmolive,Consumer Staples,Household Products,True,False,False
+CLX,Clorox,Consumer Staples,Household Products,True,False,False
+CMCSA,Comcast,Communication Services,Cable & Satellite,True,True,False
+CME,CME Group,Financials,Financial Exchanges & Data,True,False,False
+CMG,Chipotle Mexican Grill,Consumer Discretionary,Restaurants,True,False,False
+CMI,Cummins,Industrials,Construction Machinery & Heavy Transportation Equipment,True,False,False
+CMS,CMS Energy,Utilities,Multi-Utilities,True,False,False
+CNC,Centene Corporation,Health Care,Managed Health Care,True,False,False
+CNP,CenterPoint Energy,Utilities,Multi-Utilities,True,False,False
+COF,Capital One,Financials,Consumer Finance,True,False,False
+COHR,Coherent Corp.,Information Technology,Electronic Components,True,False,False
+COIN,Coinbase,Financials,Financial Exchanges & Data,True,False,False
+COO,Cooper Companies (The),Health Care,Health Care Supplies,True,False,False
+COP,ConocoPhillips,Energy,Oil & Gas Exploration & Production,True,False,False
+COR,Cencora,Health Care,Health Care Distributors,True,False,False
+COST,Costco,Consumer Staples,Consumer Staples Merchandise Retail,True,True,False
+CPAY,Corpay,Financials,Transaction & Payment Processing Services,True,False,False
+CPRT,Copart,Industrials,Diversified Support Services,True,True,False
+CPT,Camden Property Trust,Real Estate,Multi-Family Residential REITs,True,False,False
+CRH,CRH plc,Materials,Construction Materials,True,False,False
+CRL,Charles River Laboratories,Health Care,Life Sciences Tools & Services,True,False,False
+CRM,Salesforce,Information Technology,Application Software,True,False,False
+CRWD,CrowdStrike,Information Technology,Systems Software,True,True,False
+CRWV,"CoreWeave, Inc.",Information Technology,Software—Infrastructure,False,True,False
+CSCO,Cisco,Information Technology,Communications Equipment,True,True,False
+CSGP,CoStar Group,Real Estate,Real Estate Services,True,False,False
+CSX,CSX Corporation,Industrials,Rail Transportation,True,True,False
+CTAS,Cintas,Industrials,Diversified Support Services,True,True,False
+CTSH,Cognizant,Information Technology,IT Consulting & Other Services,True,False,False
+CTVA,Corteva,Materials,Fertilizers & Agricultural Chemicals,True,False,False
+CVNA,Carvana,Consumer Discretionary,Automotive Retail,True,False,False
+CVS,CVS Health,Health Care,Health Care Services,True,False,False
+CVX,Chevron Corporation,Energy,Integrated Oil & Gas,True,False,False
+D,Dominion Energy,Utilities,Multi-Utilities,True,False,False
+DAL,Delta Air Lines,Industrials,Passenger Airlines,True,False,False
+DASH,DoorDash,Consumer Discretionary,Specialized Consumer Services,True,True,False
+DD,DuPont,Industrials,Industrial Conglomerates,True,False,False
+DDOG,Datadog,Information Technology,Application Software,True,True,False
+DE,Deere & Company,Industrials,Agricultural & Farm Machinery,True,False,False
+DECK,Deckers Brands,Consumer Discretionary,Footwear,True,False,False
+DELL,Dell Technologies,Information Technology,"Technology Hardware, Storage & Peripherals",True,False,False
+DG,Dollar General,Consumer Staples,Consumer Staples Merchandise Retail,True,False,False
+DGX,Quest Diagnostics,Health Care,Health Care Services,True,False,False
+DHI,D. R. Horton,Consumer Discretionary,Homebuilding,True,False,False
+DHR,Danaher Corporation,Health Care,Life Sciences Tools & Services,True,False,False
+DIA,State Street SPDR Dow Jones Industrial Average ETF Trust,ETF,ETF,False,False,True
+DIS,Walt Disney Company (The),Communication Services,Movies & Entertainment,True,False,False
+DLR,Digital Realty,Real Estate,Data Center REITs,True,False,False
+DLTR,Dollar Tree,Consumer Staples,Consumer Staples Merchandise Retail,True,False,False
+DOC,Healthpeak Properties,Real Estate,Health Care REITs,True,False,False
+DOV,Dover Corporation,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+DOW,Dow Inc.,Materials,Commodity Chemicals,True,False,False
+DPZ,Domino's,Consumer Discretionary,Restaurants,True,False,False
+DRI,Darden Restaurants,Consumer Discretionary,Restaurants,True,False,False
+DTE,DTE Energy,Utilities,Multi-Utilities,True,False,False
+DUK,Duke Energy,Utilities,Electric Utilities,True,False,False
+DVA,DaVita,Health Care,Health Care Services,True,False,False
+DVN,Devon Energy,Energy,Oil & Gas Exploration & Production,True,False,False
+DXCM,Dexcom,Health Care,Health Care Equipment,True,True,False
+EBAY,eBay Inc.,Consumer Discretionary,Broadline Retail,True,False,False
+ECHO,EchoStar,Communication Services,Wireless Telecommunication Services,True,False,False
+ECL,Ecolab,Materials,Specialty Chemicals,True,False,False
+ED,Consolidated Edison,Utilities,Multi-Utilities,True,False,False
+EFX,Equifax,Industrials,Research & Consulting Services,True,False,False
+EG,Everest Group,Financials,Reinsurance,True,False,False
+EIX,Edison International,Utilities,Electric Utilities,True,False,False
+EL,Estée Lauder Companies (The),Consumer Staples,Personal Care Products,True,False,False
+ELV,Elevance Health,Health Care,Managed Health Care,True,False,False
+EME,Emcor,Industrials,Construction & Engineering,True,False,False
+EMR,Emerson Electric,Industrials,Electrical Components & Equipment,True,False,False
+EOG,EOG Resources,Energy,Oil & Gas Exploration & Production,True,False,False
+EQIX,Equinix,Real Estate,Data Center REITs,True,False,False
+EQT,EQT Corporation,Energy,Oil & Gas Exploration & Production,True,False,False
+ERIE,Erie Indemnity,Financials,Insurance Brokers,True,False,False
+ES,Eversource Energy,Utilities,Electric Utilities,True,False,False
+ESS,Essex Property Trust,Real Estate,Multi-Family Residential REITs,True,False,False
+ETN,Eaton Corporation,Industrials,Electrical Components & Equipment,True,False,False
+ETR,Entergy,Utilities,Electric Utilities,True,False,False
+EVRG,Evergy,Utilities,Electric Utilities,True,False,False
+EW,Edwards Lifesciences,Health Care,Health Care Equipment,True,False,False
+EXC,Exelon,Utilities,Electric Utilities,True,True,False
+EXE,Expand Energy,Energy,Oil & Gas Exploration & Production,True,False,False
+EXPD,Expeditors International,Industrials,Air Freight & Logistics,True,False,False
+EXPE,Expedia Group,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",True,False,False
+EXR,Extra Space Storage,Real Estate,Self-Storage REITs,True,False,False
+F,Ford Motor Company,Consumer Discretionary,Automobile Manufacturers,True,False,False
+FANG,Diamondback Energy,Energy,Oil & Gas Exploration & Production,True,True,False
+FAST,Fastenal,Industrials,Trading Companies & Distributors,True,True,False
+FCX,Freeport-McMoRan,Materials,Copper,True,False,False
+FDS,FactSet,Financials,Financial Exchanges & Data,True,False,False
+FDX,FedEx,Industrials,Air Freight & Logistics,True,False,False
+FDXF,FedEx Freight,Industrials,Cargo Ground Transportation,True,False,False
+FE,FirstEnergy,Utilities,Electric Utilities,True,False,False
+FER,Ferrovial N.V.,Industrials,Engineering & Construction,False,True,False
+FERG,Ferguson Enterprises,Industrials,Trading Companies & Distributors,True,False,False
+FFIV,"F5, Inc.",Information Technology,Communications Equipment,True,False,False
+FICO,Fair Isaac,Information Technology,Application Software,True,False,False
+FIS,Fidelity National Information Services,Financials,Transaction & Payment Processing Services,True,False,False
+FISV,Fiserv,Financials,Transaction & Payment Processing Services,True,False,False
+FITB,Fifth Third Bancorp,Financials,Regional Banks,True,False,False
+FIX,Comfort Systems USA,Industrials,Construction & Engineering,True,False,False
+FLEX,Flex Ltd.,Information Technology,Electronic Manufacturing Services,True,False,False
+FOX,Fox Corporation (Class B),Communication Services,Broadcasting,True,False,False
+FOXA,Fox Corporation (Class A),Communication Services,Broadcasting,True,False,False
+FRT,Federal Realty Investment Trust,Real Estate,Retail REITs,True,False,False
+FSLR,First Solar,Information Technology,Semiconductors,True,False,False
+FTNT,Fortinet,Information Technology,Systems Software,True,True,False
+FTV,Fortive,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+GD,General Dynamics,Industrials,Aerospace & Defense,True,False,False
+GDDY,GoDaddy,Information Technology,Internet Services & Infrastructure,True,False,False
+GE,GE Aerospace,Industrials,Aerospace & Defense,True,False,False
+GEHC,GE HealthCare,Health Care,Health Care Equipment,True,True,False
+GEN,Gen Digital,Information Technology,Systems Software,True,False,False
+GEV,GE Vernova,Industrials,Heavy Electrical Equipment,True,False,False
+GILD,Gilead Sciences,Health Care,Biotechnology,True,True,False
+GIS,General Mills,Consumer Staples,Packaged Foods & Meats,True,False,False
+GL,Globe Life,Financials,Life & Health Insurance,True,False,False
+GLD,SPDR Gold Shares,ETF,ETF,False,False,True
+GLW,Corning Inc.,Information Technology,Electronic Components,True,False,False
+GM,General Motors,Consumer Discretionary,Automobile Manufacturers,True,False,False
+GNRC,Generac,Industrials,Heavy Electrical Equipment,True,False,False
+GOOG,Alphabet Inc. (Class C),Communication Services,Interactive Media & Services,True,True,False
+GOOGL,Alphabet Inc. (Class A),Communication Services,Interactive Media & Services,True,True,False
+GPC,Genuine Parts Company,Consumer Discretionary,Distributors,True,False,False
+GPN,Global Payments,Financials,Transaction & Payment Processing Services,True,False,False
+GRMN,Garmin,Consumer Discretionary,Consumer Electronics,True,False,False
+GS,Goldman Sachs,Financials,Investment Banking & Brokerage,True,False,False
+GWW,W. W. Grainger,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+HAL,Halliburton,Energy,Oil & Gas Equipment & Services,True,False,False
+HAS,Hasbro,Consumer Discretionary,Leisure Products,True,False,False
+HBAN,Huntington Bancshares,Financials,Regional Banks,True,False,False
+HCA,HCA Healthcare,Health Care,Health Care Facilities,True,False,False
+HD,Home Depot (The),Consumer Discretionary,Home Improvement Retail,True,False,False
+HIG,Hartford (The),Financials,Property & Casualty Insurance,True,False,False
+HII,Huntington Ingalls Industries,Industrials,Aerospace & Defense,True,False,False
+HLT,Hilton Worldwide,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",True,False,False
+HON,Honeywell Technologies,Industrials,Industrial Conglomerates,True,True,False
+HONA,Honeywell Aerospace,Industrials,Aerospace & Defense,True,True,False
+HOOD,Robinhood Markets,Financials,Investment Banking & Brokerage,True,False,False
+HPE,Hewlett Packard Enterprise,Information Technology,"Technology Hardware, Storage & Peripherals",True,False,False
+HPQ,HP Inc.,Information Technology,"Technology Hardware, Storage & Peripherals",True,False,False
+HRL,Hormel Foods,Consumer Staples,Packaged Foods & Meats,True,False,False
+HSIC,Henry Schein,Health Care,Health Care Distributors,True,False,False
+HST,Host Hotels & Resorts,Real Estate,Hotel & Resort REITs,True,False,False
+HSY,Hershey Company (The),Consumer Staples,Packaged Foods & Meats,True,False,False
+HUBB,Hubbell Incorporated,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+HUM,Humana,Health Care,Managed Health Care,True,False,False
+HWM,Howmet Aerospace,Industrials,Aerospace & Defense,True,False,False
+HYG,iShares iBoxx $ High Yield Corporate Bond ETF,ETF,ETF,False,False,True
+IBKR,Interactive Brokers,Financials,Investment Banking & Brokerage,True,False,False
+IBM,IBM,Information Technology,IT Consulting & Other Services,True,False,False
+ICE,Intercontinental Exchange,Financials,Financial Exchanges & Data,True,False,False
+IDXX,Idexx Laboratories,Health Care,Health Care Equipment,True,True,False
+IEX,IDEX Corporation,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+IFF,International Flavors & Fragrances,Materials,Specialty Chemicals,True,False,False
+ILMN,"Illumina, Inc.",Health Care,Life Sciences Tools & Services,True,False,False
+INCY,Incyte,Health Care,Biotechnology,True,False,False
+INTC,Intel,Information Technology,Semiconductors,True,True,False
+INTU,Intuit,Information Technology,Application Software,True,True,False
+INVH,Invitation Homes,Real Estate,Single-Family Residential REITs,True,False,False
+IP,International Paper,Materials,Paper & Plastic Packaging Products & Materials,True,False,False
+IQV,IQVIA,Health Care,Life Sciences Tools & Services,True,False,False
+IR,Ingersoll Rand,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+IRM,Iron Mountain,Real Estate,Other Specialized REITs,True,False,False
+ISRG,Intuitive Surgical,Health Care,Health Care Equipment,True,True,False
+IT,Gartner,Information Technology,IT Consulting & Other Services,True,False,False
+ITW,Illinois Tool Works,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+IVZ,Invesco,Financials,Asset Management & Custody Banks,True,False,False
+IWM,iShares Russell 2000 ETF,ETF,ETF,False,False,True
+J,Jacobs Solutions,Industrials,Construction & Engineering,True,False,False
+JBHT,J.B. Hunt,Industrials,Cargo Ground Transportation,True,False,False
+JBL,Jabil,Information Technology,Electronic Manufacturing Services,True,False,False
+JCI,Johnson Controls,Industrials,Building Products,True,False,False
+JKHY,Jack Henry & Associates,Financials,Transaction & Payment Processing Services,True,False,False
+JNJ,Johnson & Johnson,Health Care,Pharmaceuticals,True,False,False
+JPM,JPMorgan Chase,Financials,Diversified Banks,True,False,False
+KDP,Keurig Dr Pepper,Consumer Staples,Soft Drinks & Non-alcoholic Beverages,True,True,False
+KEY,KeyCorp,Financials,Regional Banks,True,False,False
+KEYS,Keysight Technologies,Information Technology,Electronic Equipment & Instruments,True,False,False
+KHC,Kraft Heinz,Consumer Staples,Packaged Foods & Meats,True,False,False
+KIM,Kimco Realty,Real Estate,Retail REITs,True,False,False
+KKR,KKR & Co.,Financials,Asset Management & Custody Banks,True,False,False
+KLAC,KLA Corporation,Information Technology,Semiconductor Materials & Equipment,True,True,False
+KMB,Kimberly-Clark,Consumer Staples,Household Products,True,False,False
+KMI,Kinder Morgan,Energy,Oil & Gas Storage & Transportation,True,False,False
+KO,Coca-Cola Company (The),Consumer Staples,Soft Drinks & Non-alcoholic Beverages,True,False,False
+KR,Kroger,Consumer Staples,Food Retail,True,False,False
+KRE,State Street SPDR S&P Regional Banking ETF,ETF,ETF,False,False,True
+KVUE,Kenvue,Consumer Staples,Personal Care Products,True,False,False
+L,Loews Corporation,Financials,Multi-line Insurance,True,False,False
+LDOS,Leidos,Industrials,Diversified Support Services,True,False,False
+LEN,Lennar,Consumer Discretionary,Homebuilding,True,False,False
+LH,Labcorp,Health Care,Health Care Services,True,False,False
+LHX,L3Harris,Industrials,Aerospace & Defense,True,False,False
+LII,Lennox International,Industrials,Building Products,True,False,False
+LIN,Linde plc,Materials,Industrial Gases,True,True,False
+LITE,Lumentum,Information Technology,Communications Equipment,True,True,False
+LLY,Lilly (Eli),Health Care,Pharmaceuticals,True,False,False
+LMT,Lockheed Martin,Industrials,Aerospace & Defense,True,False,False
+LNT,Alliant Energy,Utilities,Electric Utilities,True,False,False
+LOW,Lowe's,Consumer Discretionary,Home Improvement Retail,True,False,False
+LRCX,Lam Research,Information Technology,Semiconductor Materials & Equipment,True,True,False
+LULU,Lululemon Athletica,Consumer Discretionary,"Apparel, Accessories & Luxury Goods",True,False,False
+LUV,Southwest Airlines,Industrials,Passenger Airlines,True,False,False
+LVS,Las Vegas Sands,Consumer Discretionary,Casinos & Gaming,True,False,False
+LYB,LyondellBasell,Materials,Specialty Chemicals,True,False,False
+LYV,Live Nation Entertainment,Communication Services,Movies & Entertainment,True,False,False
+MA,Mastercard,Financials,Transaction & Payment Processing Services,True,False,False
+MAA,Mid-America Apartment Communities,Real Estate,Multi-Family Residential REITs,True,False,False
+MAR,Marriott International,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",True,True,False
+MAS,Masco,Industrials,Building Products,True,False,False
+MCD,McDonald's,Consumer Discretionary,Restaurants,True,False,False
+MCHP,Microchip Technology,Information Technology,Semiconductors,True,True,False
+MCK,McKesson Corporation,Health Care,Health Care Distributors,True,False,False
+MCO,Moody's Corporation,Financials,Financial Exchanges & Data,True,False,False
+MDLZ,Mondelez International,Consumer Staples,Packaged Foods & Meats,True,True,False
+MDT,Medtronic,Health Care,Health Care Equipment,True,False,False
+MELI,"MercadoLibre, Inc.",Consumer Discretionary,Internet Retail,False,True,False
+MET,MetLife,Financials,Life & Health Insurance,True,False,False
+META,Meta Platforms,Communication Services,Interactive Media & Services,True,True,False
+MGM,MGM Resorts,Consumer Discretionary,Casinos & Gaming,True,False,False
+MKC,McCormick & Company,Consumer Staples,Packaged Foods & Meats,True,False,False
+MLM,Martin Marietta Materials,Materials,Construction Materials,True,False,False
+MMM,3M,Industrials,Industrial Conglomerates,True,False,False
+MNST,Monster Beverage,Consumer Staples,Soft Drinks & Non-alcoholic Beverages,True,True,False
+MO,Altria,Consumer Staples,Tobacco,True,False,False
+MOS,Mosaic Company (The),Materials,Fertilizers & Agricultural Chemicals,True,False,False
+MPC,Marathon Petroleum,Energy,Oil & Gas Refining & Marketing,True,False,False
+MPWR,Monolithic Power Systems,Information Technology,Semiconductors,True,True,False
+MRK,Merck & Co.,Health Care,Pharmaceuticals,True,False,False
+MRNA,Moderna,Health Care,Biotechnology,True,False,False
+MRSH,Marsh McLennan,Financials,Insurance Brokers,True,False,False
+MRVL,Marvell Technology,Information Technology,Semiconductors,True,True,False
+MS,Morgan Stanley,Financials,Investment Banking & Brokerage,True,False,False
+MSCI,MSCI,Financials,Financial Exchanges & Data,True,False,False
+MSFT,Microsoft,Information Technology,Systems Software,True,True,False
+MSI,Motorola Solutions,Information Technology,Communications Equipment,True,False,False
+MSTR,Strategy Inc,Information Technology,Software—Application,False,True,False
+MTB,M&T Bank,Financials,Regional Banks,True,False,False
+MTD,Mettler Toledo,Health Care,Life Sciences Tools & Services,True,False,False
+MU,Micron Technology,Information Technology,Semiconductors,True,True,False
+NBIS,Nebius Group N.V.,Communication Services,Internet Content & Information,False,True,False
+NCLH,Norwegian Cruise Line Holdings,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",True,False,False
+NDAQ,"Nasdaq, Inc.",Financials,Financial Exchanges & Data,True,False,False
+NDSN,Nordson Corporation,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+NEE,NextEra Energy,Utilities,Multi-Utilities,True,False,False
+NEM,Newmont,Materials,Gold,True,False,False
+NFLX,Netflix,Communication Services,Movies & Entertainment,True,True,False
+NI,NiSource,Utilities,Multi-Utilities,True,False,False
+NKE,"Nike, Inc.",Consumer Discretionary,"Apparel, Accessories & Luxury Goods",True,False,False
+NOC,Northrop Grumman,Industrials,Aerospace & Defense,True,False,False
+NOW,ServiceNow,Information Technology,Systems Software,True,False,False
+NRG,NRG Energy,Utilities,Independent Power Producers & Energy Traders,True,False,False
+NSC,Norfolk Southern,Industrials,Rail Transportation,True,False,False
+NTAP,NetApp,Information Technology,"Technology Hardware, Storage & Peripherals",True,False,False
+NTRS,Northern Trust,Financials,Asset Management & Custody Banks,True,False,False
+NUE,Nucor,Materials,Steel,True,False,False
+NVDA,Nvidia,Information Technology,Semiconductors,True,True,False
+NVR,"NVR, Inc.",Consumer Discretionary,Homebuilding,True,False,False
+NWS,News Corp (Class B),Communication Services,Publishing,True,False,False
+NWSA,News Corp (Class A),Communication Services,Publishing,True,False,False
+NXPI,NXP Semiconductors,Information Technology,Semiconductors,True,True,False
+O,Realty Income,Real Estate,Retail REITs,True,False,False
+ODFL,Old Dominion,Industrials,Cargo Ground Transportation,True,True,False
+OKE,Oneok,Energy,Oil & Gas Storage & Transportation,True,False,False
+OMC,Omnicom Group,Communication Services,Advertising,True,False,False
+ON,ON Semiconductor,Information Technology,Semiconductors,True,False,False
+ORCL,Oracle Corporation,Information Technology,Application Software,True,False,False
+ORLY,O'Reilly Automotive,Consumer Discretionary,Automotive Retail,True,True,False
+OTIS,Otis Worldwide,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+OXY,Occidental Petroleum,Energy,Oil & Gas Exploration & Production,True,False,False
+P,Everpure,Information Technology,"Technology Hardware, Storage & Peripherals",True,False,False
+PANW,Palo Alto Networks,Information Technology,Systems Software,True,True,False
+PAYX,Paychex,Industrials,Human Resource & Employment Services,True,True,False
+PCAR,Paccar,Industrials,Construction Machinery & Heavy Transportation Equipment,True,True,False
+PCG,PG&E Corporation,Utilities,Multi-Utilities,True,False,False
+PDD,PDD Holdings Inc.,Consumer Discretionary,Internet Retail,False,True,False
+PEG,Public Service Enterprise Group,Utilities,Electric Utilities,True,False,False
+PEP,PepsiCo,Consumer Staples,Soft Drinks & Non-alcoholic Beverages,True,True,False
+PFE,Pfizer,Health Care,Pharmaceuticals,True,False,False
+PFG,Principal Financial Group,Financials,Life & Health Insurance,True,False,False
+PG,Procter & Gamble,Consumer Staples,Personal Care Products,True,False,False
+PGR,Progressive Corporation,Financials,Property & Casualty Insurance,True,False,False
+PH,Parker Hannifin,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+PHM,PulteGroup,Consumer Discretionary,Homebuilding,True,False,False
+PKG,Packaging Corporation of America,Materials,Paper & Plastic Packaging Products & Materials,True,False,False
+PLD,Prologis,Real Estate,Industrial REITs,True,False,False
+PLTR,Palantir Technologies,Information Technology,Application Software,True,True,False
+PM,Philip Morris International,Consumer Staples,Tobacco,True,False,False
+PNC,PNC Financial Services,Financials,Diversified Banks,True,False,False
+PNR,Pentair,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+PNW,Pinnacle West Capital,Utilities,Multi-Utilities,True,False,False
+PODD,Insulet Corporation,Health Care,Health Care Equipment,True,False,False
+PPG,PPG Industries,Materials,Specialty Chemicals,True,False,False
+PPL,PPL Corporation,Utilities,Electric Utilities,True,False,False
+PRU,Prudential Financial,Financials,Life & Health Insurance,True,False,False
+PSA,Public Storage,Real Estate,Self-Storage REITs,True,False,False
+PSKY,Paramount Skydance Corporation,Communication Services,Movies & Entertainment,True,False,False
+PSX,Phillips 66,Energy,Oil & Gas Refining & Marketing,True,False,False
+PTC,PTC Inc.,Information Technology,Application Software,True,False,False
+PWR,Quanta Services,Industrials,Construction & Engineering,True,False,False
+PYPL,PayPal,Financials,Transaction & Payment Processing Services,True,True,False
+Q,Qnity Electronics,Information Technology,Semiconductor Materials & Equipment,True,False,False
+QCOM,Qualcomm,Information Technology,Semiconductors,True,True,False
+QQQ,Invesco QQQ Trust,ETF,ETF,False,False,True
+RCL,Royal Caribbean Group,Consumer Discretionary,"Hotels, Resorts & Cruise Lines",True,False,False
+RDDT,Reddit,Communication Services,Interactive Media & Services,True,False,False
+REG,Regency Centers,Real Estate,Retail REITs,True,False,False
+REGN,Regeneron Pharmaceuticals,Health Care,Biotechnology,True,True,False
+RF,Regions Financial Corporation,Financials,Regional Banks,True,False,False
+RJF,Raymond James Financial,Financials,Investment Banking & Brokerage,True,False,False
+RKLB,Rocket Lab Corporation,Industrials,Aerospace & Defense,False,True,False
+RL,Ralph Lauren Corporation,Consumer Discretionary,"Apparel, Accessories & Luxury Goods",True,False,False
+RMD,ResMed|,Health Care,Health Care Equipment,True,False,False
+ROK,Rockwell Automation,Industrials,Electrical Components & Equipment,True,False,False
+ROL,"Rollins, Inc.",Industrials,Environmental & Facilities Services,True,False,False
+ROP,Roper Technologies,Information Technology,Electronic Equipment & Instruments,True,True,False
+ROST,Ross Stores,Consumer Discretionary,Apparel Retail,True,True,False
+RSG,Republic Services,Industrials,Environmental & Facilities Services,True,False,False
+RTX,RTX Corporation,Industrials,Aerospace & Defense,True,False,False
+RVTY,Revvity,Health Care,Health Care Equipment,True,False,False
+SBAC,SBA Communications,Real Estate,Telecom Tower REITs,True,False,False
+SBUX,Starbucks,Consumer Discretionary,Restaurants,True,True,False
+SCHW,Charles Schwab Corporation,Financials,Investment Banking & Brokerage,True,False,False
+SHOP,Shopify Inc.,Information Technology,Software—Application,False,True,False
+SHW,Sherwin-Williams,Materials,Specialty Chemicals,True,False,False
+SJM,J.M. Smucker Company (The),Consumer Staples,Packaged Foods & Meats,True,False,False
+SLB,Schlumberger,Energy,Oil & Gas Equipment & Services,True,False,False
+SLV,iShares Silver Trust,ETF,ETF,False,False,True
+SMCI,Supermicro,Information Technology,"Technology Hardware, Storage & Peripherals",True,False,False
+SMH,VanEck Semiconductor ETF,ETF,ETF,False,False,True
+SNA,Snap-on,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+SNDK,Sandisk,Information Technology,"Technology Hardware, Storage & Peripherals",True,True,False
+SNPS,Synopsys,Information Technology,Application Software,True,True,False
+SO,Southern Company,Utilities,Electric Utilities,True,False,False
+SOLV,Solventum,Health Care,Health Care Technology,True,False,False
+SPCX,Space Exploration Technologies Corp.,Industrials,Aerospace & Defense,False,True,False
+SPG,Simon Property Group,Real Estate,Retail REITs,True,False,False
+SPGI,S&P Global,Financials,Financial Exchanges & Data,True,False,False
+SPY,State Street SPDR S&P 500 ETF Trust,ETF,ETF,False,False,True
+SRE,Sempra,Utilities,Multi-Utilities,True,False,False
+STE,Steris,Health Care,Health Care Equipment,True,False,False
+STLD,Steel Dynamics,Materials,Steel,True,False,False
+STT,State Street Corporation,Financials,Asset Management & Custody Banks,True,False,False
+STX,Seagate Technology,Information Technology,"Technology Hardware, Storage & Peripherals",True,True,False
+STZ,Constellation Brands,Consumer Staples,Distillers & Vintners,True,False,False
+SW,Smurfit Westrock,Materials,Paper & Plastic Packaging Products & Materials,True,False,False
+SWK,Stanley Black & Decker,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+SWKS,Skyworks Solutions,Information Technology,Semiconductors,True,False,False
+SYF,Synchrony Financial,Financials,Consumer Finance,True,False,False
+SYK,Stryker Corporation,Health Care,Health Care Equipment,True,False,False
+SYY,Sysco,Consumer Staples,Food Distributors,True,False,False
+T,AT&T,Communication Services,Integrated Telecommunication Services,True,False,False
+TDG,TransDigm Group,Industrials,Aerospace & Defense,True,False,False
+TDY,Teledyne Technologies,Information Technology,Electronic Equipment & Instruments,True,False,False
+TECH,Bio-Techne,Health Care,Life Sciences Tools & Services,True,False,False
+TEL,TE Connectivity,Information Technology,Electronic Manufacturing Services,True,False,False
+TER,Teradyne,Information Technology,Semiconductor Materials & Equipment,True,True,False
+TFC,Truist Financial,Financials,Diversified Banks,True,False,False
+TGT,Target Corporation,Consumer Staples,Consumer Staples Merchandise Retail,True,False,False
+TJX,TJX Companies,Consumer Discretionary,Apparel Retail,True,False,False
+TKO,TKO Group Holdings,Communication Services,Movies & Entertainment,True,False,False
+TLT,iShares 20+ Year Treasury Bond ETF,ETF,ETF,False,False,True
+TMO,Thermo Fisher Scientific,Health Care,Life Sciences Tools & Services,True,False,False
+TMUS,T-Mobile US,Communication Services,Wireless Telecommunication Services,True,True,False
+TPL,Texas Pacific Land Corporation,Energy,Oil & Gas Exploration & Production,True,False,False
+TPR,"Tapestry, Inc.",Consumer Discretionary,"Apparel, Accessories & Luxury Goods",True,False,False
+TRGP,Targa Resources,Energy,Oil & Gas Storage & Transportation,True,False,False
+TRI,Thomson Reuters Corporation,Industrials,Specialty Business Services,False,True,False
+TRMB,Trimble Inc.,Information Technology,Application Software,True,False,False
+TROW,T. Rowe Price,Financials,Asset Management & Custody Banks,True,False,False
+TRV,Travelers Companies (The),Financials,Property & Casualty Insurance,True,False,False
+TSCO,Tractor Supply,Consumer Discretionary,Other Specialty Retail,True,False,False
+TSLA,"Tesla, Inc.",Consumer Discretionary,Automobile Manufacturers,True,True,False
+TSN,Tyson Foods,Consumer Staples,Packaged Foods & Meats,True,False,False
+TT,Trane Technologies,Industrials,Building Products,True,False,False
+TTWO,Take-Two Interactive,Communication Services,Interactive Home Entertainment,True,True,False
+TXN,Texas Instruments,Information Technology,Semiconductors,True,True,False
+TXT,Textron,Industrials,Aerospace & Defense,True,False,False
+TYL,Tyler Technologies,Information Technology,Application Software,True,False,False
+UAL,United Airlines Holdings,Industrials,Passenger Airlines,True,False,False
+UBER,Uber,Industrials,Passenger Ground Transportation,True,False,False
+UDR,"UDR, Inc.",Real Estate,Multi-Family Residential REITs,True,False,False
+UHS,Universal Health Services,Health Care,Health Care Facilities,True,False,False
+ULTA,Ulta Beauty,Consumer Discretionary,Other Specialty Retail,True,False,False
+UNH,UnitedHealth Group,Health Care,Managed Health Care,True,False,False
+UNP,Union Pacific Corporation,Industrials,Rail Transportation,True,False,False
+UPS,United Parcel Service,Industrials,Air Freight & Logistics,True,False,False
+URI,United Rentals,Industrials,Trading Companies & Distributors,True,False,False
+USB,U.S. Bancorp,Financials,Diversified Banks,True,False,False
+USO,"United States Oil Fund, LP",ETF,ETF,False,False,True
+V,Visa Inc.,Financials,Transaction & Payment Processing Services,True,False,False
+VEEV,Veeva Systems,Health Care,Health Care Technology,True,False,False
+VICI,Vici Properties,Real Estate,Hotel & Resort REITs,True,False,False
+VLO,Valero Energy,Energy,Oil & Gas Refining & Marketing,True,False,False
+VLTO,Veralto,Industrials,Environmental & Facilities Services,True,False,False
+VMC,Vulcan Materials Company,Materials,Construction Materials,True,False,False
+VMRK,Vivmark Residential,Real Estate,Multi-Family Residential REITs,True,False,False
+VRSK,Verisk Analytics,Industrials,Research & Consulting Services,True,False,False
+VRSN,Verisign,Information Technology,Internet Services & Infrastructure,True,False,False
+VRT,Vertiv,Industrials,Electrical Components & Equipment,True,False,False
+VRTX,Vertex Pharmaceuticals,Health Care,Biotechnology,True,True,False
+VST,Vistra Corp.,Utilities,Electric Utilities,True,False,False
+VTR,Ventas,Real Estate,Health Care REITs,True,False,False
+VTRS,Viatris,Health Care,Pharmaceuticals,True,False,False
+VZ,Verizon,Communication Services,Integrated Telecommunication Services,True,False,False
+WAB,Wabtec,Industrials,Construction Machinery & Heavy Transportation Equipment,True,False,False
+WAT,Waters Corporation,Health Care,Life Sciences Tools & Services,True,False,False
+WBD,Warner Bros. Discovery,Communication Services,Broadcasting,True,True,False
+WDAY,"Workday, Inc.",Information Technology,Application Software,True,True,False
+WDC,Western Digital,Information Technology,"Technology Hardware, Storage & Peripherals",True,True,False
+WEC,WEC Energy Group,Utilities,Electric Utilities,True,False,False
+WELL,Welltower,Real Estate,Health Care REITs,True,False,False
+WFC,Wells Fargo,Financials,Diversified Banks,True,False,False
+WM,Waste Management,Industrials,Environmental & Facilities Services,True,False,False
+WMB,Williams Companies,Energy,Oil & Gas Storage & Transportation,True,False,False
+WMT,Walmart,Consumer Staples,Consumer Staples Merchandise Retail,True,True,False
+WRB,W. R. Berkley Corporation,Financials,Property & Casualty Insurance,True,False,False
+WSM,"Williams-Sonoma, Inc.",Consumer Discretionary,Homefurnishing Retail,True,False,False
+WST,West Pharmaceutical Services,Health Care,Health Care Supplies,True,False,False
+WTW,Willis Towers Watson,Financials,Insurance Brokers,True,False,False
+WY,Weyerhaeuser,Real Estate,Timber REITs,True,False,False
+WYNN,Wynn Resorts,Consumer Discretionary,Casinos & Gaming,True,False,False
+XBI,State Street SPDR S&P Biotech ETF,ETF,ETF,False,False,True
+XEL,Xcel Energy,Utilities,Multi-Utilities,True,True,False
+XLB,State Street Materials Select Sector SPDR ETF,ETF,ETF,False,False,True
+XLC,State Street Communication Services Select Sector SPDR ETF,ETF,ETF,False,False,True
+XLE,State Street Energy Select Sector SPDR ETF,ETF,ETF,False,False,True
+XLF,State Street Financial Select Sector SPDR ETF,ETF,ETF,False,False,True
+XLI,State Street Industrial Select Sector SPDR ETF,ETF,ETF,False,False,True
+XLK,State Street Technology Select Sector SPDR ETF,ETF,ETF,False,False,True
+XLP,State Street Consumer Staples Select Sector SPDR ETF,ETF,ETF,False,False,True
+XLRE,State Street Real Estate Select Sector SPDR ETF,ETF,ETF,False,False,True
+XLU,State Street Utilities Select Sector SPDR ETF,ETF,ETF,False,False,True
+XLV,State Street Health Care Select Sector SPDR ETF,ETF,ETF,False,False,True
+XLY,State Street Consumer Discretionary Select Sector SPDR ETF,ETF,ETF,False,False,True
+XOM,ExxonMobil,Energy,Integrated Oil & Gas,True,False,False
+XYL,Xylem Inc.,Industrials,Industrial Machinery & Supplies & Components,True,False,False
+XYZ,"Block, Inc.",Financials,Transaction & Payment Processing Services,True,False,False
+YUM,Yum! Brands,Consumer Discretionary,Restaurants,True,False,False
+ZBH,Zimmer Biomet,Health Care,Health Care Equipment,True,False,False
+ZBRA,Zebra Technologies,Information Technology,Electronic Equipment & Instruments,True,False,False
+ZTS,Zoetis,Health Care,Pharmaceuticals,True,False,False

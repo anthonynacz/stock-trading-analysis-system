@@ -17,6 +17,7 @@ const KnowledgePage = lazy(() => import('./pages/KnowledgePage'));
 const PositionsPage = lazy(() => import('./pages/PositionsPage'));
 const OptionsLabPage = lazy(() => import('./pages/OptionsLabPage'));
 const ScannerPage = lazy(() => import('./pages/ScannerPage'));
+const RadarPage = lazy(() => import('./pages/RadarPage'));
 const IndustriesPage = lazy(() => import('./pages/IndustriesPage'));
 const ChartsPage = lazy(() => import('./pages/ChartsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
@@ -51,6 +52,7 @@ function App() {
                 <Route path="/research" element={<ResearchPage />} />
                 <Route path="/options-lab" element={<OptionsLabPage />} />
                 <Route path="/scanner" element={<ScannerPage />} />
+                <Route path="/radar" element={<RadarPage />} />
                 <Route path="/industries" element={<IndustriesPage />} />
                 <Route path="/charts" element={<ChartsPage />} />
                 <Route path="/positions" element={<PositionsPage />} />

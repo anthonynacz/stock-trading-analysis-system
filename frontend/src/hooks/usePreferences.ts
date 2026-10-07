@@ -15,6 +15,7 @@ export interface AlertsConfig {
   unusual_flow: boolean;
   news_spike: boolean;
   insider_filing: boolean;
+  radar_entry: boolean;
   discord_webhook_url: string | null;
 }
 

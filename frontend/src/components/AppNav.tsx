@@ -10,6 +10,7 @@ const primaryLinks = [
   { to: '/research', label: 'Research' },
   { to: '/options-lab', label: 'Options Lab' },
   { to: '/scanner', label: 'Scanner' },
+  { to: '/radar', label: 'Radar' },
   { to: '/positions', label: 'Positions' },
 ] as const;
 

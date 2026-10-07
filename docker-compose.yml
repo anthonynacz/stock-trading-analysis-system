@@ -34,6 +34,9 @@ services:
       # model isn't re-downloaded on every container restart — a cold load can
       # push the first research/news call past the proxy timeout.
       HF_HOME: /root/.cache/huggingface
+      # Momentum Radar backups: POST /api/radar/housekeeping runs housekeeping in
+      # this container, so it shares the radar worker's backup volume.
+      RADAR_BACKUP_DIR: /backups/radar
     env_file:
       - .env
     depends_on:
@@ -42,6 +45,29 @@ services:
     volumes:
       - ./backend:/app
       - hf_cache:/root/.cache/huggingface
+      - radar_backups:/backups/radar
+
+  # Momentum Radar worker (backend/radar/worker.py): scans every 5 minutes in the
+  # NYSE session, nightly housekeeping, Discord entry alerts. Same image as the
+  # backend; a separate container so a tick's blocking HTTP/numpy work never
+  # stalls the API. Single instance via a Postgres advisory lock; the backend
+  # container runs the migrations, the worker waits for the radar tables.
+  radar:
+    restart: unless-stopped
+    build: ./backend
+    command: ["python", "-m", "radar.worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://edgeflow:avppVVR4NcnSagQzqa-LIDCZNjacTbz6@db:5432/edgeflow
+      RADAR_BACKUP_DIR: /backups/radar
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - radar_backups:/backups/radar
+    mem_limit: 700m
 
   frontend:
     restart: unless-stopped
@@ -54,3 +80,4 @@ services:
 volumes:
   pgdata:
   hf_cache:
+  radar_backups:
