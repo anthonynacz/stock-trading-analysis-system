@@ -1040,7 +1040,7 @@ async def test_history_caps_the_trips(monkeypatch):
 
 def test_http_history_on_the_store(client_for, radar_store):
     tick, day = _commit_sample_tick(radar_store)
-    client = client_for(radar_store, user=MEMBER)
+    client = client_for(radar_store, user=ADMIN)
     r = client.get("/api/radar/history?days=1&ticker=nvda")
     assert r.status_code == 200
     (trip,) = r.json()["trips"]
@@ -1051,3 +1051,188 @@ def test_http_history_on_the_store(client_for, radar_store):
     assert client.get("/api/radar/history?days=0").status_code == 422
     assert client.get("/api/radar/history?days=93").status_code == 422
     assert client.get("/api/radar/history?ticker=NV%20DA;").status_code == 400
+
+
+# ── Scan sensitivity: GET / PUT /api/radar/settings ─────────────────────────
+
+LEVELS = {"thrust": 5, "volume": 2, "day": 4, "cutoff": 6, "exit": 1}
+DEFAULT_LEVELS = dict.fromkeys(radar.config.SENSITIVITY, radar.config.SENSITIVITY_DEFAULT)
+
+
+class SettingsStore(FakeStore):
+    """FakeStore with the settings document (radar_runtime.settings)."""
+
+    def __init__(self, settings: dict | None = None, **kw) -> None:
+        super().__init__(**kw)
+        self.settings = settings
+        self.settings_writes: list[dict] = []
+
+    def get_settings(self) -> dict | None:
+        return self.settings
+
+    def put_settings(self, doc: dict) -> None:
+        self.settings_writes.append(doc)
+        self.settings = doc
+
+
+def _ago(seconds: float) -> str:
+    return _iso(datetime.now(UTC) - timedelta(seconds=seconds))
+
+
+def test_http_settings_before_anything_was_saved_are_the_calibrated_defaults(client_for):
+    r = client_for(SettingsStore(), user=MEMBER).get("/api/radar/settings")
+    assert r.status_code == 200
+    out = r.json()
+    assert out["saved"] == radar.config.sensitivity_summary()
+    assert out["saved"]["levels"] == DEFAULT_LEVELS and out["saved"]["calibrated"] is True
+    assert out["dials"] == radar.config.sensitivity_dials()
+    assert [d["key"] for d in out["dials"]] == list(radar.config.SENSITIVITY)
+    assert out["updated_at"] is None and out["updated_by"] is None
+
+
+def test_http_settings_show_the_saved_levels_and_who_saved_them(client_for):
+    saved = {"levels": LEVELS, "updated_at": "2026-10-07T14:02:00Z", "updated_by": "user@example.com"}
+    out = client_for(SettingsStore(saved), user=MEMBER).get("/api/radar/settings").json()
+    assert out["saved"] == radar.config.sensitivity_summary(LEVELS) and out["saved"]["levels"] == LEVELS
+    assert out["updated_at"] == "2026-10-07T14:02:00Z" and out["updated_by"] == "user@example.com"
+
+
+def test_http_settings_with_bad_saved_levels_fall_back_per_dial(client_for):
+    saved = {"levels": {"thrust": 9, "volume": True, "exit": 6}}
+    out = client_for(SettingsStore(saved)).get("/api/radar/settings").json()
+    assert out["saved"]["levels"] == {**DEFAULT_LEVELS, "exit": 6}
+
+
+def test_http_unreadable_settings_are_the_defaults(client_for):
+    class Broken(SettingsStore):
+        def get_settings(self):
+            raise RuntimeError("database hiccup")
+
+    for store in (Broken(), FakeStore()):           # raising, and a store without the settings column at all
+        r = client_for(store).get("/api/radar/settings")
+        assert r.status_code == 200
+        out = r.json()
+        assert out["saved"] == radar.config.sensitivity_summary() and out["updated_by"] is None
+
+
+def test_http_put_settings_saves_and_queues_a_recompute(client_for):
+    store = SettingsStore()
+    before = datetime.now(UTC).replace(microsecond=0)
+    assert client_for(store, user=MEMBER).put("/api/radar/settings", json={"levels": {"thrust": 5}}).status_code == 403
+    r = client_for(store, user=ADMIN).put("/api/radar/settings", json={"levels": {"thrust": 5, "exit": 1}})
+    assert r.status_code == 202
+    out = r.json()
+    levels = {**DEFAULT_LEVELS, "thrust": 5, "exit": 1}                # missing dials keep the calibrated notch
+    (saved,) = store.settings_writes
+    assert saved["levels"] == levels and saved["updated_by"] == "admin@example.com"
+    stamp = datetime.fromisoformat(saved["updated_at"].replace("Z", "+00:00"))
+    assert before <= stamp <= datetime.now(UTC)
+    req = store.scan_request
+    assert req == out["request"]
+    assert req["kind"] == "rebuild" and req["status"] == "pending" and req["requested_by"] == "admin@example.com"
+    assert req["requested_at"] == saved["updated_at"] and re.fullmatch(r"\d{8}T\d{6}\.\d{6}Z", req["id"])
+    assert out["saved"] == radar.config.sensitivity_summary(levels)
+
+
+def test_http_put_settings_with_every_dial(client_for):
+    store = SettingsStore()
+    r = client_for(store).put("/api/radar/settings", json={"levels": LEVELS})
+    assert r.status_code == 202 and store.settings["levels"] == LEVELS
+    assert store.settings["updated_by"] == "admin@example.com"
+    assert r.json()["saved"]["calibrated"] is False
+
+
+def test_http_put_settings_back_to_the_calibrated_notch(client_for):
+    store = SettingsStore({"levels": LEVELS})
+    r = client_for(store).put("/api/radar/settings", json={"levels": {}})
+    assert r.status_code == 202 and store.settings["levels"] == DEFAULT_LEVELS
+    assert r.json()["saved"]["calibrated"] is True and store.scan_request["kind"] == "rebuild"
+
+
+@pytest.mark.parametrize("body", [
+    {}, {"levels": None}, {"levels": [3, 3]}, {"levels": "thrust=3"}, {"levels": 3}, {"thrust": 3},
+    {"levels": {"bogus": 3}}, {"levels": {"thrust": 3, "Thrust": 3}},
+    {"levels": {"thrust": True}}, {"levels": {"thrust": False}}, {"levels": {"thrust": 2.0}},
+    {"levels": {"thrust": 2.5}}, {"levels": {"thrust": -1}}, {"levels": {"thrust": 7}},
+    {"levels": {"thrust": "3"}}, {"levels": {"thrust": None}}, {"levels": {"exit": 3, "cutoff": 99}},
+])
+def test_http_put_settings_rejects_bad_levels_and_saves_nothing(client_for, body):
+    store = SettingsStore({"levels": LEVELS}, scan_request=None)
+    r = client_for(store).put("/api/radar/settings", json=body)
+    assert r.status_code == 422
+    assert store.settings_writes == [] and store.settings == {"levels": LEVELS} and store.scan_request is None
+    detail = r.json()["detail"]
+    assert detail["error"] == "invalid" and isinstance(detail["message"], str) and detail["message"]
+
+
+def test_http_put_settings_names_the_bad_dials(client_for):
+    r = client_for(SettingsStore()).put("/api/radar/settings",
+                                         json={"levels": {"thrust": 3, "bogus": 1, "exit": 9}})
+    assert r.status_code == 422
+    msg = r.json()["detail"]["message"]
+    assert "bogus" in msg and "exit" in msg and "thrust" not in msg and "0..6" in msg
+
+
+@pytest.mark.parametrize("body", [[1, 2], "levels", 3])
+def test_http_put_settings_needs_a_json_object(client_for, body):
+    store = SettingsStore()
+    assert client_for(store).put("/api/radar/settings", json=body).status_code == 422
+    assert store.settings_writes == [] and store.scan_request is None
+
+
+@pytest.mark.parametrize("kind", [None, "rebuild"])
+def test_http_put_settings_is_refused_while_a_scan_is_running(client_for, kind):
+    running = {"id": "r1", "status": "running", "requested_at": _ago(60), "started_at": _ago(55)}
+    if kind:
+        running["kind"] = kind
+    store = SettingsStore({"levels": LEVELS}, scan_request=running)
+    r = client_for(store).put("/api/radar/settings", json={"levels": {"thrust": 0}})
+    assert r.status_code == 409 and r.json()["detail"]["error"] == "already_running"
+    assert store.settings_writes == [] and store.settings == {"levels": LEVELS} and store.scan_request == running
+
+
+def test_http_put_settings_replaces_an_expired_running_request(client_for):
+    stuck = {"id": "r1", "status": "running", "requested_at": _ago(routes._RADAR_RUNNING_MAX_S + 10),
+             "started_at": _ago(routes._RADAR_RUNNING_MAX_S + 5)}
+    store = SettingsStore(scan_request=stuck)
+    r = client_for(store).put("/api/radar/settings", json={"levels": {"thrust": 0}})
+    assert r.status_code == 202 and store.scan_request["id"] != "r1" and store.scan_request["kind"] == "rebuild"
+
+
+@pytest.mark.parametrize("current", [
+    {"id": "r1", "status": "pending"},                          # a "Scan now" still waiting: superseded
+    {"id": "r1", "status": "pending", "kind": "rebuild"},       # an earlier Apply still waiting
+    {"id": "r1", "status": "done", "finished_at": None},        # no cooldown after a scan
+    {"id": "r1", "status": "error"},
+    {"id": "r1", "status": "refused"},
+])
+def test_http_put_settings_replaces_a_request_that_is_not_running(client_for, current):
+    current = {**current, "requested_at": _ago(3)}
+    store = SettingsStore(scan_request=current)
+    r = client_for(store).put("/api/radar/settings", json={"levels": {"day": 6}})
+    assert r.status_code == 202
+    assert store.scan_request["id"] != "r1" and store.scan_request["kind"] == "rebuild"
+    assert store.scan_request["status"] == "pending" and store.settings["levels"]["day"] == 6
+
+
+def test_http_settings_round_trip_on_the_store(client_for, radar_store):
+    """Against the real RadarStore: PUT saves the levels and the rebuild request, GET reads them back,
+    and the snapshot route shows the queued recompute."""
+    radar_store.set_alert_cursor("20261007T1400Z-NVDA-ENTER-1")
+    client = client_for(radar_store, user=ADMIN)
+    r = client.put("/api/radar/settings", json={"levels": {"cutoff": 0, "volume": 6}})
+    assert r.status_code == 202
+    levels = {**DEFAULT_LEVELS, "cutoff": 0, "volume": 6}
+    saved = radar_store.get_settings()
+    assert saved["levels"] == levels and saved["updated_by"] == "admin@example.com"
+    req = radar_store.get_scan_request()
+    assert req == r.json()["request"] and req["kind"] == "rebuild"
+    out = client.get("/api/radar/settings").json()
+    assert out["saved"]["levels"] == levels and out["updated_at"] == saved["updated_at"]
+    assert out["saved"]["entry"]["cutoff_et"] == "13:30"
+    assert client.get("/api/radar").json()["scan_request"] == req
+    assert radar_store.get_alert_cursor() == "20261007T1400Z-NVDA-ENTER-1"       # other runtime fields untouched
+    # A second Apply while the worker runs the first one is refused.
+    radar_store.put_scan_request({**req, "status": "running", "started_at": req["requested_at"]})
+    assert client.put("/api/radar/settings", json={"levels": {}}).status_code == 409
+    assert radar_store.get_settings() == saved

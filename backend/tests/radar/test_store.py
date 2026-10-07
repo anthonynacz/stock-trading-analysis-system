@@ -30,7 +30,7 @@ from radar.store import RADAR_TABLES, RadarStore, sync_url
 BACKEND = Path(__file__).resolve().parents[2]
 # The radar migrations, in revision order: the tables, then the scan request column and option metrics.
 MIGRATIONS = tuple(BACKEND / "alembic" / "versions" / f for f in (
-    "d6e2a4c8b1f9_radar_tables.py", "f3a9c2d7e510_radar_scan_request_options.py"))
+    "d6e2a4c8b1f9_radar_tables.py", "f3a9c2d7e510_radar_scan_request_options.py", "a8d4e6f2c913_radar_settings.py"))
 
 SESSION = "2026-09-28"
 TICK = "2026-09-28T13:35:00Z"
@@ -318,6 +318,139 @@ def test_scan_request_never_clobbers_the_cursor_or_the_engine_doc(radar_store: R
 def test_a_non_dict_scan_request_reads_as_none(radar_store: RadarStore) -> None:
     radar_store.put_scan_request(["not", "a", "request"])         # type: ignore[arg-type]
     assert radar_store.get_scan_request() is None
+
+
+# ---------------------------------------------------------------- scan sensitivity settings
+
+SETTINGS = {"levels": {"thrust": 4, "volume": 3, "day": 2, "cutoff": 6, "exit": 0},
+            "updated_at": "2026-09-28T13:41:00Z", "updated_by": "user@example.com"}
+
+
+def test_settings_round_trip_and_are_none_before_the_first(radar_store: RadarStore) -> None:
+    assert radar_store.get_settings() is None
+    radar_store.put_settings(SETTINGS)                              # before any runtime row exists
+    assert radar_store.get_settings() == SETTINGS
+    newer = {**SETTINGS, "levels": {**SETTINGS["levels"], "exit": 5}, "updated_at": "2026-09-28T13:45:00Z"}
+    radar_store.put_settings(newer)
+    assert radar_store.get_settings() == newer
+    assert count(radar_store, table("radar_runtime")) == 1
+
+
+def test_a_non_dict_settings_document_reads_as_none(radar_store: RadarStore) -> None:
+    radar_store.put_settings(["thrust", 4])                         # type: ignore[arg-type]
+    assert radar_store.get_settings() is None
+
+
+def test_settings_never_clobber_the_other_runtime_fields_and_vice_versa(radar_store: RadarStore) -> None:
+    commit(radar_store)
+    radar_store.set_alert_cursor("20260928T1335Z-NVDA-ENTER-1")
+    radar_store.write_live_health({"status": "degraded"})
+    radar_store.put_scan_request(REQUEST)
+    radar_store.put_settings(SETTINGS)
+    assert radar_store.load_engine_doc() == engine_doc()
+    assert radar_store.get_alert_cursor() == "20260928T1335Z-NVDA-ENTER-1"
+    assert radar_store.load_live_health() == {"status": "degraded"}
+    assert radar_store.get_scan_request() == REQUEST
+    # ... and every other runtime write keeps the settings
+    commit(radar_store, tick=NEXT_TICK)
+    radar_store.set_alert_cursor("20260928T1340Z-TSLA-ENTER-1")
+    radar_store.write_live_health({"status": "ok"})
+    radar_store.put_scan_request({**REQUEST, "status": "done"})
+    radar_store.write_failure(state=state_doc(), engine_doc=engine_doc(failures=2), scan_row=scan_row(NEXT_TICK, "w"))
+    assert radar_store.get_settings() == SETTINGS
+    assert radar_store.load_engine_doc() == engine_doc(failures=2)
+    assert radar_store.get_scan_request()["status"] == "done"
+
+
+def test_put_settings_renders_an_upsert_of_that_column_only_on_postgres(radar_store: RadarStore) -> None:
+    radar_store._insert = postgresql.insert
+    rec = _Recorder()
+    radar_store._put_runtime(rec, datetime.now(timezone.utc), settings={"levels": {}})
+    (sql,) = rec.sql
+    head, sets = sql.split(" ON CONFLICT (id) DO UPDATE SET ")
+    assert head.startswith("INSERT INTO radar_runtime")
+    assert sorted(sets.split(", ")) == ["settings = excluded.settings", "updated_at = excluded.updated_at"]
+
+
+# ---------------------------------------------------------------- commit_tick(replace_session=...)
+
+OTHER = "2026-09-25"
+OTHER_TICK = "2026-09-25T19:55:00Z"
+
+
+def _rows_of(store: RadarStore) -> tuple[list[tuple], list[str]]:
+    with store.engine.connect() as conn:
+        members = sorted((str(r.session_date), r.ticker, r.slot) for r in
+                         conn.execute(select(table("radar_member_ticks"))))
+    return members, sorted(e["id"] for e in store.recent_events(limit=1000))
+
+
+def _seed_two_sessions(store: RadarStore) -> None:
+    commit(store, tick=OTHER_TICK, members=[member_row("OLD", tick=OTHER_TICK, slot=76, session=OTHER)],
+           events=[event("OLD", ts=OTHER_TICK, session=OTHER, slot=76)], scan_row=scan_row(OTHER_TICK))
+    commit(store)                                                   # NVDA + AMD rows and one NVDA event today
+    commit(store, tick=NEXT_TICK, members=[member_row("TSLA", tick=NEXT_TICK, slot=1)],
+           events=[event("TSLA", ts=NEXT_TICK, slot=1)])
+
+
+def test_replace_session_deletes_only_that_sessions_rows_before_inserting(radar_store: RadarStore) -> None:
+    _seed_two_sessions(radar_store)
+    members, events = _rows_of(radar_store)
+    assert len(members) == 4 and len(events) == 3
+    recomputed = state_doc(NEXT_TICK, members=["AMD"])
+    commit(radar_store, tick=NEXT_TICK, state=recomputed, replace_session=SESSION,
+           members=[member_row("AMD", tick=TICK, slot=0), member_row("AMD", tick=NEXT_TICK, slot=1)],
+           events=[event("AMD", ts=TICK)], scan_row=scan_row(NEXT_TICK, run_id="worker-x-rebuild-134200"))
+    members, events = _rows_of(radar_store)
+    assert members == [(OTHER, "OLD", 76), (SESSION, "AMD", 0), (SESSION, "AMD", 1)]
+    assert events == ["20260925T1955Z-OLD-ENTER-1", "20260928T1335Z-AMD-ENTER-1"]
+    assert radar_store.load_state() == recomputed
+    assert radar_store.member_ticks("NVDA", SESSION) == [] and radar_store.member_ticks("TSLA", SESSION) == []
+    # The scan_log keeps every row: it is the history of the scans, not of the session's results.
+    assert len(radar_store.scan_log_tail()) == 4
+
+
+def test_replace_session_accepts_a_date_string_and_an_empty_recompute(radar_store: RadarStore) -> None:
+    _seed_two_sessions(radar_store)
+    commit(radar_store, tick=NEXT_TICK, members=[], events=[], replace_session="2026-09-28",
+           scan_row=scan_row(NEXT_TICK, run_id="rebuild"))
+    members, events = _rows_of(radar_store)
+    assert members == [(OTHER, "OLD", 76)] and events == ["20260925T1955Z-OLD-ENTER-1"]
+
+
+def test_replace_session_of_another_day_leaves_today_alone(radar_store: RadarStore) -> None:
+    _seed_two_sessions(radar_store)
+    commit(radar_store, tick=OTHER_TICK, members=[], events=[], replace_session=OTHER,
+           scan_row=scan_row(OTHER_TICK, run_id="rebuild"))
+    members, events = _rows_of(radar_store)
+    assert {m[0] for m in members} == {SESSION} and len(members) == 3 and len(events) == 2
+
+
+def test_without_replace_session_nothing_is_deleted(radar_store: RadarStore) -> None:
+    _seed_two_sessions(radar_store)
+    before = _rows_of(radar_store)
+    commit(radar_store, tick=NEXT_TICK, members=[], events=[], replace_session=None,
+           scan_row=scan_row(NEXT_TICK, run_id="again"))
+    assert _rows_of(radar_store) == before
+
+
+def test_replace_session_is_part_of_the_one_transaction(radar_store: RadarStore) -> None:
+    """A recompute that fails inside the transaction must not leave the session emptied."""
+    _seed_two_sessions(radar_store)
+    before, state = _rows_of(radar_store), radar_store.load_state()
+    with pytest.raises((ValueError, StatementError), match="JSON compliant"):
+        commit(radar_store, tick=NEXT_TICK, replace_session=SESSION, members=[],
+               events=[event("AMD", ts=TICK, signals={"z3": float("nan")})],
+               scan_row=scan_row(NEXT_TICK, run_id="rebuild"))
+    assert _rows_of(radar_store) == before and radar_store.load_state() == state
+
+
+def test_replace_session_with_a_bad_date_writes_nothing(radar_store: RadarStore) -> None:
+    _seed_two_sessions(radar_store)
+    before = _rows_of(radar_store)
+    with pytest.raises(ValueError):
+        commit(radar_store, tick=NEXT_TICK, replace_session="28/09/2026", scan_row=scan_row(NEXT_TICK, run_id="x"))
+    assert _rows_of(radar_store) == before
 
 
 # ---------------------------------------------------------------- option metrics
@@ -618,6 +751,7 @@ def test_postgres_statements_render_with_on_conflict(radar_store: RadarStore) ->
 
 RADAR_REVISION, PRIOR_REVISION = "d6e2a4c8b1f9", "a1f7d4e92c60"
 OPTIONS_REVISION = "f3a9c2d7e510"
+SETTINGS_REVISION = "a8d4e6f2c913"
 
 
 def _migration_sql(*, raw: bool = False, migrations: tuple[Path, ...] = MIGRATIONS) -> list[str]:
@@ -864,4 +998,13 @@ def test_migration_is_the_single_head_after_recommendation_outcomes() -> None:
     rev = scripts.get_revision(RADAR_REVISION)
     assert rev.down_revision == PRIOR_REVISION
     assert scripts.get_revision(OPTIONS_REVISION).down_revision == RADAR_REVISION
-    assert scripts.get_heads() == [OPTIONS_REVISION]
+    assert scripts.get_revision(SETTINGS_REVISION).down_revision == OPTIONS_REVISION
+    assert scripts.get_heads() == [SETTINGS_REVISION]
+
+
+def test_session_tickers_lists_every_name_with_rows_or_events_in_the_session(radar_store):
+    commit(radar_store, members=[member_row("NVDA"), member_row("AMD", role="heating")],
+           events=[event("TSLA"), event("MSFT", ts="2026-09-29T13:35:00Z", session="2026-09-29")])
+    assert radar_store.session_tickers(SESSION) == ["AMD", "NVDA", "TSLA"]
+    assert radar_store.session_tickers("2026-09-29") == ["MSFT"]
+    assert radar_store.session_tickers("2026-09-30") == []

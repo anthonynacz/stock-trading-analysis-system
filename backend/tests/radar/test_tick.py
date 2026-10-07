@@ -37,7 +37,7 @@ SCAN = ["AAPL", "NVDA", "XOM", "SPY", "QQQ", "IWM"]
 
 STATE_KEYS = {"schema", "generated_at", "tick_id", "last_bar", "status", "message", "session", "next_tick_at",
               "params_version", "source", "market", "counts", "members", "heating", "recent_exits", "sector_banners",
-              "health", "disclaimer"}
+              "health", "disclaimer", "sensitivity"}
 SCAN_KEYS = {"v", "tick", "run_id", "written_at", "session", "phase", "status", "lag_s", "universe", "stage_b",
              "quotes_ok", "quotes_err", "bars_ok", "bars_err", "members", "heating", "entered", "exited",
              "processed_slots", "source", "ms", "git_prev", "hot_bytes", "errors"}
@@ -1301,3 +1301,227 @@ def test_runtime_modules_import_with_the_standard_library_only():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
                          cwd=Path(__file__).resolve().parents[2]).stdout.strip()
     assert out == "[]"
+
+
+# ---------------------------------------------------------------- scan sensitivity and the session recompute
+
+from radar.config import effective_params, sensitivity_summary  # noqa: E402
+
+LEVELS = {"thrust": 5, "volume": 1, "day": 6, "cutoff": 0, "exit": 4}
+
+
+@dataclass
+class SensWorld(World):
+    """World whose engine factory also records the params and keyword arguments the tick passed."""
+    engine_calls: list = field(default_factory=list)
+
+    def deps(self) -> tick.Deps:
+        deps = super().deps()
+        base, world = deps.engine, self
+
+        def engine(params, pack, session, state=None, **kw):
+            world.engine_calls.append({"params": params, "state": state, **kw})
+            return base(params, pack, session, state=state)
+
+        return dataclasses.replace(deps, engine=engine)
+
+
+class NoSettingsStore(Spy):
+    """A store from before the settings column: no get_settings at all."""
+
+    def __getattr__(self, name):
+        if name == "get_settings":
+            raise AttributeError(name)
+        return super().__getattr__(name)
+
+
+class BrokenSettingsStore(Spy):
+    def get_settings(self):
+        raise RuntimeError("database hiccup")
+
+
+def today_engine() -> dict:
+    return {"schema": 1, "session": DAY, "engine": {"session": DAY, "last_slot": 10}, "dynamic_adds": [], "loop": LOOP}
+
+
+def test_a_tick_without_saved_settings_runs_on_the_calibrated_params(store):
+    seed(store, pack=pack_for(DAY), engine=today_engine())
+    world = SensWorld()
+    _, commit = run(store, world)
+    (call,) = world.engine_calls
+    assert call["params"] == PARAMS and call["state"] == {"session": DAY, "last_slot": 10}
+    assert "mark_late" not in call                                    # a live tick keeps the engine's default
+    assert "replace_session" not in commit
+    state = store.load_state()
+    check_state(state)
+    assert state["sensitivity"] == sensitivity_summary() and state["sensitivity"]["calibrated"] is True
+    assert commit["scan_row"]["errors"] == []
+
+
+def test_a_tick_runs_on_the_saved_sensitivity_and_publishes_it(store):
+    seed(store, pack=pack_for(DAY), engine=today_engine())
+    store.put_settings({"levels": LEVELS, "updated_at": "2026-09-28T14:20:00Z", "updated_by": "user@example.com"})
+    world = SensWorld()
+    res, commit = run(store, world)
+    assert res["status"] == "ok" and res["processed_slots"] == [11, 12]   # a live tick: resumes, no recompute
+    params = world.engine_calls[0]["params"]
+    assert params == effective_params(LEVELS) and params != PARAMS
+    assert params["session"]["last_entry_slot"] == 47
+    state = store.load_state()
+    assert state["sensitivity"] == sensitivity_summary(LEVELS)
+    assert state["sensitivity"]["levels"] == LEVELS and state["sensitivity"]["calibrated"] is False
+    assert state["params_version"] == PARAMS["params_version"] and commit["packs"] is None   # no pack rebuild
+
+
+def test_invalid_saved_levels_fall_back_per_dial(store):
+    seed(store, pack=pack_for(DAY), engine=today_engine())
+    store.put_settings({"levels": {"thrust": 9, "volume": True, "day": 2.0, "cutoff": 6, "nope": 1}})
+    world = SensWorld()
+    run(store, world)
+    expected = {"thrust": 3, "volume": 3, "day": 3, "cutoff": 6, "exit": 3}
+    assert world.engine_calls[0]["params"] == effective_params(expected)
+    assert store.load_state()["sensitivity"]["levels"] == expected
+
+
+@pytest.mark.parametrize("doc", [{"levels": "junk"}, {"updated_by": "x"}, {}])
+def test_settings_without_valid_levels_are_the_calibrated_defaults(store, doc):
+    seed(store, pack=pack_for(DAY), engine=today_engine())
+    store.put_settings(doc)
+    world = SensWorld()
+    run(store, world)
+    assert world.engine_calls[0]["params"] == PARAMS
+    assert store.load_state()["sensitivity"] == sensitivity_summary()
+
+
+def test_a_store_without_settings_runs_on_the_defaults(radar_store):
+    store = NoSettingsStore(radar_store)
+    seed(store, pack=pack_for(DAY), engine=today_engine())
+    world = SensWorld()
+    res, commit = run(store, world)
+    assert res["status"] == "ok" and world.engine_calls[0]["params"] == PARAMS
+    assert store.load_state()["sensitivity"] == sensitivity_summary() and commit["scan_row"]["errors"] == []
+
+
+def test_unreadable_settings_run_on_the_defaults_and_say_so(radar_store):
+    store = BrokenSettingsStore(radar_store)
+    seed(store, pack=pack_for(DAY), engine=today_engine())
+    world = SensWorld()
+    res, commit = run(store, world)
+    assert res["status"] == "ok" and world.engine_calls[0]["params"] == PARAMS
+    assert store.load_state()["sensitivity"] == sensitivity_summary()
+    assert commit["scan_row"]["errors"] == ["settings unreadable: RuntimeError"]
+
+
+def test_heartbeats_and_the_warmup_publish_the_sensitivity(store):
+    store.put_settings({"levels": LEVELS})
+    run(store, World(), "2026-10-03T15:00:00Z", tick.parse_tick_id("2026-10-03T15:00:00Z") + 50)   # Saturday
+    beat = store.load_state()
+    check_state(beat)
+    assert beat["status"] == "closed" and beat["sensitivity"] == sensitivity_summary(LEVELS)
+    warm = "2026-09-28T13:10:00Z"
+    run(store, World(), warm, tick.parse_tick_id(warm) + 2, warmup=True)
+    assert store.load_state()["sensitivity"] == sensitivity_summary(LEVELS)
+
+
+OTHER_DAY_EVENT = event("MSFT", "ENTER", "2026-09-25T15:00:00Z", 18)
+
+
+def test_a_rebuild_recomputes_the_whole_session_and_replaces_its_rows(store, monkeypatch):
+    seed(store, pack=pack_for(DAY), engine=today_engine(), events=[OLD_EVENT, OTHER_DAY_EVENT])
+    run(store, World())                                     # a live tick: slots 11-12 from the stored engine state
+    assert [r["slot"] for r in store.member_ticks("NVDA", DAY)] == [11, 12]
+    store.put_settings({"levels": LEVELS})
+    monkeypatch.setenv(tick.RUN_ID_ENV, "worker-x-rebuild-143600")
+    world = SensWorld()
+    res, commit = run(store, world, rebuild=True)
+
+    (call,) = world.engine_calls
+    assert call["state"] is None and call["mark_late"] is False     # a fresh engine, entries not "late"
+    assert call["params"] == effective_params(LEVELS)
+    assert commit["replace_session"] == DAY
+    assert res["status"] == "ok" and res["processed_slots"] == list(range(13))
+    assert [r["slot"] for r in store.member_ticks("NVDA", DAY)] == list(range(13))
+    ids = event_ids(store)
+    assert OLD_EVENT["id"] not in ids                                 # today's earlier results are gone ...
+    assert OTHER_DAY_EVENT["id"] in ids                               # ... another session's are not
+    assert sorted(ids) == sorted([OTHER_DAY_EVENT["id"], "20260928T1435Z-AAPL-EXIT-1", "20260928T1435Z-NVDA-ENTER-1"])
+    state = store.load_state()
+    check_state(state)
+    assert state["sensitivity"] == sensitivity_summary(LEVELS) and state["session"]["date"] == DAY
+    engine = store.load_engine_doc()
+    assert engine["session"] == DAY and engine["engine"] == {"session": DAY, "last_slot": 12}
+    row = scan_rows(store)[-1]
+    assert row["run_id"] == "worker-x-rebuild-143600" and row["processed_slots"] == list(range(13))
+
+
+def test_a_rebuild_that_processes_no_slot_replaces_nothing(store):
+    seed(store, pack=pack_for(DAY), engine=today_engine(), events=[OLD_EVENT])
+    run(store, World())
+    before_state, before_ids = store.load_state(), event_ids(store)
+    before_rows = store.member_ticks("NVDA", DAY)
+    res, commit = run(store, SensWorld(no_bars=True), rebuild=True)
+    assert "replace_session" not in commit
+    assert res["status"] == "degraded" and res["processed_slots"] == []
+    assert "no bars" in res["message"] and "unchanged" in res["message"]
+    assert "rebuild: no slots processed" in commit["scan_row"]["errors"]
+    assert event_ids(store) == before_ids and store.member_ticks("NVDA", DAY) == before_rows
+    state = store.load_state()
+    assert state["status"] == "degraded" and state["members"] == before_state["members"]
+    assert state["recent_exits"] == before_state["recent_exits"] and state["last_bar"] == before_state["last_bar"]
+    assert store.load_engine_doc()["engine"] == {"session": DAY, "last_slot": 12}    # the live engine state is kept
+
+
+def test_a_rebuild_without_baselines_carries_and_replaces_nothing(store):
+    seed(store, engine=today_engine(), events=[OLD_EVENT])
+    res, commit = run(store, SensWorld(history=False), rebuild=True)
+    assert "replace_session" not in commit and res["status"] == "no_data"
+    assert OLD_EVENT["id"] in event_ids(store)
+
+
+def test_a_rebuild_on_a_weekend_recomputes_the_last_session_through_its_close(store):
+    friday = "2026-10-02"
+    seed(store, pack=pack_for(friday), events=[event("AMD", "ENTER", "2026-10-02T15:00:00Z", 17), OLD_EVENT])
+    close = "2026-10-02T20:00:00Z"
+    world = SensWorld()
+    res, commit = run(store, world, close, tick.parse_tick_id("2026-10-03T15:00:00Z"), final=True, rebuild=True)
+    assert world.engines[0].session.day == date(2026, 10, 2) and world.packs_built == []
+    assert world.engine_calls[0]["state"] is None and world.engine_calls[0]["mark_late"] is False
+    assert commit["replace_session"] == friday and res["processed_slots"] == list(range(78))
+    ids = event_ids(store)
+    assert "20261002T1500Z-AMD-ENTER-1" not in ids and OLD_EVENT["id"] in ids    # only Friday's rows replaced
+    state = store.load_state()
+    assert state["session"]["date"] == friday and state["next_tick_at"] is None
+
+
+def test_a_live_tick_never_replaces_rows(store):
+    seed(store, pack=pack_for(DAY), engine=today_engine(), events=[OLD_EVENT])
+    _, commit = run(store, World())
+    assert "replace_session" not in commit and OLD_EVENT["id"] in event_ids(store)
+
+
+@pytest.mark.parametrize("argv, rebuild, final", [
+    (["--tick-id", TICK], False, False),
+    (["--tick-id", TICK, "--rebuild"], True, False),
+    (["--tick-id", "2026-10-02T20:00:00Z", "--rebuild", "--final"], True, True),
+])
+def test_cli_passes_rebuild_to_the_tick(monkeypatch, capsys, argv, rebuild, final):
+    seen = []
+
+    class Recorder:
+        def __init__(self, args, deps, store, **kw):
+            seen.append(args)
+
+        def run(self):
+            return {"status": "ok"}
+
+    monkeypatch.setattr(tick, "Tick", Recorder)
+    monkeypatch.setattr(tick, "real_deps", lambda: None)
+    monkeypatch.setattr(tick, "open_store", lambda: None)
+    assert tick.main(argv) == 0
+    (args,) = seen
+    assert args.rebuild is rebuild and args.final is final and args.warmup is False and args.tick_id == argv[1]
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1]) == {"status": "ok"}
+
+
+def test_tick_args_default_to_a_live_tick():
+    assert tick.TickArgs(TICK).rebuild is False

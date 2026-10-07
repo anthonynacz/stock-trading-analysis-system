@@ -35,7 +35,7 @@ EXIT_TEXT = {
     "FADE": "Momentum faded: {z30:+.1f}σ vs market over 30 min, {z15:+.1f}σ over 15 min",
     "DRY": "Volume dried up to {rvol:.1f}× normal for this time",
     "STALL": "No new {side} for {mins} min and the 30-min thrust is down to {z30:+.1f}σ",
-    "REVERSAL": "Sharp move the other way: {z15:+.1f}σ vs market in 15 min",
+    "REVERSAL": "Sharp move the other way: {z15:+.1f}σ vs market in 15 min{adj}",
     "GIVEBACK": "Gave back {gb:.0f}% of the move that put it on the radar",
     "VWAP_CROSS": "Crossed back {vside} session VWAP",
     "SESSION_END": "The radar clears before the closing auction",
@@ -94,8 +94,11 @@ class _Ctx:
 
 
 class Engine:
-    def __init__(self, params: dict, pack: BaselinePack, session: Session, state: dict | None = None):
+    def __init__(self, params: dict, pack: BaselinePack, session: Session, state: dict | None = None, *,
+                 mark_late: bool = True):
         self.p = params
+        # A session recompute (new sensitivity) replays every slot at once: its entries are not "late".
+        self.mark_late = mark_late
         self.pack = pack
         self.session = session
         self.day = session.day.isoformat()
@@ -428,6 +431,7 @@ class Engine:
         if extreme(f, d)[i]:
             m["last_ext"] = k
         m["view"] = self._view(i, d, f, sc)
+        m["vol_ratio"] = self.vol_ratio(f, i, k)
         m["last_bar_slot"] = self._last_bar(ctx, i, k)
         reason, info = self._exit_reason(m, i, k, px, f, reopen, no_dry=ctx.degraded or prov, no_stall=prov)
         if reason:
@@ -449,8 +453,9 @@ class Engine:
             return "DATA_STALE", {"n": m["stale"]}
         move = d * (m["peak"] - m["base"])
         gb = d * (m["peak"] - px) / move if move > 0 else 0.0
-        if z3 <= -hx["reversal_z3"]:
-            return "REVERSAL", {}
+        ratio = self.vol_ratio(f, i, k)
+        if z3 / ratio <= -hx["reversal_z3"]:
+            return "REVERSAL", {"adj": f" ({d * z3 / ratio:+.1f}σ for today's {ratio:.1f}× volatility)" if ratio > 1.0 else ""}
         if gb >= hx["giveback"]:
             return "GIVEBACK", {"gb": 100.0 * gb}
         if reopen:
@@ -475,6 +480,20 @@ class Engine:
             return "STALL", {"mins": 5 * (k - m["last_ext"])}
         return None, {}
 
+    def vol_ratio(self, f: dict, i: int, k: int) -> float:
+        """How much bigger than normal the stock's 5-minute moves are today (>= 1; 1 when the adaptive
+        reversal is off or too few bars have printed). hard_exit.reversal_vol: "baseline" (off), "session"
+        (since the open) or "recent" (last hour); capped at reversal_vol_cap."""
+        hx = self.p["hard_exit"]
+        mode = hx.get("reversal_vol", "baseline")
+        if mode == "baseline" or k < hx.get("reversal_vol_min_bars", 6):
+            return 1.0
+        arr = f.get("rv" if mode == "session" else "rv12")
+        if arr is None:
+            return 1.0
+        rv = float(arr[i])
+        return min(max(rv, 1.0), float(hx.get("reversal_vol_cap", 3.0))) if math.isfinite(rv) else 1.0
+
     @staticmethod
     def _last_bar(ctx: _Ctx, i: int, k: int) -> int:
         printed = np.flatnonzero(ctx.grid.present[i, :k + 1])
@@ -498,7 +517,7 @@ class Engine:
         detail = EXIT_TEXT[reason].format(
             z30=v["z30"] or 0.0, z15=v["z15"] or 0.0, rvol=v["rvol"] or 0.0,
             side="high" if m["dir"] > 0 else "low", vside="below" if m["dir"] > 0 else "above",
-            **{"mins": 0, "gb": 0.0, "n": 0, "by": "", **info})
+            **{"mins": 0, "gb": 0.0, "n": 0, "by": "", "adj": "", **info})
         move = _pct(math.log(px / m["entry_px"]))
         held = 5 * (k - m["entry_slot"])
         out.events.append(self._event(sym, k, k_now, "EXIT", m, px, v["intensity"], reason, detail,
@@ -561,7 +580,7 @@ class Engine:
         m = {"dir": d, "entry_slot": k, "entry_px": px, "name": self.names[ctx.pix[i]],
              "sector": self.sectors[ctx.pix[i]],
              "base": float(window.min() if d > 0 else window.max()), "peak": px, "last_ext": k,
-             "dwell": 0, "soft": 0, "stale": 0, "episode": mem["episodes"], "late": k_now - k > 2,
+             "dwell": 0, "soft": 0, "stale": 0, "episode": mem["episodes"], "late": self.mark_late and k_now - k > 2,
              "state": "racing", "view": self._view(i, d, f, sc), "last_bar_slot": self._last_bar(ctx, i, k),
              "spark": {"t0_slot": a, "entry_i": k - a, "p": [float(x) for x in window]}}
         st["members"][sym] = m
@@ -599,7 +618,7 @@ class Engine:
         return {"v": 1, "id": f"{stamp}-{sym}-{kind}-{m['episode']}", "ts": iso(ts), "session": self.day, "slot": k,
                 "ticker": sym, "type": kind, "dir": _dir_word(m["dir"]), "price": round(px, 4),
                 "intensity": _r(intensity, 1), "reason": reason, "detail": detail[:160], "episode": m["episode"],
-                "held_min": held, "move_since_entry_pct": move, "late": k_now - k > 2, "signals": signals,
+                "held_min": held, "move_since_entry_pct": move, "late": self.mark_late and k_now - k > 2, "signals": signals,
                 "params_version": self.p["params_version"]}
 
     def _rows(self, k: int, out: TickOutput) -> None:
@@ -648,6 +667,8 @@ class Engine:
                 # Display only (the exit-watch gauges): the share of the move from its base that was given
                 # back (the GIVEBACK rule, section 6) and the minutes since the last new high/low (STALL).
                 "giveback_pct": self._giveback_pct(m, v["price"]),
+                # Today's volatility vs normal used by the adaptive REVERSAL rule (1.0 when it is off).
+                "vol_ratio": round(float(m.get("vol_ratio", 1.0)), 2),
                 "mins_since_extreme": 5 * (last - m["last_ext"]),
                 "spark": {"t0": iso(ss.slot_start(sp["t0_slot"]) + 300), "step_s": 300, "entry_i": sp["entry_i"],
                           "p": [round(x, 4) for x in sp["p"]]}})

@@ -1,5 +1,5 @@
 import type { RadarMember } from '../../types';
-import { EXIT_RULES, exitWatch, type HardCheck, type WatchLevel } from './exitRules';
+import { DEFAULT_EXIT_RULES, exitWatch, type ExitRules, type HardCheck, type WatchLevel } from './exitRules';
 
 // Literal class maps (Tailwind purge).
 const LEVEL_DOT: Record<WatchLevel, string> = { ok: 'bg-green-400', watch: 'bg-amber-400', near: 'bg-red-400' };
@@ -12,8 +12,8 @@ const PILL_CLASS: Record<WatchLevel, string> = {
 const PILL_LABEL: Record<WatchLevel, string> = { ok: '', watch: 'Watch', near: 'Near exit' };
 
 /** Small pill beside the state chip when a member is getting close to an exit rule. */
-export function ExitWatchPill({ m }: { m: RadarMember }) {
-  const w = exitWatch(m);
+export function ExitWatchPill({ m, rules = DEFAULT_EXIT_RULES }: { m: RadarMember; rules?: ExitRules }) {
+  const w = exitWatch(m, rules);
   if (w.level === 'ok') return null;
   return (
     <span
@@ -61,8 +61,9 @@ function Gauge({ h }: { h: HardCheck }) {
  * (dot = now, red line = exit), the three "weak bar" checks as chips, and the
  * count of weak bars in a row. Mirrors the engine's rules; the engine decides.
  */
-export default function ExitWatch({ m }: { m: RadarMember }) {
-  const w = exitWatch(m);
+export default function ExitWatch({ m, rules = DEFAULT_EXIT_RULES }: { m: RadarMember; rules?: ExitRules }) {
+  const EXIT_RULES = rules;
+  const w = exitWatch(m, rules);
   const minutes = m.minutes_on_radar ?? 0;
   return (
     <div className="rounded border border-border/70 bg-card/40 px-3 py-2.5 space-y-2">

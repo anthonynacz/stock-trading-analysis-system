@@ -950,6 +950,8 @@ export interface RadarMember {
   giveback_pct?: number | null;
   /** Minutes since the last new high (up) / low (down); feeds the STALL check. Display only. */
   mins_since_extreme?: number | null;
+  /** Today's volatility vs normal used by the adaptive REVERSAL rule (1 when it is off). */
+  vol_ratio?: number | null;
 }
 
 /** Passed the entry checks on the last bar; waits one more bar to confirm. Not a member. */
@@ -1018,6 +1020,8 @@ export interface RadarState {
   sector_banners: RadarSectorBanner[];
   health: RadarHealth;
   disclaimer: string;
+  /** The scan sensitivity these results were computed with (absent on older snapshots). */
+  sensitivity?: RadarSensitivity;
 }
 
 /** At-the-money call of the chosen expiry (radar/options.py). Yahoo quotes, delayed. */
@@ -1069,9 +1073,56 @@ export interface RadarOptionMetrics {
   liquidity: RadarOptionLiquidity;
 }
 
+/** Scan sensitivity in effect (`state.sensitivity`) or saved (GET /api/radar/settings `saved`). */
+export interface RadarSensitivity {
+  levels: Record<string, number>;
+  default: number;
+  calibrated: boolean;
+  entry: {
+    z15: number;
+    z30: number;
+    move30_pct: number;
+    rvol15: number;
+    day_rvol: number;
+    day_z: number;
+    cutoff_et: string;
+    cutoff_min_before_close: number;
+  };
+  exit: {
+    reversal_z15: number;
+    giveback_pct: number;
+    soft_fails: number;
+    fade_z30: number;
+    fade_z15: number;
+    dry_rvol: number;
+    stall_min: number;
+    stall_z30: number;
+    min_dwell_min: number;
+  };
+}
+
+export interface RadarDial {
+  key: string;
+  label: string;
+  left: string;
+  right: string;
+  hint: string;
+  notches: { level: number; text: string }[];
+}
+
+/** `GET /api/radar/settings`. */
+export interface RadarSettings {
+  saved: RadarSensitivity;
+  dials: RadarDial[];
+  updated_at: string | null;
+  updated_by: string | null;
+}
+
 /** The latest "Scan now" request (POST /api/radar/scan), as the worker left it. */
 export interface RadarScanRequest {
   id: string;
+  /** "rebuild": recompute of the session after a sensitivity change. */
+  kind?: 'rebuild' | null;
   status: 'pending' | 'running' | 'done' | 'refused' | 'error';
   requested_at: string;
   requested_by?: string | null;

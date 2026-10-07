@@ -18,7 +18,7 @@ import pytest
 
 from radar import calendar_nyse as cal
 from radar import worker as worker_mod
-from radar.config import RUNTIME
+from radar.config import PARAMS, RUNTIME
 from radar.tick import CONTEXT_ENV, HEALTH_REF, RUN_ID_ENV, health_ref, iso, parse_tick_id, scan_log_row
 from tests.radar.test_tick import check_scan_row, check_state, event, scan_rows, seed
 
@@ -53,7 +53,7 @@ class Clock:
 def parse_cmd(cmd: list[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tick-id")
-    for flag in ("--warmup", "--final", "--ignore-calendar"):
+    for flag in ("--warmup", "--final", "--ignore-calendar", "--rebuild"):
         ap.add_argument(flag, action="store_true")
     return ap.parse_args(cmd[1:])
 
@@ -76,7 +76,8 @@ class FakeTick:
         a = parse_cmd(cmd)
         ctx = json.loads(env[CONTEXT_ENV])
         engine = self.store.load_engine_doc() or {"schema": 1}
-        self.runs.append(SimpleNamespace(tick_id=a.tick_id, warmup=a.warmup, final=a.final, at=self.clock(),
+        self.runs.append(SimpleNamespace(tick_id=a.tick_id, warmup=a.warmup, final=a.final, rebuild=a.rebuild,
+                                         at=self.clock(),
                                          loop=ctx["loop"], ops=ctx["ops"], env=env, timeout=timeout_s, stop=stop,
                                          stop_requested=stop() if stop else None,
                                          run_id=env[RUN_ID_ENV], source_health=engine.get("source_health"), cmd=cmd))
@@ -545,7 +546,7 @@ PREV_STATE = {"schema": 1, "generated_at": "2026-09-28T14:30:51Z", "tick_id": "2
               "last_bar": "2026-09-28T14:30:00Z", "status": "ok", "message": "",
               "session": {"date": DAY, "phase": "regular", "open": "2026-09-28T13:30:00Z",
                           "close": "2026-09-28T20:00:00Z", "half_day": False},
-              "next_tick_at": "2026-09-28T14:35:50Z", "params_version": "radar-sm-1",
+              "next_tick_at": "2026-09-28T14:35:50Z", "params_version": PARAMS["params_version"],
               "source": {"name": "yahoo", "status": "ok", "consecutive_failures": 0, "last_ok_at": "2026-09-28T14:30:51Z"},
               "market": {"mode": "normal", "dir": None, "spy_chg_day_pct": 0.1, "spy_z30": 0.2, "breadth30": 0.5},
               "counts": {"universe": 5, "stage_b": 2, "members": 1, "heating": 0, "entered_today": 1, "exited_today": 0},
@@ -1346,3 +1347,274 @@ def test_main_wires_the_options_subprocess(monkeypatch):
     assert seen["refresh"]() == {"status": "ok"}
     assert calls == [(list(worker_mod.OPTIONS_CMD), float(worker_mod.OPTIONS["timeout_s"]))]
     assert worker_mod.OPTIONS_CMD[1:] == ("-m", "radar.options")
+
+
+# ---------------------------------------------------------------- sensitivity recompute ("rebuild" requests)
+
+from radar.config import sensitivity_summary  # noqa: E402
+
+LEVELS = {"thrust": 5, "volume": 2, "day": 4, "cutoff": 6, "exit": 1}
+
+
+def rebuild_request(requested_at: str | None, status: str = "pending") -> dict:
+    return {**scan_request(requested_at, status), "id": "rb-1", "kind": "rebuild"}
+
+
+@pytest.mark.parametrize("now, session, tick, final", [
+    ("2026-09-28T14:02:07Z", "2026-09-28", "2026-09-28T14:00:00Z", False),   # inside the session
+    ("2026-09-28T13:35:00Z", "2026-09-28", "2026-09-28T13:35:00Z", False),   # the first slot just closed
+    ("2026-09-28T19:59:59Z", "2026-09-28", "2026-09-28T19:55:00Z", False),
+    ("2026-09-28T20:00:00Z", "2026-09-28", "2026-09-28T20:00:00Z", True),    # at the close: final
+    ("2026-09-28T23:30:00Z", "2026-09-28", "2026-09-28T20:00:00Z", True),    # evening: today through its close
+    ("2026-09-28T13:34:59Z", "2026-09-25", "2026-09-25T20:00:00Z", True),    # before the first slot: last session
+    ("2026-09-28T12:00:00Z", "2026-09-25", "2026-09-25T20:00:00Z", True),    # pre-market Monday: Friday
+    ("2026-09-28T03:00:00Z", "2026-09-25", "2026-09-25T20:00:00Z", True),    # overnight
+    ("2026-10-03T15:00:00Z", "2026-10-02", "2026-10-02T20:00:00Z", True),    # Saturday
+    ("2026-11-26T15:00:00Z", "2026-11-25", "2026-11-25T21:00:00Z", True),    # Thanksgiving (EST)
+    ("2026-11-27T16:07:00Z", "2026-11-27", "2026-11-27T16:05:00Z", False),   # half day, inside
+    ("2026-11-27T19:00:00Z", "2026-11-27", "2026-11-27T18:00:00Z", True),    # half day, after its early close
+])
+def test_rebuild_target(now, session, tick, final):
+    s, tick_epoch, is_final = worker_mod.rebuild_target(at(now))
+    assert (s.day.isoformat(), iso(tick_epoch), is_final) == (session, tick, final)
+    assert s.open_epoch < tick_epoch <= s.close_epoch and tick_epoch % 300 == 0
+
+
+def test_a_pending_rebuild_recomputes_the_session_and_pushes_no_alert(radar_store):
+    t0, t1 = "2026-09-28T14:00:00Z", "2026-09-28T14:05:00Z"
+    run_log = RunLog()
+    seen = []
+    events = {t0: [ev("NVDA", "ENTER", t0), ev("AAPL", "ENTER", "2026-09-28T13:50:00Z")],
+              t1: [ev("AMD", "ENTER", t1)]}
+    w, clock, fake = make(radar_store, "2026-09-28T14:02:07Z", events=events, run_log=run_log,
+                          on_run=lambda a, env: seen.append(radar_store.get_scan_request()))
+    w.refresh_options = Options(clock)
+    radar_store.put_scan_request(rebuild_request("2026-09-28T14:01:50Z"))
+    run_until(w, clock, "2026-09-28T14:07:00Z")
+
+    assert fake.ids == [t0, t1]                                         # the recompute, then the schedule
+    rebuild, scheduled = fake.runs
+    assert rebuild.cmd == ["tick", "--tick-id", t0, "--rebuild"] and rebuild.rebuild and not rebuild.final
+    assert rebuild.run_id == "worker-20260928T140207Z-rebuild-140207"
+    assert rebuild.env[RUN_ID_ENV] == rebuild.run_id and rebuild.timeout == RUNTIME["tick_timeout_s"]
+    assert rebuild.loop["ticks_today"] == 0 and rebuild.loop["session"] == DAY      # counters begun, none counted
+    assert rebuild.loop["next_tick_at"] == "2026-09-28T14:05:50Z"
+    assert not scheduled.rebuild and scheduled.loop["ticks_today"] == 1 and w.ticks_today == 1
+
+    assert seen[0]["status"] == "running" and seen[0]["kind"] == "rebuild" and seen[0]["tick_id"] == t0
+    req = radar_store.get_scan_request()
+    assert req["status"] == "done" and req["kind"] == "rebuild" and req["message"] == "" and req["tick_id"] == t0
+    assert req["result"] == {"status": "ok", "members": 0, "entered": ["NVDA", "AAPL"], "exited": [],
+                             "duration_ms": 20_000}
+
+    # Recomputed entries are not news: nothing is pushed and the cursor moves past them; the next live tick
+    # pushes only its own new entry.
+    assert w.dispatch_alerts.batches == [["20260928T1405Z-AMD-ENTER-1"]]
+    assert radar_store.get_alert_cursor() == "20260928T1405Z-AMD-ENTER-1"
+    assert w.refresh_options.calls == ["2026-09-28T14:02:27Z", "2026-09-28T14:06:10Z"]
+    assert [r["meta"]["kind"] for r in run_log.rows] == ["rebuild", "tick"]
+    assert all(r["status"] == "SUCCESS" for r in run_log.rows)
+
+
+@pytest.mark.parametrize("kind, pushed", [("manual", True), ("rebuild", False)])
+def test_a_manual_scan_pushes_its_entries_but_a_rebuild_does_not(radar_store, kind, pushed):
+    t0 = "2026-09-28T14:00:00Z"
+    w, clock, fake = make(radar_store, "2026-09-28T14:02:00Z", events={t0: [ev("NVDA", "ENTER", t0)]})
+    req = rebuild_request("2026-09-28T14:01:59Z") if kind == "rebuild" else scan_request("2026-09-28T14:01:59Z")
+    radar_store.put_scan_request(req)
+    w._poll_scan_request()
+    assert fake.runs[0].rebuild is (kind == "rebuild")
+    assert w.dispatch_alerts.batches == ([["20260928T1400Z-NVDA-ENTER-1"]] if pushed else [])
+    assert radar_store.get_alert_cursor() == "20260928T1400Z-NVDA-ENTER-1"           # moved past it either way
+    assert radar_store.get_scan_request()["status"] == "done"
+
+
+@pytest.mark.parametrize("now, tick, final, live", [
+    ("2026-10-03T15:00:00Z", "2026-10-02T20:00:00Z", True, False),      # Saturday
+    ("2026-09-28T12:00:00Z", "2026-09-25T20:00:00Z", True, False),      # pre-market
+    ("2026-09-28T13:33:00Z", "2026-09-25T20:00:00Z", True, False),      # after the open, before the first slot
+    ("2026-11-26T15:00:00Z", "2026-11-25T21:00:00Z", True, False),      # holiday
+    ("2026-09-28T20:30:00Z", "2026-09-28T20:00:00Z", True, False),      # after the final tick
+    ("2026-09-28T20:00:30Z", "2026-09-28T20:00:00Z", True, True),       # before the final tick
+    ("2026-09-28T19:58:00Z", "2026-09-28T19:55:00Z", False, True),      # the last bar
+])
+def test_a_rebuild_runs_at_any_time(radar_store, now, tick, final, live):
+    w, clock, fake = make(radar_store, now)
+    w.run_id = "worker-x"
+    w.refresh_options = Options(clock)
+    radar_store.put_scan_request(rebuild_request(iso(at(now) - 10)))
+    w._poll_scan_request()
+    (run,) = fake.runs
+    assert run.tick_id == tick and run.rebuild and run.final is final
+    assert run.cmd == ["tick", "--tick-id", tick, "--rebuild"] + ["--final"] * final
+    assert run.run_id == f"worker-x-rebuild-{now[11:19].replace(':', '')}"
+    req = radar_store.get_scan_request()
+    assert req["status"] == "done" and req["tick_id"] == tick and req["started_at"] == now
+    # Session counters are begun only for a recompute of the session in progress, and nothing is counted.
+    assert w.session_date == ("2026-09-28" if live else None)
+    assert w.ticks_today == 0 and w.last_tick is None
+    assert run.loop["session"] == ("2026-09-28" if live else None)
+    assert w.refresh_options.calls == [iso(at(now) + 20)]
+
+
+def test_a_rebuild_outside_the_session_announces_no_next_tick(radar_store):
+    w, clock, fake = make(radar_store, "2026-10-03T15:00:00Z")
+    radar_store.put_scan_request(rebuild_request("2026-10-03T14:59:50Z"))
+    w._poll_scan_request()
+    assert fake.runs[0].loop["next_tick_at"] is None                   # the next job is Monday's warmup
+
+
+@pytest.mark.parametrize("status", ["error", "timeout"])
+def test_a_failed_rebuild_records_an_error_and_nothing_else(radar_store, status):
+    t0 = "2026-09-28T14:00:00Z"
+    run_log = RunLog()
+    w, clock, fake = make(radar_store, "2026-09-28T14:02:00Z", results={t0: status}, run_log=run_log,
+                          state=PREV_STATE, events={t0: [ev("NVDA", "ENTER", t0)]})
+    w.refresh_options = Options(clock)
+    radar_store.set_alert_cursor("20260928T1330Z-OLD-ENTER-1")
+    radar_store.put_scan_request(rebuild_request("2026-09-28T14:01:59Z"))
+    w._poll_scan_request()
+    req = radar_store.get_scan_request()
+    assert req["status"] == "error" and req["message"] == "boom" and req["kind"] == "rebuild"
+    assert req["result"]["status"] == status and req["finished_at"] == "2026-09-28T14:02:20Z"
+    assert w.dispatch_alerts.batches == [] and w.refresh_options.calls == []
+    assert radar_store.get_alert_cursor() == "20260928T1330Z-OLD-ENTER-1"
+    assert run_log.rows[-1]["status"] == "FAILED" and run_log.rows[-1]["meta"]["kind"] == "rebuild"
+    assert radar_store.load_state() == PREV_STATE and scan_rows(radar_store) == []   # no failure record
+    assert w.ticks_today == 0 and w.last_tick is None
+
+
+def test_a_stopped_rebuild_is_an_error(radar_store):
+    w, clock, _ = make(radar_store, "2026-09-28T14:02:00Z")
+    w.run_tick = lambda cmd, timeout_s, env, stop=None: {"status": "stopped", "message": "a stop was requested",
+                                                         "duration_ms": 10}
+    radar_store.put_scan_request(rebuild_request("2026-09-28T14:01:59Z"))
+    w._poll_scan_request()
+    req = radar_store.get_scan_request()
+    assert req["status"] == "error" and req["message"] == "a stop was requested"
+
+
+def test_a_rebuild_that_changed_nothing_is_done_with_its_message(radar_store):
+    def degraded(cmd, timeout_s, env, stop=None):
+        return {"status": "degraded", "message": "The recompute found no bars for the session; the radar is unchanged.",
+                "members": 1, "entered": [], "exited": [], "duration_ms": 900}
+
+    w, clock, _ = make(radar_store, "2026-10-03T15:00:00Z")
+    w.run_tick = degraded
+    radar_store.put_scan_request(rebuild_request("2026-10-03T14:59:59Z"))
+    w._poll_scan_request()
+    req = radar_store.get_scan_request()
+    assert req["status"] == "done" and "unchanged" in req["message"] and req["result"]["status"] == "degraded"
+
+
+def test_an_expired_rebuild_request_is_an_error_and_not_run(radar_store):
+    w, clock, fake = make(radar_store, "2026-10-03T15:00:00Z")
+    radar_store.put_scan_request(rebuild_request(iso(at("2026-10-03T15:00:00Z") - worker_mod.SCAN_REQUEST_TTL_S - 1)))
+    w._poll_scan_request()
+    req = radar_store.get_scan_request()
+    assert req["status"] == "error" and "expired" in req["message"] and fake.runs == []
+
+
+def test_a_rebuild_request_is_run_once(radar_store):
+    w, clock, fake = make(radar_store, "2026-10-03T15:00:00Z")
+    radar_store.put_scan_request(rebuild_request("2026-10-03T14:59:59Z"))
+    w._poll_scan_request()
+    w._poll_scan_request()
+    assert len(fake.runs) == 1
+
+
+def test_recomputed_entries_of_an_older_session_are_never_pushed_later(radar_store):
+    """A Sunday recompute of Friday: its entries are outside the skip window, and the next live tick's
+    dispatch must still treat them as stale, not as news."""
+    fri = "2026-10-02T20:00:00Z"
+    w, clock, _ = make(radar_store, "2026-10-04T15:00:00Z", events={fri: [ev("NVDA", "ENTER", "2026-10-02T19:30:00Z")]})
+    radar_store.put_scan_request(rebuild_request("2026-10-04T14:59:59Z"))
+    w._poll_scan_request()
+    assert w.dispatch_alerts.batches == []
+    clock.t = at("2026-10-05T13:40:10Z")
+    w._dispatch_alerts()
+    assert w.dispatch_alerts.batches == []
+
+
+def test_skip_alerts_moves_the_cursor_forward_only(radar_store):
+    w, clock, _ = make(radar_store, "2026-09-28T14:10:00Z")
+    w._skip_alerts()
+    assert radar_store.get_alert_cursor() is None                         # no events: nothing to skip
+    seed(radar_store, events=[ev("NVDA", "ENTER", "2026-09-28T14:00:00Z"), ev("AMD", "EXIT", "2026-09-28T14:05:00Z")])
+    w._skip_alerts()
+    assert radar_store.get_alert_cursor() == "20260928T1405Z-AMD-EXIT-1"
+    radar_store.set_alert_cursor("20260928T1408Z-ZZZ-ENTER-1")
+    w._skip_alerts()
+    assert radar_store.get_alert_cursor() == "20260928T1408Z-ZZZ-ENTER-1"   # never moved back
+    assert w.dispatch_alerts.batches == []
+
+
+def test_skip_alerts_never_raises(radar_store):
+    class Broken:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def recent_events(self, **kw):
+            raise RuntimeError("database is gone")
+
+    w, clock, _ = make(Broken(radar_store), "2026-09-28T14:10:00Z")
+    w._skip_alerts()
+    assert radar_store.get_alert_cursor() is None
+
+
+def test_worker_sensitivity_is_the_saved_summary_or_the_defaults(radar_store):
+    w, clock, _ = make(radar_store, "2026-09-28T14:10:00Z")
+    assert w._sensitivity() == sensitivity_summary()
+    radar_store.put_settings({"levels": LEVELS, "updated_by": "user@example.com"})
+    assert w._sensitivity() == sensitivity_summary(LEVELS)
+    radar_store.put_settings({"levels": "junk"})
+    assert w._sensitivity() == sensitivity_summary()
+
+    class NoSettings:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __getattr__(self, name):
+            if name == "get_settings":
+                raise AttributeError(name)
+            return getattr(self.inner, name)
+
+    class Broken(NoSettings):
+        def get_settings(self):
+            raise RuntimeError("database hiccup")
+
+    for store in (NoSettings(radar_store), Broken(radar_store)):
+        w.store = store
+        assert w._sensitivity() == sensitivity_summary()
+
+
+def test_the_failure_snapshot_carries_the_saved_sensitivity(radar_store):
+    radar_store.put_settings({"levels": LEVELS})
+    w, clock, _ = make(radar_store, "2026-09-28T14:34:00Z", state=PREV_STATE, results={"2026-09-28T14:35:00Z": "error"})
+    run_until(w, clock, "2026-09-28T14:39:00Z")
+    state = radar_store.load_state()
+    check_state(state)
+    assert state["status"] == "error" and state["sensitivity"] == sensitivity_summary(LEVELS)
+
+
+def test_the_failure_snapshot_keeps_the_sensitivity_the_results_were_computed_with(radar_store):
+    computed = sensitivity_summary({"thrust": 0})
+    radar_store.put_settings({"levels": LEVELS})                           # saved since; not applied yet
+    w, clock, _ = make(radar_store, "2026-09-28T14:34:00Z", state={**PREV_STATE, "sensitivity": computed},
+                       results={"2026-09-28T14:35:00Z": "timeout"})
+    run_until(w, clock, "2026-09-28T14:39:00Z")
+    assert radar_store.load_state()["sensitivity"] == computed
+
+
+def test_an_outcome_never_overwrites_a_newer_request(radar_store):
+    """A recompute queued while a scan runs survives that scan's outcome (it is not overwritten)."""
+    radar_store.put_scan_request(scan_request("2026-09-28T14:01:59Z"))
+    w, clock, fake = make(radar_store, "2026-09-28T14:02:00Z")
+    newer = {"id": "req-2", "kind": "rebuild", "status": "pending", "requested_at": "2026-09-28T14:02:01Z"}
+    w.run_tick = lambda cmd, timeout, env, stop=None: (radar_store.put_scan_request(newer),
+                                                       {"status": "ok", "members": 0, "entered": [], "exited": []})[1]
+    w._poll_scan_request()
+    assert radar_store.get_scan_request() == newer

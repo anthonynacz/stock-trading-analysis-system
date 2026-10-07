@@ -72,6 +72,7 @@ A 5-minute racing-stocks scanner, `backend/radar/`. It was ported from the daily
 - **Housekeeping:** archives tables to verified monthly gz backups on the `radar_backups` volume when lookups degrade, with 3-month retention. It runs nightly at 03:30 ET, or from `POST /api/radar/housekeeping` (admin).
 - **Alerts:** new radar entries are pushed by the worker as the `radar_entry` Discord alert.
 - **Scan now:** `POST /api/radar/scan` writes `radar_runtime.scan_request`; the worker polls it every 5 s and runs an extra tick of the latest boundary under its own scan_log run id (schedule and counters untouched).
+- **Sensitivity:** 5 dials of 7 notches (`radar.config.SENSITIVITY`; notch 3 = calibrated PARAMS exactly) saved in `radar_runtime.settings` via `PUT /api/radar/settings`; each tick applies `effective_params(levels)`. Apply queues a `kind: "rebuild"` request: `radar.tick --rebuild` replays the session from a fresh engine and replaces that session's member_ticks/events (`commit_tick(replace_session=...)`). Only notch 3 is replay-calibrated.
 - **Option metrics:** after each successful scan the worker runs `python -m radar.options` (subprocess) for members and warming-up names: Yahoo v7 option chain of the first expiry ≥ 7 DTE, stored one row per ticker in `radar_option_metrics` (pruned after 7 days). Display/filters only; the engine never reads it.
 
 ## Maintaining these files

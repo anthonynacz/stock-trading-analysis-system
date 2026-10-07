@@ -6,7 +6,7 @@ import { LoadingRow } from '../ui/feedback';
 import { SegmentedControl, type SegmentOption } from '../ui/SegmentedControl';
 import { fmtDuration, fmtEt, toMs } from './clock';
 import { EXIT_TEXT, fmtMove, fmtRadarPrice, signClass, tickerHref, type RadarFilter } from './model';
-import { EXIT_RULE_TEXT } from './exitRules';
+import { DEFAULT_EXIT_RULES, exitRuleText, type ExitRules } from './exitRules';
 import { getRadarHistory, getRadarTickerTicks } from './radarApi';
 import { DirArrow } from './DirArrow';
 
@@ -114,7 +114,7 @@ function TripPath({ trip }: { trip: RadarTrip }) {
  * per stay, with entry and exit, time held, move and the rule that removed it.
  * Loaded only when the section is opened; reads the events table, never the scanner.
  */
-export default function RadarHistory() {
+export default function RadarHistory({ rules = DEFAULT_EXIT_RULES }: { rules?: ExitRules }) {
   const [open, setOpen] = useState(false);
   const [days, setDays] = useState<DayKey>('5');
   const [dir, setDir] = useState<RadarFilter>('all');
@@ -235,7 +235,7 @@ export default function RadarHistory() {
                       key={r}
                       type="button"
                       onClick={() => setReason(reason === r ? 'all' : r)}
-                      title={EXIT_RULE_TEXT[r]}
+                      title={exitRuleText(r, rules) ?? undefined}
                       className={`px-1.5 py-0.5 rounded border text-[11px] ${reason === r ? 'border-accent-500/50 text-accent-200' : 'border-border text-text-secondary hover:text-text-primary'}`}
                     >
                       {EXIT_TEXT[r] ?? r} <span className="tabular-nums">{n}</span>
@@ -292,7 +292,7 @@ export default function RadarHistory() {
                                   <span className="text-text-primary">Dropped off {fmtDayTime(t.exited_at)}:</span>{' '}
                                   {t.exit_detail || EXIT_TEXT[t.exit_reason] || t.exit_reason}
                                 </p>
-                                {EXIT_RULE_TEXT[t.exit_reason] && <p>{EXIT_RULE_TEXT[t.exit_reason]}</p>}
+                                {exitRuleText(t.exit_reason, rules) && <p>{exitRuleText(t.exit_reason, rules)}</p>}
                               </div>
                             </td>
                           </tr>

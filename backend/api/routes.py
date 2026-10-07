@@ -3869,6 +3869,7 @@ _RADAR_EVENTS_LIMIT = 500
 _RADAR_HISTORY_LIMIT = 2000      # radar trips (exit + its entry) per history request
 _RADAR_SCAN_TTL_S = 180          # = radar.worker.SCAN_REQUEST_TTL_S: an older pending request has expired
 _RADAR_SCAN_COOLDOWN_S = 30      # between two "Scan now" requests
+_RADAR_RUNNING_MAX_S = 330       # a running request is live this long (RUNTIME.tick_timeout_s + margin)
 _RADAR_SCAN_LOG_TAIL = 50
 _RADAR_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 _RADAR_NO_DATA_MESSAGE = "The radar has not published any data yet."
@@ -4051,6 +4052,70 @@ async def radar_snapshot(
     options = await run_in_threadpool(_radar_options, store, tickers)
     return {**state, "stale": radar_is_stale(state, datetime.now(timezone.utc)),
             "options": _jsonable(options), "scan_request": scan_request}
+
+
+def _radar_saved_settings(store) -> dict | None:
+    try:
+        return store.get_settings()
+    except Exception:  # noqa: BLE001 - the calibrated defaults apply
+        logger.warning("Radar settings unreadable", exc_info=True)
+        return None
+
+
+@router.get("/radar/settings")
+async def radar_settings(
+    store=Depends(get_radar_store),
+    user: User = Depends(get_current_user),
+):
+    """The scan sensitivity: saved levels and their thresholds (`saved`), the dials with what each notch
+    sets, and who saved it when. The thresholds the current results were computed with are in the
+    snapshot's `sensitivity`."""
+    from radar.config import sensitivity_dials, sensitivity_summary
+
+    saved = await run_in_threadpool(_radar_saved_settings, store)
+    levels = saved.get("levels") if isinstance(saved, dict) else None
+    return {"saved": sensitivity_summary(levels), "dials": sensitivity_dials(),
+            "updated_at": (saved or {}).get("updated_at"), "updated_by": (saved or {}).get("updated_by")}
+
+
+@router.put("/radar/settings", status_code=202)
+async def radar_settings_apply(
+    body: dict,
+    store=Depends(get_radar_store),
+    user: User = Depends(get_current_user),
+):
+    """Save the scan sensitivity ({"levels": {dial: 0..6}}) and queue a recompute of the session with it
+    (a "rebuild" request the worker runs within seconds; GET /radar `scan_request` follows it). Missing
+    dials keep the calibrated notch. 422 on unknown dials or out-of-range levels, 409 `already_running`
+    while a scan is running (its outcome would overwrite the queued recompute). Admin only: the
+    sensitivity applies to everyone's radar."""
+    from radar.config import SENSITIVITY, SENSITIVITY_LEVELS, sensitivity_levels, sensitivity_summary
+
+    if user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Changing the radar sensitivity is admin only")
+
+    raw = body.get("levels") if isinstance(body, dict) else None
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=422, detail={"error": "invalid", "message": "Send {\"levels\": {...}}."})
+    bad = [k for k, v in raw.items() if k not in SENSITIVITY or not isinstance(v, int) or isinstance(v, bool)
+           or not 0 <= v < SENSITIVITY_LEVELS]
+    if bad:
+        raise HTTPException(status_code=422, detail={
+            "error": "invalid", "message": f"Unknown dial or level out of 0..{SENSITIVITY_LEVELS - 1}: {', '.join(bad)}"})
+    now = datetime.now(timezone.utc)
+    current = await run_in_threadpool(store.get_scan_request)
+    if isinstance(current, dict) and current.get("status") == "running" \
+            and now.timestamp() - (_radar_epoch(current.get("started_at") or current.get("requested_at")) or 0.0) \
+            <= _RADAR_RUNNING_MAX_S:
+        raise HTTPException(status_code=409, detail={
+            "error": "already_running", "message": "A scan is running. Apply again in a few seconds."})
+    levels = sensitivity_levels(raw)
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    await run_in_threadpool(store.put_settings, {"levels": levels, "updated_at": stamp, "updated_by": user.email})
+    request = {"id": now.strftime("%Y%m%dT%H%M%S.%fZ"), "kind": "rebuild", "status": "pending",
+               "requested_at": stamp, "requested_by": user.email}
+    await run_in_threadpool(store.put_scan_request, request)
+    return {"saved": sensitivity_summary(levels), "request": request}
 
 
 def _radar_scan_request(store) -> dict | None:

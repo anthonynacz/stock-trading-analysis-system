@@ -303,6 +303,14 @@ class RadarStore:
         with self.engine.connect() as conn:
             return [_event_dict(r) for r in conn.execute(stmt)]
 
+    def session_tickers(self, session_date: str) -> list[str]:
+        """Every ticker with member/heating rows or events in the session (a recompute keeps scanning them)."""
+        day = _day(session_date)
+        with self.engine.connect() as conn:
+            a = conn.execute(select(_MEMBER_TICKS.c.ticker).where(_MEMBER_TICKS.c.session_date == day).distinct())
+            b = conn.execute(select(_EVENTS.c.ticker).where(_EVENTS.c.session_date == day).distinct())
+            return sorted({r[0] for r in a} | {r[0] for r in b})
+
     def member_ticks(self, ticker: str, session_date: str) -> list[dict]:
         """One ticker's member/heating rows of a session, oldest first (the detail chart's series)."""
         stmt = (select(_MEMBER_TICKS)
@@ -321,10 +329,13 @@ class RadarStore:
     # ------------------------------------------------------------ writes (one transaction per call)
 
     def commit_tick(self, *, state: dict, engine_doc: dict, member_rows: list[dict], events: list[dict],
-                    scan_row: dict, packs: dict[str, tuple[str, str, bytes]] | None = None) -> None:
+                    scan_row: dict, packs: dict[str, tuple[str, str, bytes]] | None = None,
+                    replace_session: str | None = None) -> None:
         """Publish one tick: snapshot and engine document replaced, rows appended (a re-run of the same
         tick inserts nothing twice), packs {kind: (session_date, params_version, gz)} upserted, and the
-        live source health cleared because engine_doc now carries it."""
+        live source health cleared because engine_doc now carries it. `replace_session` (a recompute of
+        the whole session with new sensitivity): that session's member_ticks and events are deleted first,
+        in the same transaction, so the rows written are the recomputed ones only."""
         # Map everything first, so a malformed row fails before the transaction starts.
         members = [_member_values(r) for r in member_rows]
         evs = [_event_values(e) for e in events]
@@ -333,6 +344,10 @@ class RadarStore:
         now = _now()
         t0 = time.perf_counter()
         with self.engine.begin() as conn:
+            if replace_session:
+                day = _day(replace_session)
+                conn.execute(delete(_MEMBER_TICKS).where(_MEMBER_TICKS.c.session_date == day))
+                conn.execute(delete(_EVENTS).where(_EVENTS.c.session_date == day))
             self._put_state(conn, state, now)
             self._put_runtime(conn, now, engine=engine_doc, source_health_live=null())
             self._insert_new(conn, _MEMBER_TICKS, members, ("tick", "ticker"))
@@ -383,6 +398,18 @@ class RadarStore:
     def put_scan_request(self, doc: dict) -> None:
         with self.engine.begin() as conn:
             self._put_runtime(conn, _now(), scan_request=doc)
+
+    # ------------------------------------------------------------ scan sensitivity (radar page sliders)
+
+    def get_settings(self) -> dict | None:
+        """The saved sensitivity settings ({"levels": {...}, "updated_at", "updated_by"}), or None."""
+        with self.engine.connect() as conn:
+            doc = conn.execute(select(_RUNTIME.c.settings).where(_RUNTIME.c.id == SINGLETON_ID)).scalar()
+        return doc if isinstance(doc, dict) else None
+
+    def put_settings(self, doc: dict) -> None:
+        with self.engine.begin() as conn:
+            self._put_runtime(conn, _now(), settings=doc)
 
     # ------------------------------------------------------------ option metrics (radar/options.py)
 

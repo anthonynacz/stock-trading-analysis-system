@@ -921,7 +921,8 @@ class RadarRuntime(Base):
     `alert_cursor` is the last radar event id dispatched to alerts.
     `scan_request` is the latest "Scan now" request from the radar page
     (POST /api/radar/scan writes it pending, the worker runs it and records
-    the outcome).
+    the outcome). `settings` holds the scan sensitivity levels set from the
+    radar page (PUT /api/radar/settings).
     """
 
     __tablename__ = "radar_runtime"
@@ -936,6 +937,8 @@ class RadarRuntime(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # Added by migration f3a9c2d7e510 (ALTER TABLE ... ADD COLUMN), hence after updated_at.
     scan_request: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Added by migration a8d4e6f2c913: the scan sensitivity levels (radar.config.SENSITIVITY).
+    settings: Mapped[Optional[dict]] = mapped_column(JSON)
 
 
 class RadarOptionMetric(Base):

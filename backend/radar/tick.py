@@ -45,7 +45,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from . import calendar_nyse as cal
-from .config import PARAMS, REFERENCE_SYMBOLS, RUNTIME
+from .config import PARAMS, REFERENCE_SYMBOLS, RUNTIME, effective_params, sensitivity_summary
 
 if TYPE_CHECKING:
     from .types import FetchReport, Quote
@@ -265,6 +265,7 @@ class TickArgs:
     warmup: bool = False
     final: bool = False
     ignore_calendar: bool = False
+    rebuild: bool = False        # recompute the whole session from a fresh engine (new sensitivity)
 
 
 # ---------------------------------------------------------------- the tick
@@ -286,6 +287,15 @@ class Tick:
         self.ms = dict.fromkeys(MS_KEYS, 0)
         self.errors: list[str] = []
         self.engine_doc = store.load_engine_doc() or {}
+        # Scan sensitivity from the radar page (radar.config.SENSITIVITY); unreadable -> calibrated defaults.
+        levels = None
+        try:
+            settings = store.get_settings() if hasattr(store, "get_settings") else None
+            levels = settings.get("levels") if isinstance(settings, dict) else None
+        except Exception as e:  # noqa: BLE001 - the scan runs on the calibrated defaults
+            self.errors.append(f"settings unreadable: {type(e).__name__}")
+        self.params = effective_params(levels)
+        self.sensitivity = sensitivity_summary(levels)
         self.prev_state = store.load_state() or {}
         ctx = context if isinstance(context, dict) else {}
         self.loop = ctx["loop"] if isinstance(ctx.get("loop"), dict) else (self.engine_doc.get("loop") or {})
@@ -544,9 +554,15 @@ class Tick:
 
         now = int(self.clock())                       # before the bar fetch: bars are at least this fresh
         with self.timed("compute"):
-            engine = self.deps.engine(PARAMS, pack, session, state=self.engine_doc.get("engine"))
+            if self.a.rebuild:      # every slot since the open again, on the current sensitivity
+                engine = self.deps.engine(self.params, pack, session, state=None, mark_late=False)
+            else:
+                engine = self.deps.engine(self.params, pack, session, state=self.engine_doc.get("engine"))
             # A failed quote call must not widen Stage B to the whole universe (SPEC 12.3).
             stage_b = list(engine.stage_a(quotes, now, quotes_ok=qrep.status != "down"))
+            if self.a.rebuild:
+                # A recompute must also see the names that moved earlier and have calmed down since.
+                stage_b = sorted(set(stage_b) | (set(self._session_tickers(date)) & set(pack.symbols)))
         with self.timed("fetch_bars"):
             bars, brep = self._fetch("bars", fetcher.bars_5m, stage_b, range_="1d")
         with self.timed("compute"):
@@ -554,6 +570,11 @@ class Tick:
             out = engine.step(bars, now, degraded_volume=brep.source == "nasdaq")
             engine_state = engine.state_dict()
 
+        if self.a.rebuild and not out.processed_slots:
+            # Nothing to recompute from (no bars): keep the session's rows and snapshot as they are.
+            self.errors.append("rebuild: no slots processed")
+            return self._carry(session, dyn, "degraded",
+                               "The recompute found no bars for the session; the radar is unchanged.")
         status, message = self._scan_status(qrep, brep, bars)
         snap = out.snapshot
         events, rows = list(out.events), list(out.member_rows)
@@ -573,7 +594,8 @@ class Tick:
                   "quotes_err": len(qrep.failed), "bars_ok": brep.ok, "bars_err": len(brep.failed),
                   "entered": [e["ticker"] for e in events if e.get("type") == "ENTER"],
                   "exited": [e["ticker"] for e in events if e.get("type") == "EXIT"],
-                  "processed_slots": processed})
+                  "processed_slots": processed},
+            replace=self.a.rebuild)
 
     def _warmup(self, session: cal.Session) -> dict:
         date = session.day.isoformat()
@@ -595,6 +617,13 @@ class Tick:
                                       list(self.engine_doc.get("dynamic_adds") or []))
         return self._finish(session_date=None, phase=state["session"]["phase"], status="closed",
                             message=state["message"], state=state, engine_doc=engine_doc)
+
+    def _session_tickers(self, date: str) -> list[str]:
+        try:
+            return list(self.store.session_tickers(date)) if hasattr(self.store, "session_tickers") else []
+        except Exception as e:  # noqa: BLE001 - the recompute still runs on the current Stage B
+            self.errors.append(f"session tickers unreadable: {type(e).__name__}")
+            return []
 
     def _carry(self, session: cal.Session, dyn: list[str], status: str, message: str) -> dict:
         """No engine step this tick: republish the previous snapshot if it is a scan of this session, else
@@ -658,7 +687,7 @@ class Tick:
                 "market": snap.get("market") or dict(DEFAULT_MARKET), "counts": counts,
                 "members": snap.get("members") or [], "heating": snap.get("heating") or [],
                 "recent_exits": snap.get("recent_exits") or [], "sector_banners": snap.get("sector_banners") or [],
-                "health": self._health(), "disclaimer": DISCLAIMER}
+                "health": self._health(), "disclaimer": DISCLAIMER, "sensitivity": self.sensitivity}
 
     def _closed_state(self) -> dict:
         """Heartbeat outside the regular session: no members, and the latest session's exits are kept
@@ -690,7 +719,7 @@ class Tick:
 
     def _finish(self, *, session_date: str | None, phase: str, status: str, message: str, state: dict,
                 engine_doc: dict, member_rows: list[dict] | None = None, events: list[dict] | None = None,
-                scan: dict | None = None) -> dict:
+                scan: dict | None = None, replace: bool = False) -> dict:
         """Publish the scan in one transaction: snapshot, engine document, rows, scan_log row and any pack
         this tick built (the store also clears the live source health, which the engine document now holds)."""
         t_write = time.perf_counter()
@@ -715,8 +744,9 @@ class Tick:
                            ms={**self.ms, "write": int(write_ms[-1]) if write_ms else 0}, git_prev=dict(NO_GIT),
                            hot_bytes=hot, errors=self.errors, **(scan or {}))
         t_commit = time.perf_counter()
+        extra = {"replace_session": session_date} if replace and session_date else {}
         self.store.commit_tick(state=state, engine_doc=engine_doc, member_rows=rows, events=evs, scan_row=row,
-                               packs=dict(self.packs) or None)
+                               packs=dict(self.packs) or None, **extra)
         self.ms["write"] = prep_ms + int((time.perf_counter() - t_commit) * 1000)
         self.ms["total"] = int((time.perf_counter() - self.t0) * 1000)
         return {"status": status, "message": message, "members": row["members"], "entered": row["entered"],
@@ -909,6 +939,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--final", action="store_true", help="last tick of the session (close + 50 s)")
     ap.add_argument("--ignore-calendar", action="store_true", help="run the engine even when the market is closed")
     ap.add_argument("--probe", action="store_true", help="fetch-only diagnostics; writes nothing")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="recompute the whole session from the open on the current sensitivity, replacing its rows")
     a = ap.parse_args(argv)
     if not a.probe and not a.tick_id:
         ap.error("--tick-id is required")
@@ -922,7 +954,7 @@ def main(argv: list[str] | None = None) -> int:
             result = probe(real_deps(), store=_probe_store())
         else:
             deps = real_deps()
-            result = Tick(TickArgs(a.tick_id, a.warmup, a.final, a.ignore_calendar), deps, open_store(),
+            result = Tick(TickArgs(a.tick_id, a.warmup, a.final, a.ignore_calendar, a.rebuild), deps, open_store(),
                           started=started, context=read_context()).run()
     except Exception as e:  # noqa: BLE001 - a bug: report it on the result line, exit non-zero
         traceback.print_exc(file=sys.stderr)

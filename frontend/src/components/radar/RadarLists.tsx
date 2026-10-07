@@ -4,7 +4,7 @@ import type { RadarExit, RadarHeating, RadarOptionMetrics } from '../../types';
 import { fmtDuration, fmtEt, toMs } from './clock';
 import { exitText, fmtIntensity, fmtMove, fmtRadarPrice, signClass, tickerHref } from './model';
 import { DirArrow } from './DirArrow';
-import { EXIT_RULE_TEXT } from './exitRules';
+import { DEFAULT_EXIT_RULES, exitRuleText, type ExitRules } from './exitRules';
 import { OptionChip } from './OptionInfo';
 
 /** Card section with an uppercase heading, a count chip and optional tools / note. */
@@ -99,7 +99,7 @@ export function RadarHeatingList({
 }
 
 /** Recently dropped off, newest first, with the engine's plain-English reason. */
-export function RadarExitList({ items }: { items: RadarExit[] }) {
+export function RadarExitList({ items, rules = DEFAULT_EXIT_RULES }: { items: RadarExit[]; rules?: ExitRules }) {
   const sorted = [...items].sort((a, b) => (toMs(b.exited_at) ?? 0) - (toMs(a.exited_at) ?? 0));
   return (
     <ul className="divide-y divide-border">
@@ -123,8 +123,8 @@ export function RadarExitList({ items }: { items: RadarExit[] }) {
                 </span>
               </div>
               <div className="text-xs text-text-secondary leading-snug mt-0.5">{exitText(x)}</div>
-              {EXIT_RULE_TEXT[x.exit_reason] && (
-                <div className="text-[11px] text-text-secondary/70 leading-snug mt-0.5">{EXIT_RULE_TEXT[x.exit_reason]}</div>
+              {exitRuleText(x.exit_reason, rules) && (
+                <div className="text-[11px] text-text-secondary/70 leading-snug mt-0.5">{exitRuleText(x.exit_reason, rules)}</div>
               )}
             </div>
             <div className="text-xs text-text-secondary text-right whitespace-nowrap">left {fmtEt(exited)}</div>

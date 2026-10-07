@@ -2,20 +2,49 @@
 // (backend/radar/engine.py `_exit_reason`, thresholds in radar/config.py
 // PARAMS.hard_exit / PARAMS.hold). Display only: the engine decides.
 
-import type { RadarMember } from '../../types';
+import type { RadarMember, RadarSensitivity } from '../../types';
 
-/** radar-sm-1 thresholds (keep in sync with backend/radar/config.py). */
-export const EXIT_RULES = {
-  reversalZ15: 2.5, // REVERSAL: 15-min pace this many σ against the move
-  giveback: 70, // GIVEBACK: % of the move from its base given back
-  fadeZ30: 1.0, // FADE: 30-min pace under this…
-  fadeZ15: 0.0, // …and 15-min pace under this
-  dryRvol: 0.6, // DRY: volume under this multiple of normal
-  stallMin: 30, // STALL: no new high/low for this long…
-  stallZ30: 1.5, // …and 30-min pace under this
-  softFails: 2, // soft rules exit after this many weak bars in a row…
-  minDwellMin: 15, // …once the stock has been on the radar this long
-} as const;
+export interface ExitRules {
+  reversalZ15: number; // REVERSAL: 15-min pace this many σ against the move
+  giveback: number; // GIVEBACK: % of the move from its base given back
+  fadeZ30: number; // FADE: 30-min pace under this…
+  fadeZ15: number; // …and 15-min pace under this
+  dryRvol: number; // DRY: volume under this multiple of normal
+  stallMin: number; // STALL: no new high/low for this long…
+  stallZ30: number; // …and 30-min pace under this
+  softFails: number; // soft rules exit after this many weak bars in a row…
+  minDwellMin: number; // …once the stock has been on the radar this long
+}
+
+/** radar-sm-2 calibrated thresholds (backend/radar/config.py), used when the snapshot carries none. */
+export const DEFAULT_EXIT_RULES: ExitRules = {
+  reversalZ15: 2.5,
+  giveback: 70,
+  fadeZ30: 1.0,
+  fadeZ15: 0.0,
+  dryRvol: 0.6,
+  stallMin: 30,
+  stallZ30: 1.5,
+  softFails: 2,
+  minDwellMin: 15,
+};
+
+/** The exit thresholds the results were computed with (`state.sensitivity.exit`). */
+export function exitRulesFrom(s: RadarSensitivity | null | undefined): ExitRules {
+  const x = s?.exit;
+  if (!x) return DEFAULT_EXIT_RULES;
+  return {
+    reversalZ15: x.reversal_z15,
+    giveback: x.giveback_pct,
+    fadeZ30: x.fade_z30,
+    fadeZ15: x.fade_z15,
+    dryRvol: x.dry_rvol,
+    stallMin: x.stall_min,
+    stallZ30: x.stall_z30,
+    softFails: x.soft_fails,
+    minDwellMin: x.min_dwell_min,
+  };
+}
 
 export type WatchLevel = 'ok' | 'watch' | 'near';
 
@@ -61,12 +90,15 @@ const pct = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v).toFixed(1)}%`;
 
 const RANK: Record<WatchLevel, number> = { ok: 0, watch: 1, near: 2 };
 
-export function exitWatch(m: RadarMember): ExitWatch {
+export function exitWatch(m: RadarMember, EXIT_RULES: ExitRules = DEFAULT_EXIT_RULES): ExitWatch {
   const d = m.direction === 'down' ? -1 : 1;
   const z15 = num(m.z15);
   const z30 = num(m.z30);
   const pace15 = z15 === null ? null : d * z15;
   const pace30 = z30 === null ? null : d * z30;
+  // The adaptive REVERSAL rule reads the 15-minute pace in units of today's volatility (vol_ratio >= 1).
+  const vr = Math.max(1, num(m.vol_ratio) ?? 1);
+  const rev15 = pace15 === null ? null : pace15 / vr;
   const gb = num(m.giveback_pct);
   const vw = num(m.vwap_dist_pct) === null ? null : d * (m.vwap_dist_pct as number);
   const side = d > 0 ? 'above' : 'below';
@@ -75,17 +107,21 @@ export function exitWatch(m: RadarMember): ExitWatch {
     {
       key: 'reversal',
       label: 'Sharp reversal',
-      value: pace15,
-      text: pace15 === null ? '—' : `${sig(pace15)} with the move (15 min)`,
+      value: rev15,
+      text:
+        rev15 === null
+          ? '—'
+          : `${sig(rev15)} with the move (15 min)${vr > 1 ? `, in today's ${vr.toFixed(1)}× volatility` : ''}`,
       line: -EXIT_RULES.reversalZ15,
       lineText: `exits at ${sig(-EXIT_RULES.reversalZ15)}`,
       min: -4,
       max: 6,
       exitsWhen: 'below',
-      level: pace15 === null ? 'ok' : pace15 <= -1.5 ? 'near' : pace15 < 0 ? 'watch' : 'ok',
+      level: rev15 === null ? 'ok' : rev15 <= -1.5 ? 'near' : rev15 < 0 ? 'watch' : 'ok',
       hint:
-        'The last 15 minutes against the market, scaled by how much this stock normally moves. A move of 2.5σ ' +
-        'the wrong way removes the stock at once: a calm stock reaches it with a small dip, a wild one needs a big one.',
+        'The last 15 minutes against the market, scaled by how much this stock normally moves' +
+        (vr > 1 ? ` and by today's volatility (${vr.toFixed(1)}× its normal, so routine swings of a wild day do not count)` : '') +
+        '. A move past the red line the wrong way removes the stock at once.',
     },
     {
       key: 'giveback',
@@ -157,16 +193,20 @@ export function exitWatch(m: RadarMember): ExitWatch {
   return { hard, soft, softFails, level, notes };
 }
 
-/** One line per exit code: the rule that fired, for the dropped-off lists. */
-export const EXIT_RULE_TEXT: Record<string, string> = {
-  REVERSAL: 'Rule: removed at once when the last 15 minutes run 2.5σ or more against the move.',
-  GIVEBACK: 'Rule: removed at once after giving back 70% of the run.',
-  VWAP_CROSS: "Rule: removed when the price crosses back through the day's VWAP.",
-  FADE: 'Rule: two weak bars in a row (30-min pace under 1σ and the last 15 minutes against the move).',
-  DRY: 'Rule: two bars in a row with volume under 0.6× normal.',
-  STALL: 'Rule: two bars in a row with no new high/low for 30 minutes and the 30-min pace under 1.5σ.',
-  SESSION_END: 'Rule: the radar empties at the close.',
-  HALT_LONG: 'Rule: removed after a trading pause of 30 minutes or more.',
-  DATA_STALE: 'Rule: removed after three scans without fresh data.',
-  DISPLACED: 'Rule: the radar holds at most 12 stocks; a much stronger mover took the place.',
-};
+/** The rule behind an exit code, for the dropped-off lists (null for unknown codes). */
+export function exitRuleText(reason: string, r: ExitRules = DEFAULT_EXIT_RULES): string | null {
+  const bars = r.softFails === 1 ? 'one weak bar' : `${r.softFails} weak bars in a row`;
+  const text: Record<string, string> = {
+    REVERSAL: `Rule: removed at once when the last 15 minutes run ${r.reversalZ15}σ or more against the move, measured in today's volatility.`,
+    GIVEBACK: `Rule: removed at once after giving back ${r.giveback}% of the run.`,
+    VWAP_CROSS: "Rule: removed when the price crosses back through the day's VWAP.",
+    FADE: `Rule: ${bars} (30-min pace under ${r.fadeZ30}σ and the last 15 minutes against the move).`,
+    DRY: `Rule: ${bars} with volume under ${r.dryRvol}× normal.`,
+    STALL: `Rule: ${bars} with no new high/low for ${r.stallMin} minutes and the 30-min pace under ${r.stallZ30}σ.`,
+    SESSION_END: 'Rule: the radar empties at the close.',
+    HALT_LONG: 'Rule: removed after a trading pause of 30 minutes or more.',
+    DATA_STALE: 'Rule: removed after three scans without fresh data.',
+    DISPLACED: 'Rule: the radar holds at most 12 stocks; a much stronger mover took the place.',
+  };
+  return text[reason] ?? null;
+}

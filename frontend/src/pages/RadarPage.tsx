@@ -18,7 +18,9 @@ import {
 import { RADAR_SORTS, memberKey, sortMembers, type RadarFilter, type RadarSort } from '../components/radar/model';
 import { failReason, readFilters, type OptionFilters } from '../components/radar/optionFilters';
 import OptionFilterBar from '../components/radar/OptionFilterBar';
-import ScanNowButton from '../components/radar/ScanNowButton';
+import ScanNowButton, { requestActive } from '../components/radar/ScanNowButton';
+import SensitivityPanel from '../components/radar/SensitivityPanel';
+import { exitRulesFrom } from '../components/radar/exitRules';
 import RadarHistory from '../components/radar/RadarHistory';
 import { useNow } from '../components/radar/useNow';
 import RadarMemberList from '../components/radar/RadarMemberList';
@@ -75,6 +77,8 @@ export default function RadarPage() {
   }, [view]);
 
   const st = isRadarSnapshot(radar.data) ? radar.data : null;
+  const scanRequest = st ? st.scan_request : radar.data?.scan_request;
+  const rules = exitRulesFrom(st?.sensitivity);
   const notPublished = radar.data !== null && st === null;
   const loading = radar.loading && !radar.data;
   const c = radarClock(now, st);
@@ -145,11 +149,12 @@ export default function RadarPage() {
 
         <RadarStatusBar c={c} st={st} f={f} />
         <ScanNowButton
-          request={isRadarSnapshot(radar.data) ? radar.data.scan_request : radar.data?.scan_request}
+          request={scanRequest}
           canScan={c.scanning}
           closedHint={`The radar scans only while the market is open${resumes ? `; it starts again ${resumes}` : ''}.`}
           refetch={radar.refetch}
         />
+        <SensitivityPanel applied={st?.sensitivity} busy={requestActive(scanRequest, now)} onApplied={radar.refetch} />
         <RadarScanBanner c={c} st={st} f={f} error={radar.error} notPublished={notPublished} />
         {live && <RadarContextBanners st={st} />}
 
@@ -204,7 +209,7 @@ export default function RadarPage() {
           ) : members.length === 0 ? (
             <RadarEmpty>{hidden.size ? 'Every stock on the radar is hidden by the call filters.' : membersEmpty}</RadarEmpty>
           ) : (
-            <RadarMemberList members={members} tickId={st.tick_id} options={options} dimmed={dimmed} />
+            <RadarMemberList members={members} tickId={st.tick_id} options={options} dimmed={dimmed} rules={rules} />
           )}
         </RadarSection>
 
@@ -246,11 +251,11 @@ export default function RadarPage() {
           ) : exits.length === 0 ? (
             <RadarEmpty>Nothing has dropped off this session.</RadarEmpty>
           ) : (
-            <RadarExitList items={exits} />
+            <RadarExitList items={exits} rules={rules} />
           )}
         </RadarSection>
 
-        <RadarHistory />
+        <RadarHistory rules={rules} />
 
         <RadarHowItWorks />
         {st && <RadarScannerHealth st={st} />}

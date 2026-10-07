@@ -27,7 +27,8 @@ ROW_KEYS = {"v", "tick", "session", "slot", "ticker", "role", "dir", "state", "p
 MEMBER_KEYS = {"ticker", "name", "sector", "direction", "state", "late", "entered_at", "entry_price", "last_price",
                "last_bar_at", "minutes_on_radar", "move_since_entry_pct", "peak_since_entry_pct", "chg_5m_pct",
                "chg_15m_pct", "chg_30m_pct", "chg_day_pct", "rvol", "rvol_day", "vwap_dist_pct", "z15", "z30", "zday",
-               "intensity", "reasons", "soft_fails", "episode", "spark", "giveback_pct", "mins_since_extreme"}
+               "intensity", "reasons", "soft_fails", "episode", "spark", "giveback_pct", "mins_since_extreme",
+               "vol_ratio"}
 HEATING_KEYS = {"ticker", "name", "direction", "since", "price", "chg_day_pct", "intensity", "reasons"}
 EXIT_KEYS = {"ticker", "name", "direction", "entered_at", "exited_at", "minutes_on_radar", "move_since_entry_pct",
              "exit_reason", "exit_detail"}
@@ -685,3 +686,59 @@ def test_half_day_slot_map():
     assert [e["type"] for e in ev] == ["ENTER", "EXIT"] and ev[1]["reason"] == "SESSION_END" and ev[1]["slot"] == 40
     assert [o.processed_slots for o in outs] == [[k] for k in range(42)]
     assert eng.step(upto(bars, session, 41), session.close_epoch + 3600).processed_slots == []
+
+
+# ---------------------------------------------------------------- session recompute and scan sensitivity
+
+def test_a_recompute_replays_the_session_without_late_flags():
+    """Engine(mark_late=False) is the sensitivity recompute: one catch-up step over the whole session so far,
+    whose entries are the same as live but not flagged late (nothing was missed, the thresholds changed)."""
+    session, pack, bars = build({"RUN": racer()})
+    live = drive(Engine(PARAMS, pack, session), bars, session, range(29))
+    flagged = Engine(PARAMS, pack, session).step(upto(bars, session, 28), now_after(session, 28))
+    replay = Engine(PARAMS, pack, session, mark_late=False).step(upto(bars, session, 28), now_after(session, 28))
+    assert replay.processed_slots == flagged.processed_slots == list(range(29))
+    strip = lambda ev: [{k: v for k, v in e.items() if k != "late"} for e in ev]
+    assert strip(replay.events) == strip(flagged.events) == strip(events(live))
+    assert any(e["late"] for e in flagged.events)                       # the default still flags a catch-up
+    assert replay.events and not any(e["late"] for e in replay.events)
+    assert [m["ticker"] for m in replay.snapshot["members"]] == ["RUN"]
+    assert flagged.snapshot["members"][0]["late"] is True and replay.snapshot["members"][0]["late"] is False
+    assert replay.member_rows == flagged.member_rows
+
+
+def test_mark_late_defaults_to_true():
+    session, pack, _ = build({"RUN": racer()})
+    assert Engine(PARAMS, pack, session).mark_late is True
+    assert Engine(PARAMS, pack, session, mark_late=False).mark_late is False
+
+
+def test_the_calibrated_notch_runs_exactly_like_params():
+    from radar.config import effective_params
+
+    session, pack, bars = build({"RUN": racer(), "LATE": racer(start=58, up=20, step=0.003, down=0)})
+    a = drive(Engine(PARAMS, pack, session), bars, session, range(session.n_slots), stage_a=True)
+    b = drive(Engine(effective_params({}), pack, session), bars, session, range(session.n_slots), stage_a=True)
+    assert as_json(a) == as_json(b)
+
+
+def test_sensitivity_moves_entries_the_way_the_dials_say():
+    from radar.config import effective_params
+
+    session, pack, bars = build({"RUN": racer(), "LATE": racer(start=58, up=20, step=0.003, down=0)})
+
+    def enters(levels: dict) -> dict[str, int]:
+        outs = drive(Engine(effective_params(levels), pack, session), bars, session, range(session.n_slots),
+                     stage_a=True)
+        return {e["ticker"]: e["slot"] for e in events(outs) if e["type"] == "ENTER"}
+
+    calibrated = enters({})
+    assert set(calibrated) == {"RUN", "LATE"}
+    # Move strength: stricter enters later, more sensitive no later.
+    strict, loose = enters({"thrust": 0}), enters({"thrust": 6})
+    assert all(loose[t] <= calibrated[t] <= strict[t] for t in calibrated)
+    assert strict["RUN"] > calibrated["RUN"]
+    # Late-day entries: the earliest cutoff (13:30 ET, slot 47) stops the afternoon racer from entering.
+    early = enters({"cutoff": 0})
+    assert "LATE" not in early and early["RUN"] == calibrated["RUN"]
+    assert all(s <= effective_params({"cutoff": 0})["session"]["last_confirm_slot"] for s in early.values())

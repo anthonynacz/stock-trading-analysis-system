@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { DocTable, SectionHeading, StatTile } from './shared';
 
-// Mirrors backend/radar/config.py PARAMS ("radar-sm-1") and the replay evidence
+// Mirrors backend/radar/config.py PARAMS ("radar-sm-2") and the replay evidence
 // in backend/radar/docs/signal-model.md. Update both when a threshold changes.
 const RADAR = {
   scanMin: 5,
@@ -84,7 +84,11 @@ const STATES: Row[] = [
 ];
 
 const EXITS: Row[] = [
-  { name: 'Sharp reversal', meaning: 'A fast move the other way.', rule: `≤ −${X.reversalZ3}σ vs market in 15 min (immediate)` },
+  {
+    name: 'Sharp reversal',
+    meaning: "A fast move the other way, judged against today's volatility (a wild day needs a bigger pullback, up to 2× normal).",
+    rule: `≤ −${X.reversalZ3}σ vs market in 15 min, in today's volatility (immediate)`,
+  },
   {
     name: 'Gave back most of the move',
     meaning: 'Price has handed back most of the run that put it on the radar.',

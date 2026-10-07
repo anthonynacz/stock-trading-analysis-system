@@ -25,6 +25,10 @@ restarts on its own), running every day instead of one job per session:
   /api/radar/scan) every NAP_S and runs a pending request as an extra tick of the latest 5-minute boundary,
   under its own scan_log run id. It leaves the schedule and the session counters alone: the scheduled tick
   of that boundary still runs (a re-run tick is idempotent) and picks up a bar that was not final yet.
+- **Recompute (new sensitivity):** a request of kind "rebuild" (PUT /api/radar/settings) runs
+  `radar.tick --rebuild` for today's session up to the latest boundary (outside the session: the latest
+  session, through its close): a fresh engine replays every slot on the saved sensitivity and the session's
+  rows are replaced. Allowed at any time.
 - **Option metrics:** after every successful scan (scheduled or requested) `python -m radar.options` refreshes
   the option-chain metrics of the members and warming-up names (subprocess, OPTIONS.timeout_s); a failure
   is logged and never affects the radar.
@@ -53,7 +57,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, TypeVar
 
 from . import calendar_nyse as cal
-from .config import HOUSEKEEPING, OPTIONS, RUNTIME
+from .config import HOUSEKEEPING, OPTIONS, RUNTIME, sensitivity_summary
 from .tick import (
     CONTEXT_ENV,
     DEFAULT_MARKET,
@@ -138,6 +142,19 @@ def next_slot(ticks: list[Slot], now: float, last_tick: int | None) -> tuple[Slo
     slot = upcoming[0] if upcoming else remaining[-1]
     skipped = 0 if last_tick is None else sum(1 for t in remaining if t.tick_epoch < slot.tick_epoch)
     return slot, skipped
+
+
+def rebuild_target(now: float) -> tuple[cal.Session, int, bool]:
+    """(session, tick epoch, final) a sensitivity recompute runs at `now`: today's session up to the latest
+    5-minute boundary once its first slot closed (through the close: final), else the latest session
+    through its close."""
+    day = datetime.fromtimestamp(now, cal.UTC).astimezone(cal.ET).date()
+    s = cal.session_for(day)
+    if s is not None and now >= s.open_epoch + 300:
+        tick = min(int(now) // 300 * 300, s.close_epoch)
+        return s, tick, tick == s.close_epoch
+    prev = cal.previous_sessions(day, 1)[0]
+    return prev, prev.close_epoch, True
 
 
 def next_nightly(after: float) -> float:
@@ -550,6 +567,12 @@ class Worker:
         if asked is None or now - asked > SCAN_REQUEST_TTL_S:
             self._finish_request(req, "error", "The request expired before the scanner picked it up.")
             return
+        if req.get("kind") == "rebuild":
+            s, tick_epoch, final = rebuild_target(now)
+            live = s.open_epoch <= now <= s.close_epoch + RUNTIME["last_tick_after_close_s"]
+            self._run_request(req, s if live else None, now, tick_epoch, ["--rebuild"] + ["--final"] * final,
+                              "rebuild")
+            return
         s = cal.session_for(datetime.fromtimestamp(now, cal.UTC).astimezone(cal.ET).date())
         if s is None or not (s.open_epoch + 300 <= now < s.close_epoch):
             self._finish_request(req, "refused", "The market is closed: the radar scans only during regular "
@@ -557,46 +580,76 @@ class Worker:
             return
         self._manual_scan(req, s, now)
 
+    def _sensitivity(self) -> dict:
+        """The saved scan sensitivity as the tick publishes it (calibrated defaults when unreadable)."""
+        try:
+            settings = self.store.get_settings() if hasattr(self.store, "get_settings") else None
+        except Exception:  # noqa: BLE001
+            settings = None
+        return sensitivity_summary(settings.get("levels") if isinstance(settings, dict) else None)
+
+    def _put_request_if_current(self, doc: dict) -> None:
+        """Write `doc` unless a newer request (another id) was queued meanwhile: a recompute queued while
+        this one ran must not be overwritten by this one's outcome."""
+        try:
+            current = self.store.get_scan_request()
+        except Exception:  # noqa: BLE001 - write anyway: the outcome matters more than the race
+            current = None
+        if isinstance(current, dict) and current.get("id") not in (None, doc.get("id")):
+            logger.info("scan request %s superseded by %s; its outcome is not stored", doc.get("id"), current.get("id"))
+            return
+        self.store.put_scan_request(doc)
+
     def _finish_request(self, req: dict, status: str, message: str, result: dict | None = None) -> None:
         doc = {**req, "status": status, "message": message, "finished_at": iso(self.clock())}
         if result is not None:
             doc["result"] = result
         try:
-            self.store.put_scan_request(doc)
+            self._put_request_if_current(doc)
         except Exception:  # noqa: BLE001 - the page shows the request as running until it expires
             logger.warning("could not record the scan request outcome", exc_info=True)
 
     def _manual_scan(self, req: dict, s: cal.Session, now: float) -> None:
-        """One extra tick of the latest 5-minute boundary for a "Scan now" request. The tick's bookkeeping
-        (loop context) is this worker's, unchanged: the scheduled ticks and counters go on as planned."""
-        tick_epoch = min(int(now) // 300 * 300, s.close_epoch)
+        """One extra tick of the latest 5-minute boundary for a "Scan now" request."""
+        self._run_request(req, s, now, min(int(now) // 300 * 300, s.close_epoch), [], "manual")
+
+    def _run_request(self, req: dict, s: cal.Session | None, now: float, tick_epoch: int, flags: list[str],
+                     kind: str) -> None:
+        """Run a requested tick ("manual" scan or "rebuild"). The tick's bookkeeping (loop context) is this
+        worker's, unchanged: the scheduled ticks and counters go on as planned. `s` is today's session when
+        the request runs inside it (its counters are begun), else None (a rebuild of an earlier session)."""
         tick_id = iso(tick_epoch)
         req = {**req, "status": "running", "started_at": iso(now), "tick_id": tick_id}
         try:
-            self.store.put_scan_request(req)
+            self._put_request_if_current(req)
         except Exception:  # noqa: BLE001 - run it anyway; the outcome is recorded below
             logger.warning("could not mark the scan request running", exc_info=True)
-        self._begin_session(s)
+        if s is not None:
+            self._begin_session(s)
         following = self._tick_job(now)
         stamp = datetime.fromtimestamp(now, cal.UTC).strftime("%H%M%S")
-        run_id = f"{self.run_id}-manual-{stamp}"
-        cmd = [*self.tick_cmd, "--tick-id", tick_id]
+        run_id = f"{self.run_id}-{kind}-{stamp}"
+        cmd = [*self.tick_cmd, "--tick-id", tick_id, *flags]
         context = self._context(int(following.at) if following.slot and not following.slot.warmup else None)
         env = {**self.env, CONTEXT_ENV: json.dumps(context), RUN_ID_ENV: run_id}
-        row_id = self._log_start(tick_id, "manual")
-        logger.info("scan now (requested by %s): tick %s", req.get("requested_by") or "?", tick_id)
+        row_id = self._log_start(tick_id, kind)
+        logger.info("%s (requested by %s): tick %s", "scan now" if kind == "manual" else kind,
+                    req.get("requested_by") or "?", tick_id)
         res = self.run_tick(cmd, RUNTIME["tick_timeout_s"], env, stop=lambda: self.stop)
         failed = res.get("status") in ("timeout", "error", "stopped")
-        self._log_finish(row_id, tick_id, "manual", res, ok=not failed)
+        self._log_finish(row_id, tick_id, kind, res, ok=not failed)
         result = {k: res.get(k) for k in ("status", "members", "entered", "exited", "duration_ms")}
         if failed:
-            logger.info("scan now %s %s: %s", tick_id, res.get("status"), res.get("message"))
+            logger.info("%s %s %s: %s", kind, tick_id, res.get("status"), res.get("message"))
             self._finish_request(req, "error", str(res.get("message") or "The scan failed."), result)
             return
         self._note_write(res)
-        self._dispatch_alerts()
+        if kind == "rebuild":
+            self._skip_alerts()        # recomputed entries are not news: never push them
+        else:
+            self._dispatch_alerts()
         self._refresh_options()
-        logger.info("scan now %s %s, %s on radar (+%d/-%d), %s ms", tick_id, res.get("status"),
+        logger.info("%s %s %s, %s on radar (+%d/-%d), %s ms", kind, tick_id, res.get("status"),
                     res.get("members", "?"), len(res.get("entered") or []), len(res.get("exited") or []),
                     res.get("duration_ms", 0))
         ok = res.get("status") in ("ok", "closed")
@@ -684,6 +737,8 @@ class Worker:
                                  "loop_started_at": iso(self.started), "published_late": 0})
             if "source_health" in engine:
                 state["source"] = source_block(engine["source_health"])
+            if not isinstance(state.get("sensitivity"), dict):
+                state["sensitivity"] = self._sensitivity()
             published = state
         else:
             # The warmup (or a tick before any snapshot exists) leaves the snapshot as it is: the store
@@ -725,6 +780,19 @@ class Worker:
             self.store.set_alert_cursor(newer[-1]["id"])
         except Exception:  # noqa: BLE001 - alerts never stop the radar
             logger.warning("radar alerts failed; the radar goes on", exc_info=True)
+
+    def _skip_alerts(self) -> None:
+        """Move the alert cursor past every stored event without dispatching (after a session recompute)."""
+        try:
+            now = self.clock()
+            events = self.store.recent_events(since=datetime.fromtimestamp(now - ALERT_LOOKBACK_S, cal.UTC),
+                                              limit=ALERT_BATCH)
+            ids = [e["id"] for e in events if isinstance(e, dict) and isinstance(e.get("id"), str)]
+            cursor = self.store.get_alert_cursor()
+            if ids and (cursor is None or max(ids) > cursor):
+                self.store.set_alert_cursor(max(ids))
+        except Exception:  # noqa: BLE001 - alerts never stop the radar
+            logger.warning("could not move the alert cursor after the recompute", exc_info=True)
 
     # -- housekeeping
 

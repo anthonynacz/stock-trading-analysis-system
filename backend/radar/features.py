@@ -128,6 +128,16 @@ class SessionFeatures:
             a6 = max(k - 6, 0)
             path = np.abs(np.diff(C[:, a6:k + 1], axis=1)).sum(axis=1)
             out["er6"] = np.abs(C[:, k] - C[:, a6]) / (path + EPS)
+            # Today's realised volatility against the baseline: the RMS of the market-adjusted 5-minute returns
+            # since the opening bar, each in units of the expected sigma5 * m_j (1.0 = a normal day). `rv` covers
+            # the session so far, `rv12` the last hour. The adaptive reversal exit divides z3 by it.
+            if k >= 1:
+                lr = np.log(C[:, 1:k + 1] / C[:, :k])
+                res = (lr - beta[:, None] * lr[spy][None, :]) / (sig[:, None] * self.m[1:k + 1][None, :] + EPS)
+                out["rv"] = np.sqrt(np.mean(res ** 2, axis=1))
+                out["rv12"] = np.sqrt(np.mean(res[:, -12:] ** 2, axis=1))
+            else:
+                out["rv"] = out["rv12"] = np.ones(C.shape[0])
             out["rday"] = np.log(C[:, k] / self.pc)
             out["zday"] = (out["rday"] - beta * out["rday"][spy]) / (self.sigd + EPS)
         out["fresh"] = g.present[:, a3:k + 1].all(axis=1) & (V[:, a3:k + 1] > 0).all(axis=1)

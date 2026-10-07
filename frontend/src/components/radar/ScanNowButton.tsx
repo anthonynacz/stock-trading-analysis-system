@@ -8,10 +8,19 @@ const POLL_MS = 3_000;
 const SHOW_RESULT_MS = 120_000;
 const TTL_MS = 180_000; // = backend _RADAR_SCAN_TTL_S
 
-const active = (r: RadarScanRequest | null | undefined, now: number) =>
+/** A scan or recompute request is pending or running (and not expired). */
+export const requestActive = (r: RadarScanRequest | null | undefined, now: number) =>
   !!r && (r.status === 'pending' || r.status === 'running') && now - (toMs(r.requested_at) ?? 0) <= TTL_MS;
 
 function outcome(r: RadarScanRequest): { text: string; tone: string } {
+  if (r.status === 'done' && r.kind === 'rebuild') {
+    const res = r.result ?? {};
+    const secs = res.duration_ms ? ` in ${(res.duration_ms / 1000).toFixed(1)} s` : '';
+    return {
+      text: `Recomputed the session with the new sensitivity${secs}: ${res.members ?? '?'} on the radar now${r.message ? ` · ${r.message}` : ''}`,
+      tone: 'text-green-300',
+    };
+  }
   if (r.status === 'done') {
     const res = r.result ?? {};
     const inn = res.entered?.length ?? 0;
@@ -46,7 +55,7 @@ export default function ScanNowButton({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const busy = sending || active(request, now);
+  const busy = sending || requestActive(request, now);
 
   useEffect(() => {
     if (!busy) return;
@@ -78,10 +87,13 @@ export default function ScanNowButton({
 
   const finished = toMs(request?.finished_at);
   const recent = request && !busy && finished !== null && now - finished < SHOW_RESULT_MS ? outcome(request) : null;
+  const rebuild = request?.kind === 'rebuild';
   const label = sending
     ? 'Requesting…'
     : request?.status === 'running' && busy
-      ? 'Scanning…'
+      ? rebuild
+        ? 'Recomputing the session…'
+        : 'Scanning…'
       : busy
         ? 'Waiting for the scanner…'
         : 'Scan now';

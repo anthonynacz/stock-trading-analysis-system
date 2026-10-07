@@ -1,0 +1,158 @@
+{
+ "params_version": "radar-sm-2",
+ "first_session": "2026-07-31",
+ "last_session": "2026-09-25",
+ "eligible_mean": 507.4,
+ "stage_a": true,
+ "rec": {
+  "sessions": 40,
+  "entries": 204,
+  "entries_per_day": 5.1,
+  "entries_per_day_dist": {
+   "median": 4.0,
+   "p90": 10.100000000000001,
+   "max": 15,
+   "days_without_entries": 1
+  },
+  "concurrency": {
+   "median": 0.0,
+   "p95": 3.0,
+   "max": 6,
+   "cap_reached_share": 0.0
+  },
+  "market_mode_tick_share": 0.0443,
+  "stage_b_share_mean": 0.0699,
+  "prec15": 0.5441,
+  "prec30": 0.549,
+  "prec30_n": 204,
+  "prec30_wilson95": [
+   0.4805,
+   0.6158
+  ],
+  "mean_f30_bp": 8.36,
+  "prec60": 0.5147,
+  "latency_1bar": {
+   "prec15": 0.5392,
+   "prec30": 0.5147,
+   "prec60": 0.5245
+  },
+  "hold30": 0.8627,
+  "mfe_gt_mae": 0.5294,
+  "post_exit_continuation": 0.4902,
+  "dwell_bars": {
+   "median": 8.0,
+   "p25": 5.0,
+   "p75": 12.0
+  },
+  "flaps": 9,
+  "flap_rate": 0.0441,
+  "flaps_per_day": 0.225,
+  "short_episode_share": 0.0441,
+  "reentries_within_30min": 0,
+  "up_share": 0.4118,
+  "distinct_symbol_days": 180,
+  "late_entries": 0,
+  "exit_reasons": {
+   "FADE": 0.74,
+   "REVERSAL": 0.132,
+   "GIVEBACK": 0.074,
+   "VWAP_CROSS": 0.025,
+   "SESSION_END": 0.02,
+   "STALL": 0.01
+  }
+ },
+ "splits": {
+  "calibration": {
+   "sessions": 20,
+   "entries": 90,
+   "prec30": 0.5444,
+   "prec30_n": 90
+  },
+  "validation": {
+   "sessions": 20,
+   "entries": 114,
+   "prec30": 0.5526,
+   "prec30_n": 114
+  }
+ },
+ "baseline_all_ticks": {
+  "prec30": 0.4911,
+  "n": 1267438,
+  "prec30_after_z3_ge_3": 0.4846,
+  "n_z3_ge_3": 18772
+ },
+ "baseline_naive": {
+  "sessions": 40,
+  "entries": 3769,
+  "entries_per_day": 94.225,
+  "entries_per_day_dist": {
+   "median": 91.5,
+   "p90": 125.30000000000001,
+   "max": 142,
+   "days_without_entries": 0
+  },
+  "concurrency": {
+   "median": 7.0,
+   "p95": 12.0,
+   "max": 12,
+   "cap_reached_share": 0.2321
+  },
+  "market_mode_tick_share": 0.0443,
+  "stage_b_share_mean": 1.0262,
+  "prec15": 0.481,
+  "prec30": 0.4619,
+  "prec30_n": 3769,
+  "prec30_wilson95": [
+   0.4461,
+   0.4779
+  ],
+  "mean_f30_bp": -0.05,
+  "prec60": 0.472,
+  "latency_1bar": {
+   "prec15": 0.494,
+   "prec30": 0.4794,
+   "prec60": 0.4802
+  },
+  "hold30": 0.8705,
+  "mfe_gt_mae": 0.4887,
+  "post_exit_continuation": 0.4916,
+  "dwell_bars": {
+   "median": 5.0,
+   "p25": 3.0,
+   "p75": 7.0
+  },
+  "flaps": 788,
+  "flap_rate": 0.2091,
+  "flaps_per_day": 19.7,
+  "short_episode_share": 0.16,
+  "reentries_within_30min": 185,
+  "up_share": 0.5007,
+  "distinct_symbol_days": 3153,
+  "late_entries": 0,
+  "exit_reasons": {
+   "FADE": 0.644,
+   "DISPLACED": 0.254,
+   "GIVEBACK": 0.029,
+   "REVERSAL": 0.026,
+   "DRY": 0.02,
+   "VWAP_CROSS": 0.014,
+   "STALL": 0.006,
+   "SESSION_END": 0.006
+  }
+ },
+ "targets": {
+  "entries_per_day": [
+   3.0,
+   12.0
+  ],
+  "prec30_min": 0.53,
+  "flap_rate_max": 0.06
+ },
+ "meets_targets": {
+  "entries_per_day": true,
+  "prec30": true,
+  "flap_rate": true
+ },
+ "symbols": 521,
+ "runtime_s": 353.7
+}
