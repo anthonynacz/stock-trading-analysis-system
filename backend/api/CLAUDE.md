@@ -70,6 +70,11 @@ GET  /api/charts/datasets              # List available chart datasets + their m
 POST /api/charts/query                 # Run chart query — { dataset, spec } → { series, x_label, y_label, chart_type, meta }
 ```
 
+## Radar
+- `GET /api/radar`: the snapshot state plus `stale`, or `{status:'no_data', stale, message}` before the first scan.
+- `GET /api/radar/events?days=&ticker=`, `GET /api/radar/ticker/{ticker}?session=`, `GET /api/radar/health`.
+- `POST /api/radar/housekeeping?mode=dry-run|apply`: admin only; returns 202 or 409 (already running) or 503 (backup dir missing).
+
 ## Maintaining this file
 
 Update this file every time a route is added, removed, renamed, or has its method / query params / body shape changed. Keep the one-line descriptions concise — anything longer belongs in route docstrings or the relevant service file. Full rules in the root `CLAUDE.md` § Maintaining these files. Surface what you changed in your reply.

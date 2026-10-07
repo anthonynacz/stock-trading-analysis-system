@@ -10,6 +10,10 @@ PostgreSQL 16. `db/models.py` is the source of truth; Alembic owns schema migrat
 
 **SaaS / auth** (multi-tenancy): `users`, `subscriptions`, `credit_balances`, `credit_ledger`, `chart_configs`. See `backend/auth/CLAUDE.md`.
 
+**Radar** (shared, no `user_id`): `radar_snapshot`, `radar_runtime` (singletons), `radar_baselines` (last 10 days of packs), `radar_member_ticks`, `radar_events`, `radar_scan_log`, `radar_backup_manifest`, `radar_housekeeping_runs`, `radar_table_metrics`.
+- **Writers:** `radar/store.py` and `radar/housekeeping.py` only.
+- **Migration:** `d6e2a4c8b1f9`.
+
 ## Alembic Workflow
 
 Container's `entrypoint.sh` runs `alembic upgrade head` before uvicorn starts, so the DB is always at the latest revision when the app boots. Migrations live in `backend/alembic/versions/`. The baseline (`5de04647a468_baseline_schema.py`) delegates to `Base.metadata.create_all` — subsequent migrations are autogen diffs against `db/models.py`.

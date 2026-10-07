@@ -98,6 +98,15 @@ Separate universe + separate signal stack in `services/multibagger_scanner.py`, 
 
 `services/delivery.py` holds outbound delivery. **Discord webhook is the only real channel**: both the alerts worker (`alerts.py::_dispatch_alert`) and the AM digest (`digest.py::_dispatch`) send to the user's webhook when `alerts_config.channel == "discord"` AND `alerts_config.discord_webhook_url` is set (configured in Settings → Alerts). Otherwise both fall back to the structured-log email stub (no SMTP wired). `send_discord()` chunks to Discord's 2000-char limit and never raises — a failed send writes the `alert_log` row with `delivered=False, delivery_channel="discord"` so misconfigured webhooks are auditable; a failed digest send falls back to the log stub.
 
+## Momentum Radar (worker container, not a pipeline phase)
+
+`backend/radar/` (see PORT_SPEC.md):
+- **Schedule:** warmup at 09:10 ET, then ticks at every 5-minute boundary + 50 s through close + 50 s; regular session only.
+- **Ticks:** each tick runs as a subprocess with a 270 s timeout.
+- **Data:** Yahoo, falling back to Nasdaq, with a per-endpoint circuit breaker.
+- **Engine and parameters:** a deterministic state machine; `radar/config.py` PARAMS. Changing a signal parameter means bumping `params_version`, and the Knowledge RadarTab mirrors the values.
+- **Alerts:** after each tick the worker calls `services.alerts.dispatch_radar_entries()` for ENTER events past `radar_runtime.alert_cursor`. The dedup key is `radar_entry:{event_id}`, the tier is the same as news_spike, and the periodic alerts scan never sends these.
+
 ## Sector Universe
 
 8 sectors with ~10-17 stocks each (~100 total universe, stored in `universe_stocks` table). Seeded from `config.SECTORS` on first init; expandable via Universe page (manual add or discovery approval). Active watchlist is max 60 (12 per sector). Sectors: AI/Semiconductors, Fintech/Payments, Energy/Commodities, Healthcare/Biotech, Consumer/Cloud/Enterprise, Industrials/Defense, Power/Utilities/Nuclear, Communications/Media.

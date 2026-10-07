@@ -64,6 +64,14 @@ docker compose up -d --build frontend   # Frontend-only rebuild
 ### Single-replica constraint
 APScheduler runs in-process inside the backend container. Multiple backend replicas would cause duplicate pipeline runs and upsert races on shared tables (`recommendations`, `watchlist_daily_snapshot`, etc.). Keep `docker-compose.yml` at one backend instance until the scheduler moves to a dedicated worker (or an external lock, e.g. a Postgres advisory lock keyed on phase, is introduced).
 
+## Momentum Radar (separate `radar` container)
+
+A 5-minute racing-stocks scanner, `backend/radar/`. It was ported from the daily-market-analysis repo; `backend/radar/PORT_SPEC.md` is binding and `backend/radar/docs/` holds the design docs.
+- **Runs:** in its own compose service `radar` (same image, `python -m radar.worker`), not in the backend's APScheduler. Keep exactly one `radar` instance; a Postgres advisory lock (key 771234) also guards this.
+- **Writes:** only `radar_*` tables, through `radar/store.py`.
+- **Housekeeping:** archives tables to verified monthly gz backups on the `radar_backups` volume when lookups degrade, with 3-month retention. It runs nightly at 03:30 ET, or from `POST /api/radar/housekeeping` (admin).
+- **Alerts:** new radar entries are pushed by the worker as the `radar_entry` Discord alert.
+
 ## Maintaining these files
 
 Treat the CLAUDE.md files as the project's living memory. Keep them accurate and lean.

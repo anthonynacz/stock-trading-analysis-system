@@ -98,6 +98,13 @@ Documentation page at `/knowledge`. Tabs (`?tab=` keys, deep-linkable): guide, s
 
 `/settings` — left nav with seven panes: Profile, Risk Profile, Signal Weights, Industry Weights, Alerts, Custom Universe, AM Digest (`SECTIONS` in `SettingsPage.tsx`); a draft of `/api/me/preferences` is edited locally and saved via `usePreferences`. Discord delivery requires `alerts_config.channel === "discord"` — the Alerts pane sets it via the Delivery `SegmentedControl` (Discord option is Premium/Admin only) and the webhook input, which also flips `channel` to `discord` when a URL is entered (back to `email` when cleared).
 
+## Radar Page
+`/radar` (lazy `RadarPage.tsx` with `components/radar/*`):
+- **Polling:** `GET /api/radar` every 30 s while scanning, otherwise every 5 min (`useRadar`).
+- **Dashboard:** `RadarStrip` shows "On the radar now".
+- **Knowledge:** the `radar` tab.
+- **Mirrored values:** `components/radar/clock.ts` mirrors `backend/radar/calendar_nyse.py` holidays and `RUNTIME` timings, so update both together.
+
 ## Design System
 
 Dark theme. Font: Inter. Background: `#0f1117` (page), `#161b22` (cards), `#21262d` (borders). Text: `#e6edf3` (primary), `#8b949e` (secondary). Brand string comes from `BRAND` in `utils/theme.ts` — never hardcode "Vela".
