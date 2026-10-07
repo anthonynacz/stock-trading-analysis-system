@@ -124,7 +124,7 @@ export function exitWatch(m: RadarMember): ExitWatch {
       key: 'fade',
       label: 'Momentum',
       failing: fade,
-      text: pace30 === null ? '—' : `${sig(pace30)} over 30 min`,
+      text: pace30 === null ? '—' : `${sig(pace30)} with the move (30 min)`,
       hint: 'Weak when the 30-minute pace is under 1σ and the last 15 minutes went against the move.',
     },
     {
