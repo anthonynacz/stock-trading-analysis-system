@@ -946,6 +946,10 @@ export interface RadarMember {
   /** 1 for the first time on the radar today, 2+ when it came back. */
   episode: number;
   spark: RadarSpark | null;
+  /** Share of the move (from its base) given back; the GIVEBACK exit fires at 70. Display only. */
+  giveback_pct?: number | null;
+  /** Minutes since the last new high (up) / low (down); feeds the STALL check. Display only. */
+  mins_since_extreme?: number | null;
 }
 
 /** Passed the entry checks on the last bar; waits one more bar to confirm. Not a member. */
@@ -1016,10 +1020,115 @@ export interface RadarState {
   disclaimer: string;
 }
 
+/** At-the-money call of the chosen expiry (radar/options.py). Yahoo quotes, delayed. */
+export interface RadarOptionAtm {
+  strike: number;
+  bid: number | null;
+  ask: number | null;
+  mid: number | null;
+  /** Bid-ask spread in % of mid. */
+  spread_pct: number | null;
+  volume: number;
+  oi: number;
+  iv_pct: number | null;
+  /** Stock move needed by expiry to break even when buying at the ask, in %. */
+  breakeven_pct: number | null;
+  contract: string | null;
+}
+
+export type RadarOptionLiquidity = 'good' | 'fair' | 'thin' | 'none';
+
+/** Option-chain and liquidity metrics of one radar name, refreshed after each scan. */
+export interface RadarOptionMetrics {
+  as_of: string;
+  price: number | null;
+  /** Typical daily dollar volume of the stock (20-day median). */
+  adv_usd: number | null;
+  /** Realised volatility, annualised %, from daily closes. */
+  hv_pct: number | null;
+  has_options: boolean;
+  weeklies: boolean;
+  earnings_date: string | null;
+  earnings_estimate: boolean | null;
+  days_to_earnings: number | null;
+  /** First expiry at least 7 days out. */
+  expiry: string | null;
+  dte: number | null;
+  earnings_before_expiry: boolean | null;
+  atm: RadarOptionAtm | null;
+  /** Calls with strikes within ±10% of the price: open interest and volume today. */
+  ntm_call_oi: number | null;
+  ntm_call_volume: number | null;
+  call_volume: number | null;
+  put_volume: number | null;
+  put_call_volume: number | null;
+  iv_pct: number | null;
+  iv_hv: number | null;
+  /** One-standard-deviation move by expiry implied by the ATM IV, in %. */
+  expected_move_pct: number | null;
+  liquidity: RadarOptionLiquidity;
+}
+
+/** The latest "Scan now" request (POST /api/radar/scan), as the worker left it. */
+export interface RadarScanRequest {
+  id: string;
+  status: 'pending' | 'running' | 'done' | 'refused' | 'error';
+  requested_at: string;
+  requested_by?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  tick_id?: string | null;
+  message?: string | null;
+  result?: {
+    status?: string | null;
+    members?: number | null;
+    entered?: string[] | null;
+    exited?: string[] | null;
+    duration_ms?: number | null;
+  } | null;
+}
+
 /** `GET /api/radar` once the radar has written a snapshot. */
 export interface RadarSnapshot extends RadarState {
   /** Server-side check: session open and no scan for more than RUNTIME.stale_warning_min. */
   stale: boolean;
+  /** Option metrics of the members and warming-up names, by ticker (missing until fetched). */
+  options?: Record<string, RadarOptionMetrics>;
+  scan_request?: RadarScanRequest | null;
+}
+
+/** One stay on the radar that has ended (`GET /api/radar/history`). */
+export interface RadarTrip {
+  ticker: string;
+  direction: RadarDirection;
+  session: string;
+  episode: number | null;
+  entered_at: string | null;
+  entry_price: number | null;
+  entry_detail: string | null;
+  entry_intensity: number | null;
+  late: boolean;
+  exited_at: string;
+  exit_price: number | null;
+  held_min: number | null;
+  move_since_entry_pct: number | null;
+  exit_reason: RadarExitReason | string;
+  exit_detail: string | null;
+}
+
+export interface RadarHistory {
+  days: number;
+  ticker: string | null;
+  trips: RadarTrip[];
+}
+
+/** One member / heating row of `GET /api/radar/ticker/{ticker}`. */
+export interface RadarTickRow {
+  tick: string;
+  role: 'member' | 'heating';
+  state: string;
+  price: number | null;
+  move_since_entry_pct: number | null;
 }
 
 /** `GET /api/radar` before the radar has written anything (still a 200). */
@@ -1029,6 +1138,7 @@ export interface RadarNoData {
   tick_id?: undefined;
   stale?: boolean;
   message?: string;
+  scan_request?: RadarScanRequest | null;
 }
 
 export type RadarResponse = RadarSnapshot | RadarNoData;

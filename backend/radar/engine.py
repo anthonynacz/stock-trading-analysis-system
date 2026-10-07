@@ -618,6 +618,13 @@ class Engine:
                     "signals": v["signals"]})
 
     # ------------------------------------------------------------------ snapshot (state.json shapes)
+    @staticmethod
+    def _giveback_pct(m: dict, px: float) -> float:
+        """The GIVEBACK rule's measure in percent, as _exit_reason computes it (0 before any progress)."""
+        d = m["dir"]
+        move = d * (m["peak"] - m["base"])
+        return round(100.0 * d * (m["peak"] - px) / move, 1) if move > 0 else 0.0
+
     def snapshot(self) -> dict:
         st, ss = self.st, self.session
         last = st["last_slot"]
@@ -638,6 +645,10 @@ class Engine:
                 "vwap_dist_pct": v["vwap_dist"], "z15": v["z15"], "z30": v["z30"], "zday": v["zday"],
                 "intensity": round(v["intensity"]), "reasons": v["reasons"], "soft_fails": m["soft"],
                 "episode": m["episode"],
+                # Display only (the exit-watch gauges): the share of the move from its base that was given
+                # back (the GIVEBACK rule, section 6) and the minutes since the last new high/low (STALL).
+                "giveback_pct": self._giveback_pct(m, v["price"]),
+                "mins_since_extreme": 5 * (last - m["last_ext"]),
                 "spark": {"t0": iso(ss.slot_start(sp["t0_slot"]) + 300), "step_s": 300, "entry_i": sp["entry_i"],
                           "p": [round(x, 4) for x in sp["p"]]}})
         members.sort(key=lambda x: (-x["intensity"], x["ticker"]))

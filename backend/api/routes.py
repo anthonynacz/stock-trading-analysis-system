@@ -3866,6 +3866,9 @@ from db.models import RadarBackupManifest, RadarHousekeepingRun, RadarTableMetri
 _RADAR_BAR_S = 300            # one 5-minute bar: the first scan is due one bar after the open
 _RADAR_FINAL_GRACE_S = 300    # radar.html FINAL_GRACE: the final tick may land minutes after close + offset
 _RADAR_EVENTS_LIMIT = 500
+_RADAR_HISTORY_LIMIT = 2000      # radar trips (exit + its entry) per history request
+_RADAR_SCAN_TTL_S = 180          # = radar.worker.SCAN_REQUEST_TTL_S: an older pending request has expired
+_RADAR_SCAN_COOLDOWN_S = 30      # between two "Scan now" requests
 _RADAR_SCAN_LOG_TAIL = 50
 _RADAR_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 _RADAR_NO_DATA_MESSAGE = "The radar has not published any data yet."
@@ -4039,9 +4042,118 @@ async def radar_snapshot(
     two shapes apart by those keys).
     """
     state = await run_in_threadpool(store.load_state)
+    scan_request = await run_in_threadpool(_radar_scan_request, store)
     if not state:
-        return {"status": "no_data", "stale": False, "message": _RADAR_NO_DATA_MESSAGE}
-    return {**state, "stale": radar_is_stale(state, datetime.now(timezone.utc))}
+        return {"status": "no_data", "stale": False, "message": _RADAR_NO_DATA_MESSAGE,
+                "scan_request": scan_request}
+    tickers = [x.get("ticker") for x in (state.get("members") or []) + (state.get("heating") or [])
+               if isinstance(x, dict) and x.get("ticker")]
+    options = await run_in_threadpool(_radar_options, store, tickers)
+    return {**state, "stale": radar_is_stale(state, datetime.now(timezone.utc)),
+            "options": _jsonable(options), "scan_request": scan_request}
+
+
+def _radar_scan_request(store) -> dict | None:
+    """The latest "Scan now" request, None when it cannot be read (an older worker schema, a DB hiccup):
+    the snapshot must still load."""
+    try:
+        return store.get_scan_request()
+    except Exception:  # noqa: BLE001
+        logger.warning("Radar scan request unreadable", exc_info=True)
+        return None
+
+
+def _radar_options(store, tickers: list[str]) -> dict:
+    """{ticker: option metrics} of the radar names (radar/options.py); {} when unreadable."""
+    try:
+        return store.load_option_metrics(tickers)
+    except Exception:  # noqa: BLE001
+        logger.warning("Radar option metrics unreadable", exc_info=True)
+        return {}
+
+
+def _radar_scan_window(now: datetime) -> str | None:
+    """Why a "Scan now" cannot run at `now`, else None: the worker scans from open + 5 min to the close."""
+    from radar import calendar_nyse as cal
+
+    ts = now.timestamp()
+    s = cal.session_for(now.astimezone(cal.ET).date())
+    if s is None or not (s.open_epoch + 300 <= ts < s.close_epoch):
+        return ("The market is closed: the radar scans only during regular hours, from 5 minutes after "
+                "the open to the close.")
+    return None
+
+
+@router.post("/radar/scan", status_code=202)
+async def radar_scan_now(
+    store=Depends(get_radar_store),
+    user: User = Depends(get_current_user),
+):
+    """Ask the radar worker for a scan now (the latest completed 5-minute bar, fresh quotes and option
+    metrics). The worker polls for requests every few seconds and records the outcome in the request,
+    which GET /radar returns as `scan_request`. 409 `market_closed` outside the scan window, 409
+    `already_requested` while one is pending or running, 429 `cooldown` right after the last one."""
+    now = datetime.now(timezone.utc)
+    closed = _radar_scan_window(now)
+    if closed:
+        raise HTTPException(status_code=409, detail={"error": "market_closed", "message": closed})
+    current = await run_in_threadpool(store.get_scan_request)
+    if isinstance(current, dict):
+        asked = _radar_epoch(current.get("requested_at")) or 0.0
+        if current.get("status") in ("pending", "running") and now.timestamp() - asked <= _RADAR_SCAN_TTL_S:
+            raise HTTPException(status_code=409, detail={
+                "error": "already_requested", "message": "A scan is already on its way.", "request": current})
+        last = _radar_epoch(current.get("finished_at")) or asked     # the gap is between scans
+        if now.timestamp() - last < _RADAR_SCAN_COOLDOWN_S:
+            raise HTTPException(status_code=429, detail={
+                "error": "cooldown", "message": "A scan just ran. Try again in a few seconds."})
+    request = {"id": now.strftime("%Y%m%dT%H%M%S.%fZ"), "status": "pending",
+               "requested_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "requested_by": user.email}
+    await run_in_threadpool(store.put_scan_request, request)
+    return request
+
+
+def radar_trips(events: list[dict]) -> list[dict]:
+    """Pair every EXIT with its ENTER (same session, ticker and episode): one row per stay on the radar,
+    newest exit first. An exit whose entry fell outside the window keeps entry fields derived from the
+    exit (entry price from the move since entry)."""
+    enters = {(e.get("session"), e.get("ticker"), e.get("episode")): e for e in events if e.get("type") == "ENTER"}
+    trips = []
+    for x in events:
+        if x.get("type") != "EXIT":
+            continue
+        e = enters.get((x.get("session"), x.get("ticker"), x.get("episode"))) or {}
+        move, price = x.get("move_since_entry_pct"), x.get("price")
+        entry_price = e.get("price")
+        if entry_price is None and move is not None and price:
+            entry_price = round(price / (1.0 + move / 100.0), 4)
+        trips.append({
+            "ticker": x.get("ticker"), "direction": x.get("dir"), "session": x.get("session"),
+            "episode": x.get("episode"), "entered_at": e.get("ts"), "entry_price": entry_price,
+            "entry_detail": e.get("detail"), "entry_intensity": e.get("intensity"), "late": bool(e.get("late")),
+            "exited_at": x.get("ts"), "exit_price": price, "held_min": x.get("held_min"),
+            "move_since_entry_pct": move, "exit_reason": x.get("reason"), "exit_detail": x.get("detail"),
+        })
+    trips.sort(key=lambda t: _radar_epoch(t.get("exited_at")) or 0.0, reverse=True)
+    return trips
+
+
+@router.get("/radar/history")
+async def radar_history(
+    days: int = Query(30, ge=1, le=92),
+    ticker: str | None = Query(None, max_length=12),
+    store=Depends(get_radar_store),
+    user: User = Depends(get_current_user),
+):
+    """Stays on the radar that ended in the last `days` days (hot table; 3-month retention), newest
+    first: entry and exit time and price, minutes held, move, exit reason. Max 2000."""
+    sym = _radar_ticker(ticker) if ticker else None
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    events = await run_in_threadpool(
+        store.recent_events, since=since, ticker=sym, limit=2 * _RADAR_HISTORY_LIMIT, types=("ENTER", "EXIT"),
+    )
+    trips = radar_trips(_jsonable(events or []))[:_RADAR_HISTORY_LIMIT]
+    return {"days": days, "ticker": sym, "trips": trips}
 
 
 @router.get("/radar/events")

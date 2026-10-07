@@ -1083,3 +1083,266 @@ def test_worker_with_subprocess_ticks_on_a_shared_database(radar_db_url, radar_s
     assert engine["loop"]["last_tick"] == "2026-09-28T20:00:00Z" and engine["loop"]["write_ms"] == [3, 3]
     assert [len(b) for b in alerts.batches] == [1] * 3
     assert radar_store.get_alert_cursor() == "20260928T2000Z-NVDA-ENTER-2000"
+
+
+# ---------------------------------------------------------------- "Scan now" requests and option metrics
+
+def scan_request(requested_at: str | None, status: str = "pending") -> dict:
+    return {"id": "req-1", "status": status, "requested_at": requested_at, "requested_by": "user@example.com"}
+
+
+class Options:
+    """Stands in for the `python -m radar.options` subprocess; `fail` makes every call raise."""
+
+    def __init__(self, clock: Clock, fail: bool = False):
+        self.clock, self.fail = clock, fail
+        self.calls: list[str] = []
+
+    def __call__(self) -> dict:
+        self.calls.append(iso(self.clock()))
+        if self.fail:
+            raise RuntimeError("yahoo is down")
+        return {"status": "ok", "tickers": 2, "ok": 2, "failed": [], "duration_ms": 900}
+
+
+def test_a_pending_request_runs_one_extra_tick_of_the_latest_boundary(radar_store):
+    t0 = "2026-09-28T14:00:00Z"
+    run_log = RunLog()
+    seen = []
+    w, clock, fake = make(radar_store, "2026-09-28T14:02:07Z", events={t0: [ev("NVDA", "ENTER", t0)]},
+                          run_log=run_log, on_run=lambda a, env: seen.append(radar_store.get_scan_request()))
+    w.refresh_options = Options(clock)
+    radar_store.put_scan_request(scan_request("2026-09-28T14:01:50Z"))
+    run_until(w, clock, "2026-09-28T14:07:00Z")
+
+    assert fake.ids == [t0, "2026-09-28T14:05:00Z"]                     # the extra tick, then the schedule
+    manual, scheduled = fake.runs
+    assert manual.cmd == ["tick", "--tick-id", t0] and iso(manual.at) == "2026-09-28T14:02:07Z"
+    assert manual.run_id == "worker-20260928T140207Z-manual-140207"
+    assert manual.env[RUN_ID_ENV] == manual.run_id and manual.timeout == RUNTIME["tick_timeout_s"]
+    # the worker's bookkeeping, unchanged: no tick counted, the next scheduled tick announced
+    assert manual.loop["ticks_today"] == 0 and manual.loop["last_tick"] is None
+    assert manual.loop["next_tick_at"] == "2026-09-28T14:05:50Z" and manual.loop["session"] == DAY
+    assert scheduled.loop["ticks_today"] == 1 and scheduled.loop["ticks_skipped"] == 0
+    assert scheduled.run_id == w.run_id and iso(scheduled.at) == "2026-09-28T14:05:50Z"
+    assert w.ticks_today == 1 and iso(w.last_tick) == "2026-09-28T14:05:00Z"
+
+    assert seen[0]["status"] == "running" and seen[0]["tick_id"] == t0
+    assert seen[0]["started_at"] == "2026-09-28T14:02:07Z"
+    req = radar_store.get_scan_request()
+    assert req["status"] == "done" and req["message"] == "" and req["requested_by"] == "user@example.com"
+    assert req["tick_id"] == t0 and req["finished_at"] == "2026-09-28T14:02:27Z"
+    assert req["result"] == {"status": "ok", "members": 0, "entered": ["NVDA"], "exited": [], "duration_ms": 20_000}
+
+    assert w.dispatch_alerts.batches == [["20260928T1400Z-NVDA-ENTER-1"]]
+    assert w.refresh_options.calls == ["2026-09-28T14:02:27Z", "2026-09-28T14:06:10Z"]   # manual, then scheduled
+    assert [r["meta"]["kind"] for r in run_log.rows] == ["manual", "tick"]
+    assert all(r["status"] == "SUCCESS" for r in run_log.rows)
+    assert any(r["run_id"] == manual.run_id and r["tick"] == t0 for r in scan_rows(radar_store))
+
+
+def test_a_request_is_run_once(radar_store):
+    w, clock, fake = make(radar_store, "2026-09-28T14:02:00Z")
+    w.run_id = "worker-x"
+    radar_store.put_scan_request(scan_request("2026-09-28T14:01:59Z"))
+    w._poll_scan_request()
+    w._poll_scan_request()
+    assert fake.ids == ["2026-09-28T14:00:00Z"] and radar_store.get_scan_request()["status"] == "done"
+
+
+def test_a_request_at_the_last_bar_scans_a_boundary_before_the_close(radar_store):
+    w, clock, fake = make(radar_store, "2026-09-28T19:59:58Z")
+    w.run_id = "worker-x"
+    radar_store.put_scan_request(scan_request("2026-09-28T19:59:50Z"))
+    w._poll_scan_request()
+    assert fake.ids == ["2026-09-28T19:55:00Z"] and fake.runs[0].run_id == "worker-x-manual-195958"
+    assert fake.runs[0].loop["next_tick_at"] == "2026-09-28T20:00:50Z"
+
+
+@pytest.mark.parametrize("now", [
+    "2026-09-28T13:34:59Z",          # before open + 5 min
+    "2026-09-28T20:00:00Z",          # at the close
+    "2026-09-28T12:00:00Z",          # pre-market
+    "2026-09-26T15:00:00Z",          # Saturday
+    "2026-11-26T15:00:00Z",          # Thanksgiving
+])
+def test_a_request_outside_the_session_is_refused(radar_store, now):
+    w, clock, fake = make(radar_store, now)
+    w.refresh_options = Options(clock)
+    asked = iso(at(now) - 10)
+    radar_store.put_scan_request(scan_request(asked))
+    w._poll_scan_request()
+    req = radar_store.get_scan_request()
+    assert req["status"] == "refused" and "market is closed" in req["message"]
+    assert req["finished_at"] == now and req["requested_at"] == asked and "result" not in req
+    assert fake.runs == [] and w.refresh_options.calls == []
+
+
+@pytest.mark.parametrize("asked", [iso(at("2026-09-28T14:02:00Z") - worker_mod.SCAN_REQUEST_TTL_S - 1), None, "junk"])
+def test_an_expired_request_is_an_error(radar_store, asked):
+    w, clock, fake = make(radar_store, "2026-09-28T14:02:00Z")
+    radar_store.put_scan_request(scan_request(asked))
+    w._poll_scan_request()
+    out = radar_store.get_scan_request()
+    assert out["status"] == "error" and "expired" in out["message"] and fake.runs == []
+    assert out["finished_at"] == "2026-09-28T14:02:00Z"
+
+
+def test_a_request_just_inside_the_ttl_still_runs(radar_store):
+    w, clock, fake = make(radar_store, "2026-09-28T14:02:00Z")
+    radar_store.put_scan_request(scan_request(iso(at("2026-09-28T14:02:00Z") - worker_mod.SCAN_REQUEST_TTL_S)))
+    w._poll_scan_request()
+    assert fake.ids == ["2026-09-28T14:00:00Z"] and radar_store.get_scan_request()["status"] == "done"
+
+
+@pytest.mark.parametrize("status", ["running", "done", "refused", "error"])
+def test_only_pending_requests_are_run(radar_store, status):
+    w, clock, fake = make(radar_store, "2026-09-28T14:02:00Z")
+    req = scan_request("2026-09-28T14:01:59Z", status)
+    radar_store.put_scan_request(req)
+    w._poll_scan_request()
+    assert fake.runs == [] and radar_store.get_scan_request() == req
+
+
+@pytest.mark.parametrize("status", ["error", "timeout"])
+def test_a_failed_manual_tick_records_an_error(radar_store, status):
+    t0 = "2026-09-28T14:00:00Z"
+    run_log = RunLog()
+    w, clock, fake = make(radar_store, "2026-09-28T14:02:00Z", results={t0: status}, run_log=run_log,
+                          events={t0: [ev("NVDA", "ENTER", t0)]})
+    w.refresh_options = Options(clock)
+    state = radar_store.load_state()
+    radar_store.put_scan_request(scan_request("2026-09-28T14:01:59Z"))
+    w._poll_scan_request()
+    req = radar_store.get_scan_request()
+    assert req["status"] == "error" and req["message"] == "boom" and req["result"]["status"] == status
+    assert req["tick_id"] == t0 and req["finished_at"] == "2026-09-28T14:02:20Z"
+    assert w.dispatch_alerts.batches == [] and w.refresh_options.calls == []
+    assert run_log.rows[-1]["status"] == "FAILED" and run_log.rows[-1]["meta"]["kind"] == "manual"
+    assert radar_store.load_state() == state and scan_rows(radar_store) == []   # no failure record either
+    assert w.ticks_today == 0 and w.last_tick is None
+
+
+def test_a_manual_tick_with_a_degraded_status_is_done_with_its_message(radar_store):
+    def degraded(cmd, timeout_s, env, stop=None):
+        return {"status": "degraded", "message": "quotes partly missing", "members": 2, "entered": [],
+                "exited": ["AMD"], "duration_ms": 1500}
+
+    w, clock, _ = make(radar_store, "2026-09-28T14:02:00Z")
+    w.run_tick = degraded
+    radar_store.put_scan_request(scan_request("2026-09-28T14:01:59Z"))
+    w._poll_scan_request()
+    req = radar_store.get_scan_request()
+    assert req["status"] == "done" and req["message"] == "quotes partly missing"
+    assert req["result"] == {"status": "degraded", "members": 2, "entered": [], "exited": ["AMD"], "duration_ms": 1500}
+
+
+def test_a_store_without_scan_requests_is_ignored(radar_store):
+    class Old:
+        """A store from before the "Scan now" column: no get_scan_request at all."""
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __getattr__(self, name):
+            if name in ("get_scan_request", "put_scan_request"):
+                raise AttributeError(name)
+            return getattr(self.inner, name)
+
+    w, clock, fake = make(Old(radar_store), "2026-09-28T14:02:00Z")
+    w._poll_scan_request()
+    w._wait(clock() + 30)
+    assert fake.runs == [] and iso(clock()) == "2026-09-28T14:02:30Z"
+
+
+def test_an_unreadable_request_is_skipped(radar_store):
+    class Broken:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def get_scan_request(self):
+            raise RuntimeError("database is gone")
+
+    w, clock, fake = make(Broken(radar_store), "2026-09-28T14:02:00Z")
+    w._poll_scan_request()
+    assert fake.runs == []
+
+
+def test_a_request_that_cannot_be_recorded_still_runs_and_never_raises(radar_store):
+    class ReadOnly:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def put_scan_request(self, doc):
+            raise RuntimeError("read-only")
+
+    radar_store.put_scan_request(scan_request("2026-09-28T14:01:59Z"))
+    w, clock, fake = make(ReadOnly(radar_store), "2026-09-28T14:02:00Z")
+    w._poll_scan_request()
+    assert fake.ids == ["2026-09-28T14:00:00Z"]
+    assert radar_store.get_scan_request()["status"] == "pending"     # nothing could be written
+    w._poll_scan_request()                                           # still pending: not run a second time
+    assert fake.ids == ["2026-09-28T14:00:00Z"]
+
+
+def test_wait_polls_for_requests_until_its_time(radar_store):
+    w, clock, fake = make(radar_store, "2026-09-28T14:02:00Z")
+    w.run_id = "worker-x"
+    clock.hooks.append(lambda now: now == at("2026-09-28T14:02:10Z")
+                       and radar_store.put_scan_request(scan_request("2026-09-28T14:02:09Z")))
+    w._wait(at("2026-09-28T14:03:00Z"))
+    assert fake.ids == ["2026-09-28T14:00:00Z"] and iso(fake.runs[0].at) == "2026-09-28T14:02:10Z"
+    assert iso(clock()) == "2026-09-28T14:03:00Z" and max(clock.naps) <= worker_mod.NAP_S
+    w.stop = True
+    w._wait(at("2026-09-28T15:00:00Z"))                                 # a stop ends the wait at once
+    assert iso(clock()) == "2026-09-28T14:03:00Z"
+
+
+def test_option_metrics_refresh_after_each_successful_scheduled_tick_only(radar_store):
+    t1, t2 = "2026-09-28T13:35:00Z", "2026-09-28T13:40:00Z"
+    w, clock, fake = make(radar_store, "2026-09-28T13:09:00Z", results={t2: "error"})
+    w.refresh_options = Options(clock)
+    run_until(w, clock, "2026-09-28T13:47:00Z")
+    assert fake.ids == ["2026-09-28T13:10:00Z", t1, t2, "2026-09-28T13:45:00Z"]
+    # not after the warmup nor after the failed tick
+    assert w.refresh_options.calls == ["2026-09-28T13:36:10Z", "2026-09-28T13:46:10Z"]
+
+
+def test_option_metrics_failures_never_stop_the_radar(radar_store):
+    w, clock, fake = make(radar_store, "2026-09-28T13:34:00Z")
+    w.refresh_options = Options(clock, fail=True)
+    run_until(w, clock, "2026-09-28T13:47:00Z")
+    # the warmup runs at once (a start before the first tick), then every tick despite the failures
+    assert fake.ids == ["2026-09-28T13:10:00Z", "2026-09-28T13:35:00Z", "2026-09-28T13:40:00Z", "2026-09-28T13:45:00Z"]
+    assert len(w.refresh_options.calls) == 3
+    w.refresh_options = lambda: None                                    # no result at all is fine too
+    w._refresh_options()
+
+
+def test_main_wires_the_options_subprocess(monkeypatch):
+    seen = {}
+
+    class Store:
+        def close(self):
+            seen["closed"] = True
+
+    def fake_run(self):
+        seen["refresh"] = self.refresh_options
+        return 0
+
+    calls = []
+    import radar.store
+    monkeypatch.setattr(radar.store, "RadarStore", Store)
+    monkeypatch.setattr(worker_mod.Worker, "run", fake_run)
+    monkeypatch.setattr(worker_mod, "install_signal_handlers", lambda w: None)
+    monkeypatch.setattr(worker_mod, "run_tick_subprocess",
+                        lambda cmd, timeout, env, stop=lambda: False: calls.append((cmd, timeout)) or {"status": "ok"})
+    assert worker_mod.main([]) == 0 and seen["closed"]
+    assert seen["refresh"]() == {"status": "ok"}
+    assert calls == [(list(worker_mod.OPTIONS_CMD), float(worker_mod.OPTIONS["timeout_s"]))]
+    assert worker_mod.OPTIONS_CMD[1:] == ("-m", "radar.options")

@@ -28,7 +28,9 @@ from radar import store as store_mod
 from radar.store import RADAR_TABLES, RadarStore, sync_url
 
 BACKEND = Path(__file__).resolve().parents[2]
-MIGRATION = BACKEND / "alembic" / "versions" / "d6e2a4c8b1f9_radar_tables.py"
+# The radar migrations, in revision order: the tables, then the scan request column and option metrics.
+MIGRATIONS = tuple(BACKEND / "alembic" / "versions" / f for f in (
+    "d6e2a4c8b1f9_radar_tables.py", "f3a9c2d7e510_radar_scan_request_options.py"))
 
 SESSION = "2026-09-28"
 TICK = "2026-09-28T13:35:00Z"
@@ -280,6 +282,85 @@ def test_alert_cursor_survives_every_other_write(radar_store: RadarStore) -> Non
     assert radar_store.load_engine_doc() == engine_doc()
 
 
+# ---------------------------------------------------------------- "Scan now" requests
+
+REQUEST = {"id": "20260928T134012.000001Z", "status": "pending", "requested_at": "2026-09-28T13:40:12Z",
+           "requested_by": "user@example.com"}
+
+
+def test_scan_request_round_trips_and_is_none_before_the_first(radar_store: RadarStore) -> None:
+    assert radar_store.get_scan_request() is None
+    radar_store.put_scan_request(REQUEST)                          # before any runtime row exists
+    assert radar_store.get_scan_request() == REQUEST
+    done = {**REQUEST, "status": "done", "result": {"status": "ok", "members": 3}}
+    radar_store.put_scan_request(done)
+    assert radar_store.get_scan_request() == done
+    assert count(radar_store, table("radar_runtime")) == 1
+
+
+def test_scan_request_never_clobbers_the_cursor_or_the_engine_doc(radar_store: RadarStore) -> None:
+    commit(radar_store)
+    radar_store.set_alert_cursor("20260928T1335Z-NVDA-ENTER-1")
+    radar_store.write_live_health({"status": "degraded"})
+    radar_store.put_scan_request(REQUEST)
+    assert radar_store.load_engine_doc() == engine_doc()
+    assert radar_store.get_alert_cursor() == "20260928T1335Z-NVDA-ENTER-1"
+    assert radar_store.load_live_health() == {"status": "degraded"}
+    # ... and the other writes keep the request
+    commit(radar_store, tick=NEXT_TICK)
+    radar_store.set_alert_cursor("20260928T1340Z-TSLA-ENTER-1")
+    radar_store.write_live_health({"status": "ok"})
+    radar_store.write_failure(state=state_doc(), engine_doc=engine_doc(failures=2), scan_row=scan_row(NEXT_TICK, "w"))
+    assert radar_store.get_scan_request() == REQUEST
+    assert radar_store.load_engine_doc() == engine_doc(failures=2)
+
+
+def test_a_non_dict_scan_request_reads_as_none(radar_store: RadarStore) -> None:
+    radar_store.put_scan_request(["not", "a", "request"])         # type: ignore[arg-type]
+    assert radar_store.get_scan_request() is None
+
+
+# ---------------------------------------------------------------- option metrics
+
+def test_option_metrics_round_trip_and_ticker_filter(radar_store: RadarStore) -> None:
+    now = datetime.now(timezone.utc)
+    assert radar_store.load_option_metrics() == {} and radar_store.load_option_metrics(["NVDA"]) == {}
+    docs = {"NVDA": {"liquidity": "good", "atm": {"strike": 180.0}}, "AMD": {"liquidity": "thin"}}
+    radar_store.put_option_metrics(docs, now)
+    assert radar_store.load_option_metrics() == docs
+    assert radar_store.load_option_metrics(["AMD", "TSLA"]) == {"AMD": {"liquidity": "thin"}}
+    assert radar_store.load_option_metrics([]) == {}
+    radar_store.put_option_metrics({"AMD": {"liquidity": "fair"}}, now)            # upsert, one row per ticker
+    assert radar_store.load_option_metrics(["AMD"]) == {"AMD": {"liquidity": "fair"}}
+    assert count(radar_store, table("radar_option_metrics")) == 2
+
+
+def test_option_metrics_older_than_keep_days_are_pruned_on_write(radar_store: RadarStore) -> None:
+    now = datetime.now(timezone.utc)
+    radar_store.put_option_metrics({"OLD": {"v": 1}}, now - timedelta(days=5))
+    radar_store.put_option_metrics({"NEW": {"v": 1}}, now, keep_days=4)
+    assert set(radar_store.load_option_metrics()) == {"NEW"}
+
+
+def test_option_metrics_render_an_upsert_on_postgres(radar_store: RadarStore) -> None:
+    radar_store._insert = postgresql.insert
+    rec = _Recorder()
+
+    class _Begin:
+        def __enter__(self) -> "_Recorder":
+            return rec
+
+        def __exit__(self, *exc: Any) -> None:
+            return None
+
+    radar_store.engine = SimpleNamespace(begin=_Begin, dispose=lambda: None)    # type: ignore[assignment]
+    radar_store.put_option_metrics({"NVDA": {"a": 1}}, datetime.now(timezone.utc))
+    upsert, prune = rec.sql
+    assert ("ON CONFLICT (ticker) DO UPDATE SET as_of = excluded.as_of, metrics = excluded.metrics, "
+            "updated_at = excluded.updated_at") in upsert
+    assert prune.startswith("DELETE FROM radar_option_metrics WHERE radar_option_metrics.as_of <")
+
+
 # ---------------------------------------------------------------- baseline packs
 
 def test_packs_upsert_per_session_and_kind(radar_store: RadarStore) -> None:
@@ -330,6 +411,16 @@ def test_recent_events_filters_and_orders_newest_first(radar_store: RadarStore) 
     assert len(radar_store.recent_events(since=datetime(2026, 9, 28, 13, 40))) == 2
     et = timezone(timedelta(hours=-4))
     assert len(radar_store.recent_events(since=datetime(2026, 9, 28, 9, 45, tzinfo=et))) == 1
+
+
+def test_recent_events_filters_by_type(radar_store: RadarStore) -> None:
+    commit(radar_store, events=[event("NVDA"), event("AMD", kind="NOTE")])
+    commit(radar_store, tick=NEXT_TICK, events=[event("NVDA", ts=NEXT_TICK, kind="EXIT")])
+    assert [e["type"] for e in radar_store.recent_events()] == ["EXIT", "ENTER", "NOTE"]
+    assert [e["type"] for e in radar_store.recent_events(types=("ENTER", "EXIT"))] == ["EXIT", "ENTER"]
+    assert [e["ticker"] for e in radar_store.recent_events(types=("EXIT",))] == ["NVDA"]
+    assert [e["type"] for e in radar_store.recent_events(types=("ENTER",), ticker="nvda")] == ["ENTER"]
+    assert len(radar_store.recent_events(types=())) == 3                    # empty means no type filter
 
 
 def test_member_ticks_are_one_ticker_and_session_oldest_first(radar_store: RadarStore) -> None:
@@ -526,16 +617,19 @@ def test_postgres_statements_render_with_on_conflict(radar_store: RadarStore) ->
 # models and passed through Alembic's own comparison; and the offline (`--sql`) rendering for Postgres.
 
 RADAR_REVISION, PRIOR_REVISION = "d6e2a4c8b1f9", "a1f7d4e92c60"
+OPTIONS_REVISION = "f3a9c2d7e510"
 
 
-def _migration_sql(*, raw: bool = False) -> list[str]:
-    """The statements upgrade() executes, whitespace-collapsed (raw=True: as written)."""
-    spec = importlib.util.spec_from_file_location("radar_tables_migration", MIGRATION)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+def _migration_sql(*, raw: bool = False, migrations: tuple[Path, ...] = MIGRATIONS) -> list[str]:
+    """The statements the radar migrations' upgrade() execute, in order, whitespace-collapsed (raw=True: as
+    written)."""
     executed: list[str] = []
-    mod.op = SimpleNamespace(execute=lambda sql: executed.append(sql if raw else " ".join(sql.split())))
-    mod.upgrade()
+    for i, path in enumerate(migrations):
+        spec = importlib.util.spec_from_file_location(f"radar_migration_{i}", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.op = SimpleNamespace(execute=lambda sql: executed.append(sql if raw else " ".join(sql.split())))
+        mod.upgrade()
     return executed
 
 
@@ -600,6 +694,13 @@ def test_migration_creates_exactly_the_models_schema() -> None:
                                          "default": default.group(1).lower() if default else None}
             created[tname] = cols
             continue
+        m = re.match(r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) (.*)$", s)
+        if m:
+            rest = m.group(3)
+            assert not re.search(r"(UNIQUE|REFERENCES|DEFAULT)", rest), s
+            created[m.group(1)][m.group(2)] = {"type": PG_TYPE.get(rest.split()[0], rest.split()[0]),
+                                               "nullable": "NOT NULL" not in rest, "default": None}
+            continue
         m = re.match(r"CREATE (UNIQUE )?INDEX IF NOT EXISTS (\w+) ON (\w+) \(([^)]*)\)$", s)
         assert m, s
         indexes.setdefault(m.group(3), {})[m.group(2)] = (tuple(c.strip() for c in m.group(4).split(",")),
@@ -638,6 +739,11 @@ def migrated_sqlite(tmp_path: Path) -> Iterator[Engine]:
     for _ in range(2):
         with engine.begin() as conn:
             for s in statements:
+                add = re.match(r"\s*ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+)", s)
+                if add:   # SQLite has no ADD COLUMN IF NOT EXISTS: check first, as Postgres does
+                    if add.group(2) in {c["name"] for c in inspect(conn).get_columns(add.group(1))}:
+                        continue
+                    s = s.replace("ADD COLUMN IF NOT EXISTS", "ADD COLUMN")
                 conn.execute(text(s))
     try:
         yield engine
@@ -741,7 +847,7 @@ def test_migration_renders_offline_for_postgres(monkeypatch: pytest.MonkeyPatch)
     rendered = [" ".join(s.split()) for s in "\n".join(lines).split(";")]
     rendered = [s for s in rendered if s]
     assert rendered[0] == "BEGIN" and rendered[-1] == "COMMIT"
-    assert rendered[1:-2] == _migration_sql()
+    assert rendered[1:-2] == _migration_sql(migrations=MIGRATIONS[:1])
     assert rendered[-2] == (f"UPDATE alembic_version SET version_num='{RADAR_REVISION}' "
                             f"WHERE alembic_version.version_num = '{PRIOR_REVISION}'")
     assert f"-- Running upgrade {PRIOR_REVISION} -> {RADAR_REVISION}" in sql
@@ -757,4 +863,5 @@ def test_migration_is_the_single_head_after_recommendation_outcomes() -> None:
     scripts = ScriptDirectory.from_config(cfg)
     rev = scripts.get_revision(RADAR_REVISION)
     assert rev.down_revision == PRIOR_REVISION
-    assert len(scripts.get_heads()) == 1
+    assert scripts.get_revision(OPTIONS_REVISION).down_revision == RADAR_REVISION
+    assert scripts.get_heads() == [OPTIONS_REVISION]

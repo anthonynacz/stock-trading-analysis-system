@@ -27,7 +27,7 @@ ROW_KEYS = {"v", "tick", "session", "slot", "ticker", "role", "dir", "state", "p
 MEMBER_KEYS = {"ticker", "name", "sector", "direction", "state", "late", "entered_at", "entry_price", "last_price",
                "last_bar_at", "minutes_on_radar", "move_since_entry_pct", "peak_since_entry_pct", "chg_5m_pct",
                "chg_15m_pct", "chg_30m_pct", "chg_day_pct", "rvol", "rvol_day", "vwap_dist_pct", "z15", "z30", "zday",
-               "intensity", "reasons", "soft_fails", "episode", "spark"}
+               "intensity", "reasons", "soft_fails", "episode", "spark", "giveback_pct", "mins_since_extreme"}
 HEATING_KEYS = {"ticker", "name", "direction", "since", "price", "chg_day_pct", "intensity", "reasons"}
 EXIT_KEYS = {"ticker", "name", "direction", "entered_at", "exited_at", "minutes_on_radar", "move_since_entry_pct",
              "exit_reason", "exit_detail"}
@@ -192,6 +192,50 @@ def test_snapshot_shapes(run_day):
     assert [x["ticker"] for x in exits] == ["LATE", "RUN"]
     assert all(set(x) == EXIT_KEYS and x["exit_reason"] in EXIT_REASONS for x in exits)
     json.dumps(outs[-1].snapshot, allow_nan=False)
+
+
+@pytest.mark.parametrize("d, peak, base, px, expected", [
+    (1, 110.0, 100.0, 103.0, 70.0), (1, 110.0, 100.0, 110.0, 0.0), (1, 110.0, 100.0, 95.0, 150.0),
+    (-1, 90.0, 100.0, 97.0, 70.0), (-1, 90.0, 100.0, 91.0, 10.0),
+    (1, 100.0, 100.0, 99.0, 0.0),                       # no progress yet
+])
+def test_giveback_pct_is_the_giveback_rules_measure(run_day, d, peak, base, px, expected):
+    """The display gauge and the GIVEBACK exit read the same number: at or above hard_exit.giveback the rule
+    fires, just below it does not."""
+    engine = run_day[4]
+    m = {"dir": d, "peak": peak, "base": base, "stale": 0, "dwell": 5, "soft": 0, "last_ext": 30}
+    assert Engine._giveback_pct(m, px) == pytest.approx(expected)
+    f = {"z3": np.array([0.0]), "z6": np.array([2.0 * d]), "dvwap": np.array([0.01 * d]), "rvol3": np.array([1.0])}
+    reason, info = engine._exit_reason(dict(m), 0, 30, px, f, False)
+    limit = 100.0 * PARAMS["hard_exit"]["giveback"]
+    if expected >= limit:
+        assert reason == "GIVEBACK" and info["gb"] == pytest.approx(expected)
+    else:
+        assert reason is None
+    # a hair under the limit: no exit, and the gauge shows just under 70
+    nearly = peak - d * (limit / 100.0 - 0.002) * abs(peak - base)
+    if peak != base:
+        assert engine._exit_reason(dict(m), 0, 30, nearly, f, False)[0] is None
+        assert Engine._giveback_pct(m, nearly) < limit
+
+
+def test_snapshot_exit_gauges_follow_the_member_state():
+    """Every member on every snapshot: giveback_pct is the GIVEBACK rule's measure on its state (so below the
+    exit limit, or it would have left) and mins_since_extreme the STALL clock."""
+    session, pack, bars = build({"RUN": racer(), "SLOW": racer(start=30, up=16, step=0.003, down=0)})
+    engine = Engine(PARAMS, pack, session)
+    limit = 100.0 * PARAMS["hard_exit"]["giveback"]
+    seen = []
+    for k in range(session.n_slots):
+        out = drive(engine, bars, session, [k], stage_a=True)[0]
+        for mem in out.snapshot["members"]:
+            m = engine.st["members"][mem["ticker"]]
+            assert mem["giveback_pct"] == Engine._giveback_pct(m, m["view"]["price"])
+            assert 0.0 <= mem["giveback_pct"] < limit
+            assert mem["mins_since_extreme"] == 5 * (engine.st["last_slot"] - m["last_ext"]) >= 0
+            assert mem["mins_since_extreme"] % 5 == 0
+            seen.append(mem)
+    assert seen and any(x["giveback_pct"] > 0 for x in seen) and any(x["mins_since_extreme"] > 0 for x in seen)
 
 
 def test_session_end_clears_the_radar(run_day):

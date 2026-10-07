@@ -21,6 +21,13 @@ restarts on its own), running every day instead of one job per session:
 - **Housekeeping:** radar.housekeeping runs nightly at HOUSEKEEPING.schedule_et ET every day, and when a
   tick asks for it (hk_request), at most every 6 h. It records its own radar_housekeeping_runs and
   pipeline_run_log rows.
+- **Scan now:** while it waits for the next job it polls radar_runtime.scan_request (written by POST
+  /api/radar/scan) every NAP_S and runs a pending request as an extra tick of the latest 5-minute boundary,
+  under its own scan_log run id. It leaves the schedule and the session counters alone: the scheduled tick
+  of that boundary still runs (a re-run tick is idempotent) and picks up a bar that was not final yet.
+- **Option metrics:** after every successful scan (scheduled or requested) `python -m radar.options` refreshes
+  the option-chain metrics of the members and warming-up names (subprocess, OPTIONS.timeout_s); a failure
+  is logged and never affects the radar.
 - **Signals:** SIGTERM / SIGINT stop it within about 5 s and terminate a running tick (terminate, then
   kill after 3 s).
 - **Logging:** stdout, plus a pipeline_run_log row per tick (phase radar_tick) for the /schedule page.
@@ -46,7 +53,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, TypeVar
 
 from . import calendar_nyse as cal
-from .config import HOUSEKEEPING, RUNTIME
+from .config import HOUSEKEEPING, OPTIONS, RUNTIME
 from .tick import (
     CONTEXT_ENV,
     DEFAULT_MARKET,
@@ -85,6 +92,8 @@ ALERT_TIMEOUT_S = 60.0
 RUN_LOG_TIMEOUT_S = 10.0
 BREAKER_TRIP = 3             # = fetch.BREAKER_TRIP (importing fetch would load numpy and curl_cffi into the worker)
 TICK_CMD = (sys.executable, "-m", "radar.tick")
+OPTIONS_CMD = (sys.executable, "-m", "radar.options")
+SCAN_REQUEST_TTL_S = 180     # a pending "Scan now" request older than this is dropped as expired
 
 
 # ---------------------------------------------------------------- the plan (ported from radar.loop)
@@ -308,12 +317,15 @@ class Worker:
                  dispatch_alerts: Callable[[list[dict]], int] = dispatch_alerts,
                  housekeeping: Callable[[str], Any] | None = None,
                  run_log: Any = None, env: Mapping[str, str] = os.environ,
-                 tick_cmd: tuple[str, ...] = TICK_CMD):
+                 tick_cmd: tuple[str, ...] = TICK_CMD,
+                 refresh_options: Callable[[], dict] | None = None):
         self.store, self.clock, self.sleep, self.run_tick = store, clock, sleep, run_tick
         self.dispatch_alerts = dispatch_alerts
         self.housekeeping = housekeeping or self._run_housekeeping
         self.run_log = run_log if run_log is not None else PipelineRunLog()
         self.env, self.tick_cmd = env, tick_cmd
+        self.refresh_options = refresh_options     # None: no option metrics (tests); main() sets the subprocess
+        self.handled_request: str | None = None    # id of the last "Scan now" request handled (runs at most once)
         self.stop = False
         self.started = 0.0
         self.run_id = ""
@@ -350,7 +362,7 @@ class Worker:
         self.nightly_at = next_nightly(self.started - NIGHTLY_GRACE_S)
         while not self.stop:
             job = self._next_job(self.clock())
-            self.sleep_until(job.at)
+            self._wait(job.at)
             if self.stop:
                 break
             if job.slot is None:
@@ -503,8 +515,104 @@ class Worker:
                     f" · {res.get('message')}" if res.get("status") not in ("ok", "closed") else "")
         if not failed and not slot.warmup:
             self._dispatch_alerts()
+            self._refresh_options()
         if res.get("hk_request"):
             self._on_hk_request(str(res["hk_request"]))
+
+    # -- "Scan now" requests and option metrics
+
+    def _wait(self, t: float) -> None:
+        """sleep_until(t), running "Scan now" requests that arrive meanwhile."""
+        while not self.stop:
+            self._poll_scan_request()
+            left = t - self.clock()
+            if left <= 0:
+                return
+            self.sleep(min(left, NAP_S))
+
+    def _poll_scan_request(self) -> None:
+        getter = getattr(self.store, "get_scan_request", None)
+        if getter is None:
+            return
+        try:
+            req = getter()
+        except Exception as e:  # noqa: BLE001 - no request is the safe reading; polled again in NAP_S
+            logger.debug("scan request unreadable: %s: %s", type(e).__name__, e)
+            return
+        if not isinstance(req, dict) or req.get("status") != "pending":
+            return
+        # Handled once, even when its outcome could not be stored (it would otherwise re-run every poll).
+        if req.get("id") is not None and req.get("id") == self.handled_request:
+            return
+        self.handled_request = req.get("id")
+        now = self.clock()
+        asked = _epoch(req.get("requested_at"))
+        if asked is None or now - asked > SCAN_REQUEST_TTL_S:
+            self._finish_request(req, "error", "The request expired before the scanner picked it up.")
+            return
+        s = cal.session_for(datetime.fromtimestamp(now, cal.UTC).astimezone(cal.ET).date())
+        if s is None or not (s.open_epoch + 300 <= now < s.close_epoch):
+            self._finish_request(req, "refused", "The market is closed: the radar scans only during regular "
+                                                 "hours, from 5 minutes after the open to the close.")
+            return
+        self._manual_scan(req, s, now)
+
+    def _finish_request(self, req: dict, status: str, message: str, result: dict | None = None) -> None:
+        doc = {**req, "status": status, "message": message, "finished_at": iso(self.clock())}
+        if result is not None:
+            doc["result"] = result
+        try:
+            self.store.put_scan_request(doc)
+        except Exception:  # noqa: BLE001 - the page shows the request as running until it expires
+            logger.warning("could not record the scan request outcome", exc_info=True)
+
+    def _manual_scan(self, req: dict, s: cal.Session, now: float) -> None:
+        """One extra tick of the latest 5-minute boundary for a "Scan now" request. The tick's bookkeeping
+        (loop context) is this worker's, unchanged: the scheduled ticks and counters go on as planned."""
+        tick_epoch = min(int(now) // 300 * 300, s.close_epoch)
+        tick_id = iso(tick_epoch)
+        req = {**req, "status": "running", "started_at": iso(now), "tick_id": tick_id}
+        try:
+            self.store.put_scan_request(req)
+        except Exception:  # noqa: BLE001 - run it anyway; the outcome is recorded below
+            logger.warning("could not mark the scan request running", exc_info=True)
+        self._begin_session(s)
+        following = self._tick_job(now)
+        stamp = datetime.fromtimestamp(now, cal.UTC).strftime("%H%M%S")
+        run_id = f"{self.run_id}-manual-{stamp}"
+        cmd = [*self.tick_cmd, "--tick-id", tick_id]
+        context = self._context(int(following.at) if following.slot and not following.slot.warmup else None)
+        env = {**self.env, CONTEXT_ENV: json.dumps(context), RUN_ID_ENV: run_id}
+        row_id = self._log_start(tick_id, "manual")
+        logger.info("scan now (requested by %s): tick %s", req.get("requested_by") or "?", tick_id)
+        res = self.run_tick(cmd, RUNTIME["tick_timeout_s"], env, stop=lambda: self.stop)
+        failed = res.get("status") in ("timeout", "error", "stopped")
+        self._log_finish(row_id, tick_id, "manual", res, ok=not failed)
+        result = {k: res.get(k) for k in ("status", "members", "entered", "exited", "duration_ms")}
+        if failed:
+            logger.info("scan now %s %s: %s", tick_id, res.get("status"), res.get("message"))
+            self._finish_request(req, "error", str(res.get("message") or "The scan failed."), result)
+            return
+        self._note_write(res)
+        self._dispatch_alerts()
+        self._refresh_options()
+        logger.info("scan now %s %s, %s on radar (+%d/-%d), %s ms", tick_id, res.get("status"),
+                    res.get("members", "?"), len(res.get("entered") or []), len(res.get("exited") or []),
+                    res.get("duration_ms", 0))
+        ok = res.get("status") in ("ok", "closed")
+        self._finish_request(req, "done", "" if ok else str(res.get("message") or ""), result)
+
+    def _refresh_options(self) -> None:
+        if self.refresh_options is None:
+            return
+        try:
+            res = self.refresh_options() or {}
+            failed = res.get("failed") or []
+            logger.info("option metrics %s: %s/%s tickers in %s ms%s", res.get("status"), res.get("ok", "?"),
+                        res.get("tickers", "?"), res.get("duration_ms", "?"),
+                        (" (failed: " + ", ".join(failed) + ")") if failed else "")
+        except Exception:  # noqa: BLE001 - option metrics never stop the radar
+            logger.warning("option metrics refresh failed", exc_info=True)
 
     def _note_write(self, res: dict) -> None:
         ms = res.get("ms")
@@ -684,7 +792,8 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     from .store import RadarStore
     store = RadarStore()
-    worker = Worker(store)
+    worker = Worker(store, refresh_options=lambda: run_tick_subprocess(
+        list(OPTIONS_CMD), float(OPTIONS["timeout_s"]), dict(os.environ)))
     install_signal_handlers(worker)
     try:
         return worker.run()

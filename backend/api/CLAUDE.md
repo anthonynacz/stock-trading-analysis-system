@@ -72,6 +72,9 @@ POST /api/charts/query                 # Run chart query â€” { dataset, spec } â
 
 ## Radar
 - `GET /api/radar`: the snapshot state plus `stale`, or `{status:'no_data', stale, message}` before the first scan.
+- `GET /api/radar` also carries `options` (metrics by ticker for members + heating) and `scan_request`.
+- `POST /api/radar/scan`: any user; 202 pending request, 409 `market_closed` / `already_requested`, 429 `cooldown` (30 s).
+- `GET /api/radar/history?days=&ticker=`: ended stays (EXIT paired with its ENTER by session, ticker, episode), newest first, max 2000.
 - `GET /api/radar/events?days=&ticker=`, `GET /api/radar/ticker/{ticker}?session=`, `GET /api/radar/health`.
 - `POST /api/radar/housekeeping?mode=dry-run|apply`: admin only; returns 202 or 409 (already running) or 503 (backup dir missing).
 

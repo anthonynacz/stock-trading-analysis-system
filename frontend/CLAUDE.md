@@ -103,6 +103,7 @@ Documentation page at `/knowledge`. Tabs (`?tab=` keys, deep-linkable): guide, s
 - **Polling:** `GET /api/radar` every 30 s while scanning, otherwise every 5 min (`useRadar`).
 - **Dashboard:** `RadarStrip` shows "On the radar now".
 - **Knowledge:** the `radar` tab.
+- **Page tools:** `ScanNowButton` (POST /api/radar/scan, polls every 3 s while pending), `OptionFilterBar` + `optionFilters.ts` (call filters, saved in `vela.radar_view`), `ExitWatch` (gauges per member; `exitRules.ts` mirrors `PARAMS.hard_exit` / `PARAMS.hold`), `RadarHistory` (GET /api/radar/history, loaded when opened).
 - **Mirrored values:** `components/radar/clock.ts` mirrors `backend/radar/calendar_nyse.py` holidays and `RUNTIME` timings, so update both together.
 
 ## Design System

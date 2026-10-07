@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import type { RadarExit, RadarHeating } from '../../types';
+import type { RadarExit, RadarHeating, RadarOptionMetrics } from '../../types';
 import { fmtDuration, fmtEt, toMs } from './clock';
 import { exitText, fmtIntensity, fmtMove, fmtRadarPrice, signClass, tickerHref } from './model';
 import { DirArrow } from './DirArrow';
+import { EXIT_RULE_TEXT } from './exitRules';
+import { OptionChip } from './OptionInfo';
 
 /** Card section with an uppercase heading, a count chip and optional tools / note. */
 export function RadarSection({
@@ -55,7 +57,13 @@ function TickerLink({ ticker, muted = false }: { ticker: string; muted?: boolean
 }
 
 /** Heating names: passed the entry checks, waiting for one confirming bar. Muted on purpose. */
-export function RadarHeatingList({ items }: { items: RadarHeating[] }) {
+export function RadarHeatingList({
+  items,
+  options,
+}: {
+  items: RadarHeating[];
+  options?: Record<string, RadarOptionMetrics>;
+}) {
   const sorted = [...items].sort((a, b) => (b.intensity ?? 0) - (a.intensity ?? 0));
   return (
     <ul className="divide-y divide-border">
@@ -73,6 +81,11 @@ export function RadarHeatingList({ items }: { items: RadarHeating[] }) {
                 )}
               </div>
               {h.reasons?.length > 0 && <div className="text-xs leading-snug mt-0.5">{h.reasons.join(' · ')}</div>}
+              {options && (
+                <div className="mt-1">
+                  <OptionChip o={options[h.ticker]} />
+                </div>
+              )}
             </div>
             <div className="text-xs text-right whitespace-nowrap tabular-nums">
               {fmtRadarPrice(h.price)}
@@ -110,6 +123,9 @@ export function RadarExitList({ items }: { items: RadarExit[] }) {
                 </span>
               </div>
               <div className="text-xs text-text-secondary leading-snug mt-0.5">{exitText(x)}</div>
+              {EXIT_RULE_TEXT[x.exit_reason] && (
+                <div className="text-[11px] text-text-secondary/70 leading-snug mt-0.5">{EXIT_RULE_TEXT[x.exit_reason]}</div>
+              )}
             </div>
             <div className="text-xs text-text-secondary text-right whitespace-nowrap">left {fmtEt(exited)}</div>
           </li>

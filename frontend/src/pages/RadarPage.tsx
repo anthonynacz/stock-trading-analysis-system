@@ -15,7 +15,11 @@ import {
   radarClock,
   toMs,
 } from '../components/radar/clock';
-import { RADAR_SORTS, sortMembers, type RadarFilter, type RadarSort } from '../components/radar/model';
+import { RADAR_SORTS, memberKey, sortMembers, type RadarFilter, type RadarSort } from '../components/radar/model';
+import { failReason, readFilters, type OptionFilters } from '../components/radar/optionFilters';
+import OptionFilterBar from '../components/radar/OptionFilterBar';
+import ScanNowButton from '../components/radar/ScanNowButton';
+import RadarHistory from '../components/radar/RadarHistory';
 import { useNow } from '../components/radar/useNow';
 import RadarMemberList from '../components/radar/RadarMemberList';
 import { RadarContextBanners, RadarScanBanner, RadarStatusBar } from '../components/radar/RadarStatus';
@@ -33,13 +37,15 @@ const FILTER_OPTIONS: SegmentOption<RadarFilter>[] = [
 interface RadarView {
   f: RadarFilter;
   sort: RadarSort;
+  opt: OptionFilters;
 }
 
-/** Direction filter and sort, remembered per browser (`localStorage["vela.radar_view"]`). */
+/** Direction filter, sort and call filters, remembered per browser (`localStorage["vela.radar_view"]`). */
 function readView(): RadarView {
-  const view: RadarView = { f: 'all', sort: 'intensity' };
+  const view: RadarView = { f: 'all', sort: 'intensity', opt: readFilters(null) };
   try {
     const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? 'null') as Partial<RadarView> | null;
+    view.opt = readFilters(v?.opt);
     if (v && FILTER_OPTIONS.some((o) => o.key === v.f)) view.f = v.f as RadarFilter;
     if (v && RADAR_SORTS.some((o) => o.key === v.sort)) view.sort = v.sort as RadarSort;
   } catch {
@@ -59,6 +65,7 @@ export default function RadarPage() {
   const radar = useRadar();
   const now = useNow(15_000, radar.data);
   const [view, setView] = useState<RadarView>(readView);
+  const [showHidden, setShowHidden] = useState(false);
   useEffect(() => {
     try {
       localStorage.setItem(VIEW_KEY, JSON.stringify(view));
@@ -76,11 +83,24 @@ export default function RadarPage() {
 
   // Leftovers of a scan that stopped early (or of yesterday) are not on the radar now.
   const all = live ? st.members ?? [] : [];
-  const members = sortMembers(
+  const options = st?.options;
+  const inDir = sortMembers(
     all.filter((m) => view.f === 'all' || m.direction === view.f),
     view.sort,
   );
-  const heating = live ? st.heating ?? [] : [];
+  // Call filters: hidden names are listed by reason and can be shown faded.
+  const hidden = new Map<string, { ticker: string; why: string }>();
+  for (const m of inDir) {
+    const why = failReason(view.opt, options?.[m.ticker], m.last_price);
+    if (why) hidden.set(memberKey(m), { ticker: m.ticker, why });
+  }
+  const members = showHidden ? inDir : inDir.filter((m) => !hidden.has(memberKey(m)));
+  const dimmed = showHidden ? new Set(hidden.keys()) : undefined;
+  const heatingAll = live ? st.heating ?? [] : [];
+  const heating = heatingAll.filter(
+    (h) => (view.f === 'all' || h.direction === view.f) && !failReason(view.opt, options?.[h.ticker], h.price),
+  );
+  const heatingHidden = heatingAll.length - heating.length;
   const exits = st?.recent_exits ?? [];
 
   const summary: string[] = [];
@@ -124,6 +144,12 @@ export default function RadarPage() {
         </header>
 
         <RadarStatusBar c={c} st={st} f={f} />
+        <ScanNowButton
+          request={isRadarSnapshot(radar.data) ? radar.data.scan_request : radar.data?.scan_request}
+          canScan={c.scanning}
+          closedHint={`The radar scans only while the market is open${resumes ? `; it starts again ${resumes}` : ''}.`}
+          refetch={radar.refetch}
+        />
         <RadarScanBanner c={c} st={st} f={f} error={radar.error} notPublished={notPublished} />
         {live && <RadarContextBanners st={st} />}
 
@@ -133,7 +159,7 @@ export default function RadarPage() {
           count={st ? all.length : null}
           note={summary.length ? summary.join(' · ') : null}
           tools={
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
               <SegmentedControl
                 variant="joined"
                 options={FILTER_OPTIONS}
@@ -155,14 +181,30 @@ export default function RadarPage() {
             </div>
           }
         >
+          <div className="mb-2">
+            <OptionFilterBar
+              value={view.opt}
+              onChange={(opt) => setView((v) => ({ ...v, opt }))}
+              onCallPreset={() => setView((v) => ({ ...v, f: 'up' }))}
+            />
+          </div>
+          {hidden.size > 0 && (
+            <p className="text-xs text-text-secondary leading-snug mb-2">
+              {hidden.size} hidden by the call filters:{' '}
+              {[...hidden.values()].map((h) => `${h.ticker} (${h.why})`).join(', ')}.{' '}
+              <button type="button" onClick={() => setShowHidden((x) => !x)} className="text-accent-300 hover:text-accent-200">
+                {showHidden ? 'Hide them' : 'Show them faded'}
+              </button>
+            </p>
+          )}
           {loading ? (
             <LoadingRow />
           ) : !st ? (
             <RadarEmpty>{nothingYet ?? membersEmpty}</RadarEmpty>
           ) : members.length === 0 ? (
-            <RadarEmpty>{membersEmpty}</RadarEmpty>
+            <RadarEmpty>{hidden.size ? 'Every stock on the radar is hidden by the call filters.' : membersEmpty}</RadarEmpty>
           ) : (
-            <RadarMemberList members={members} tickId={st.tick_id} />
+            <RadarMemberList members={members} tickId={st.tick_id} options={options} dimmed={dimmed} />
           )}
         </RadarSection>
 
@@ -170,7 +212,9 @@ export default function RadarPage() {
           id="radar-heating"
           title="Warming up"
           count={st ? heating.length : null}
-          note="Passed the entry checks on the last 5-minute bar and wait for one more bar to confirm. Not on the radar yet."
+          note={`Passed the entry checks on the last 5-minute bar and wait for one more bar to confirm. Not on the radar yet.${
+            heatingHidden ? ` ${heatingHidden} hidden by the direction or call filters.` : ''
+          }`}
         >
           {loading ? (
             <LoadingRow py="py-4" />
@@ -179,7 +223,7 @@ export default function RadarPage() {
           ) : heating.length === 0 ? (
             <RadarEmpty>No stocks warming up right now.</RadarEmpty>
           ) : (
-            <RadarHeatingList items={heating} />
+            <RadarHeatingList items={heating} options={options} />
           )}
         </RadarSection>
 
@@ -205,6 +249,8 @@ export default function RadarPage() {
             <RadarExitList items={exits} />
           )}
         </RadarSection>
+
+        <RadarHistory />
 
         <RadarHowItWorks />
         {st && <RadarScannerHealth st={st} />}

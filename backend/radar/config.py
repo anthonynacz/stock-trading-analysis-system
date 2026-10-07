@@ -59,3 +59,22 @@ RUNTIME: dict = {
 BACKUP_DIR = os.environ.get("RADAR_BACKUP_DIR", "/backups/radar")
 # Nightly housekeeping (US Eastern) and the row-level retention of hot rows, backups and manifest entries.
 HOUSEKEEPING = {"schedule_et": "03:30", "retention_months": 3}
+
+# Option-chain metrics for radar names (radar/options.py): display and the page's call-option filters only,
+# never read by the engine. Fetched after each scan for the members and warming-up names.
+OPTIONS: dict = {
+    "min_dte": 7,                  # the first expiry at least this many calendar days out (skips 0-6 DTE)
+    "ntm_band": 0.10,              # "near the money": strikes within ±10% of the stock price
+    "weekly_window_days": 35,      # >= 4 expiries inside this window counts as weekly options
+    "max_tickers": 30,
+    "workers": 4,
+    "fetch_timeout_s": 10,
+    "timeout_s": 75,               # hard cap on the whole refresh (worker subprocess timeout)
+    "keep_days": 7,                # rows older than this are pruned on write
+    # Call liquidity grade: near-the-money call open interest and volume today (summed over strikes within
+    # ntm_band: one strike's numbers are noisy) and the at-the-money call's bid-ask spread as % of mid
+    # (Yahoo quotes are delayed, so the limits are loose). Good when all "good" limits hold, fair when the
+    # "fair" ones hold, else thin.
+    "grade": {"good": {"oi": 2000, "spread_pct": 10.0, "ntm_volume": 500},
+              "fair": {"oi": 300, "spread_pct": 25.0, "ntm_volume": 0}},
+}

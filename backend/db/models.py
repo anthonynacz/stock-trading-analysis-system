@@ -919,6 +919,9 @@ class RadarRuntime(Base):
     Fetcher's on_health during a tick, so the circuit breaker still advances
     when the worker kills a hung tick; a committed tick clears it.
     `alert_cursor` is the last radar event id dispatched to alerts.
+    `scan_request` is the latest "Scan now" request from the radar page
+    (POST /api/radar/scan writes it pending, the worker runs it and records
+    the outcome).
     """
 
     __tablename__ = "radar_runtime"
@@ -930,6 +933,25 @@ class RadarRuntime(Base):
     engine: Mapped[Optional[dict]] = mapped_column(JSON)
     source_health_live: Mapped[Optional[dict]] = mapped_column(JSON)
     alert_cursor: Mapped[Optional[str]] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Added by migration f3a9c2d7e510 (ALTER TABLE ... ADD COLUMN), hence after updated_at.
+    scan_request: Mapped[Optional[dict]] = mapped_column(JSON)
+
+
+class RadarOptionMetric(Base):
+    """Latest option-chain and liquidity metrics of one radar name (radar/options.py).
+
+    One row per ticker, overwritten after each scan for the current members
+    and warming-up names, so the table stays small (rows older than
+    OPTIONS.keep_days are pruned on write). Display and filtering only: the
+    engine never reads it.
+    """
+
+    __tablename__ = "radar_option_metrics"
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    metrics: Mapped[Optional[dict]] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

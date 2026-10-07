@@ -38,6 +38,7 @@ from db.models import (
     RadarEvent,
     RadarHousekeepingRun,
     RadarMemberTick,
+    RadarOptionMetric,
     RadarRuntime,
     RadarScanLog,
     RadarSnapshot,
@@ -60,11 +61,12 @@ _BASELINES: Table = RadarBaseline.__table__
 _MEMBER_TICKS: Table = RadarMemberTick.__table__
 _EVENTS: Table = RadarEvent.__table__
 _SCAN_LOG: Table = RadarScanLog.__table__
+_OPTIONS: Table = RadarOptionMetric.__table__
 
 # Every radar table; the tests build their SQLite schema from this and schema_ready() checks it.
 RADAR_TABLES: tuple[Table, ...] = tuple(m.__table__ for m in (
     RadarSnapshot, RadarRuntime, RadarBaseline, RadarMemberTick, RadarEvent, RadarScanLog,
-    RadarBackupManifest, RadarHousekeepingRun, RadarTableMetric))
+    RadarBackupManifest, RadarHousekeepingRun, RadarTableMetric, RadarOptionMetric))
 
 
 # ---------------------------------------------------------------- URL and value conversion
@@ -287,13 +289,16 @@ class RadarStore:
         return row.params_version, bytes(row.pack_gz)
 
     def recent_events(self, *, since: datetime | None = None, ticker: str | None = None,
-                      limit: int = 500) -> list[dict]:
-        """Events newest first (ts, then id), optionally from `since` (inclusive) and for one ticker."""
+                      limit: int = 500, types: tuple[str, ...] | None = None) -> list[dict]:
+        """Events newest first (ts, then id), optionally from `since` (inclusive), for one ticker and of
+        some types (ENTER, EXIT)."""
         stmt = select(_EVENTS)
         if since is not None:
             stmt = stmt.where(_EVENTS.c.ts >= _utc(since))
         if ticker:
             stmt = stmt.where(_EVENTS.c.ticker == ticker.strip().upper())
+        if types:
+            stmt = stmt.where(_EVENTS.c.type.in_(list(types)))
         stmt = stmt.order_by(_EVENTS.c.ts.desc(), _EVENTS.c.id.desc()).limit(max(0, int(limit)))
         with self.engine.connect() as conn:
             return [_event_dict(r) for r in conn.execute(stmt)]
@@ -366,6 +371,42 @@ class RadarStore:
     def set_alert_cursor(self, event_id: str) -> None:
         with self.engine.begin() as conn:
             self._put_runtime(conn, _now(), alert_cursor=str(event_id))
+
+    # ------------------------------------------------------------ "Scan now" requests
+
+    def get_scan_request(self) -> dict | None:
+        """The latest "Scan now" request (pending, running, done, refused or error), or None."""
+        with self.engine.connect() as conn:
+            doc = conn.execute(select(_RUNTIME.c.scan_request).where(_RUNTIME.c.id == SINGLETON_ID)).scalar()
+        return doc if isinstance(doc, dict) else None
+
+    def put_scan_request(self, doc: dict) -> None:
+        with self.engine.begin() as conn:
+            self._put_runtime(conn, _now(), scan_request=doc)
+
+    # ------------------------------------------------------------ option metrics (radar/options.py)
+
+    def put_option_metrics(self, metrics: dict[str, dict], as_of: datetime, keep_days: int = 7) -> None:
+        """Upsert one row per ticker and prune rows older than keep_days (the table only ever holds
+        recent radar names)."""
+        now = _now()
+        with self.engine.begin() as conn:
+            for ticker, doc in metrics.items():
+                stmt = self._insert(_OPTIONS).values(ticker=ticker, as_of=as_of, metrics=doc, updated_at=now)
+                conn.execute(stmt.on_conflict_do_update(
+                    index_elements=["ticker"],
+                    set_={k: stmt.excluded[k] for k in ("as_of", "metrics", "updated_at")}))
+            conn.execute(delete(_OPTIONS).where(_OPTIONS.c.as_of < now - timedelta(days=keep_days)))
+
+    def load_option_metrics(self, tickers: list[str] | None = None) -> dict[str, dict]:
+        """{ticker: metrics} for `tickers` (all rows when None); tickers without a row are left out."""
+        q = select(_OPTIONS.c.ticker, _OPTIONS.c.metrics)
+        if tickers is not None:
+            if not tickers:
+                return {}
+            q = q.where(_OPTIONS.c.ticker.in_(list(tickers)))
+        with self.engine.connect() as conn:
+            return {r.ticker: r.metrics for r in conn.execute(q) if isinstance(r.metrics, dict)}
 
     # ------------------------------------------------------------ worker support
 

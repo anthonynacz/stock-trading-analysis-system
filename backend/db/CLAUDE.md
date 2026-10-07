@@ -10,7 +10,7 @@ PostgreSQL 16. `db/models.py` is the source of truth; Alembic owns schema migrat
 
 **SaaS / auth** (multi-tenancy): `users`, `subscriptions`, `credit_balances`, `credit_ledger`, `chart_configs`. See `backend/auth/CLAUDE.md`.
 
-**Radar** (shared, no `user_id`): `radar_snapshot`, `radar_runtime` (singletons), `radar_baselines` (last 10 days of packs), `radar_member_ticks`, `radar_events`, `radar_scan_log`, `radar_backup_manifest`, `radar_housekeeping_runs`, `radar_table_metrics`.
+**Radar** (shared, no `user_id`): `radar_snapshot`, `radar_runtime` (singletons), `radar_baselines` (last 10 days of packs), `radar_member_ticks`, `radar_events`, `radar_scan_log`, `radar_backup_manifest`, `radar_housekeeping_runs`, `radar_table_metrics`, `radar_option_metrics` (one row per ticker, self-pruning, not under housekeeping). `radar_runtime.scan_request` holds the latest "Scan now" request.
 - **Writers:** `radar/store.py` and `radar/housekeeping.py` only.
 - **Migration:** `d6e2a4c8b1f9`.
 

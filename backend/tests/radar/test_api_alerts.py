@@ -76,20 +76,35 @@ class FakeStore:
     """The pinned RadarStore reads (PORT_SPEC section 4), recording how they were called."""
 
     def __init__(self, state: dict | None = None, events: list[dict] | None = None,
-                 ticks: list[dict] | None = None, scan_log: list[dict] | None = None) -> None:
+                 ticks: list[dict] | None = None, scan_log: list[dict] | None = None,
+                 scan_request: dict | None = None, option_metrics: dict | None = None) -> None:
         self.state = state or {}
         self.events = events or []
         self.ticks = ticks or []
         self.scan_log = scan_log or []
+        self.scan_request = scan_request
+        self.option_metrics = option_metrics or {}
+        self.event_types: list = []
         self.calls: list[tuple] = []
 
     def load_state(self) -> dict:
         self.calls.append(("load_state",))
         return self.state
 
-    def recent_events(self, *, since=None, ticker=None, limit=500) -> list[dict]:
+    def recent_events(self, *, since=None, ticker=None, limit=500, types=None) -> list[dict]:
         self.calls.append(("recent_events", since, ticker, limit))
+        self.event_types.append(types)
         return list(self.events)
+
+    def get_scan_request(self) -> dict | None:
+        return self.scan_request
+
+    def put_scan_request(self, doc: dict) -> None:
+        self.scan_request = doc
+
+    def load_option_metrics(self, tickers=None) -> dict:
+        self.calls.append(("load_option_metrics", tickers))
+        return {t: m for t, m in self.option_metrics.items() if tickers is None or t in tickers}
 
     def member_ticks(self, ticker: str, session_date: str) -> list[dict]:
         self.calls.append(("member_ticks", ticker, session_date))
@@ -375,7 +390,8 @@ def test_stale_uses_generated_at_and_the_scanners_session_times():
 @pytest.mark.asyncio
 async def test_snapshot_returns_no_data_before_the_first_write():
     out = await routes.radar_snapshot(store=FakeStore(), user=MEMBER)
-    assert out == {"status": "no_data", "stale": False, "message": routes._RADAR_NO_DATA_MESSAGE}
+    assert out == {"status": "no_data", "stale": False, "message": routes._RADAR_NO_DATA_MESSAGE,
+                   "scan_request": None}
     assert "schema" not in out and "tick_id" not in out   # the frontend's isRadarSnapshot() relies on it
 
 
@@ -391,7 +407,8 @@ async def test_snapshot_passes_the_state_through_with_stale(monkeypatch):
     monkeypatch.setattr(routes, "radar_is_stale", fake_stale)
     out = await routes.radar_snapshot(store=FakeStore(state=state), user=MEMBER)
     assert out["stale"] is True
-    assert {k: v for k, v in out.items() if k != "stale"} == state
+    assert {k: v for k, v in out.items() if k not in ("stale", "options", "scan_request")} == state
+    assert out["options"] == {} and out["scan_request"] is None
     assert seen["now"].tzinfo is not None
 
 
@@ -810,3 +827,227 @@ def test_http_housekeeping_202_403_422_and_background_run(client_for, radar_stor
     # TestClient runs the background task after the response: the run is finished now.
     assert runs == [r.json()["run_id"]]
     assert routes._radar_hk_state["status"] == "ok" and routes._radar_hk_state["running"] is False
+
+
+# ── Options in the snapshot, "Scan now" and the history ───────────────────
+
+@pytest.mark.asyncio
+async def test_snapshot_carries_the_option_metrics_of_members_and_heating_names_and_the_scan_request():
+    state = _state(_z(2026, 10, 7, 14, 0))
+    state["members"] = [{"ticker": "NVDA"}, {"ticker": None}]
+    state["heating"] = [{"ticker": "AMD"}]
+    req = {"id": "r1", "status": "done", "requested_at": "2026-10-07T14:01:00Z", "requested_by": "x@example.com"}
+    metrics = {"NVDA": {"liquidity": "good", "as_of": datetime(2026, 10, 7, 14, 1, tzinfo=UTC)},
+               "AMD": {"liquidity": "thin"}, "OLD": {"liquidity": "fair"}}
+    store = FakeStore(state=state, scan_request=req, option_metrics=metrics)
+    out = await routes.radar_snapshot(store=store, user=MEMBER)
+    assert ("load_option_metrics", ["NVDA", "AMD"]) in store.calls
+    assert out["options"] == {"NVDA": {"liquidity": "good", "as_of": "2026-10-07T14:01:00+00:00"},
+                              "AMD": {"liquidity": "thin"}}                 # OLD is not on the radar
+    assert out["scan_request"] == req and out["members"] == state["members"]
+
+    empty = await routes.radar_snapshot(store=FakeStore(scan_request=req), user=MEMBER)
+    assert empty["status"] == "no_data" and empty["scan_request"] == req and "options" not in empty
+
+
+@pytest.mark.asyncio
+async def test_snapshot_survives_unreadable_options_and_scan_request():
+    class Broken(FakeStore):
+        def get_scan_request(self):
+            raise RuntimeError("column missing")
+
+        def load_option_metrics(self, tickers=None):
+            raise RuntimeError("table missing")
+
+    out = await routes.radar_snapshot(store=Broken(state=_state(_z(2026, 10, 7, 14, 0))), user=MEMBER)
+    assert out["schema"] == 1 and out["options"] == {} and out["scan_request"] is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_on_the_real_store_reads_options_and_the_request(radar_store):
+    tick, day = _commit_sample_tick(radar_store)
+    state = radar_store.load_state()
+    state["members"] = [{"ticker": "NVDA"}]
+    radar_store.commit_tick(state=state, engine_doc={"schema": 1}, member_rows=[], events=[],
+                            scan_row={"v": 1, "tick": _iso(tick), "run_id": "again"})
+    now = datetime.now(UTC)
+    radar_store.put_option_metrics({"NVDA": {"liquidity": "good"}, "AMD": {"liquidity": "thin"}}, now)
+    radar_store.put_scan_request({"id": "r", "status": "pending", "requested_at": _iso(now)})
+    out = await routes.radar_snapshot(store=radar_store, user=MEMBER)
+    assert out["options"] == {"NVDA": {"liquidity": "good"}} and out["scan_request"]["status"] == "pending"
+
+
+@pytest.mark.parametrize("now, open_", [
+    (_z(2026, 10, 7, 13, 35), True),                 # open + 5 min
+    (_z(2026, 10, 7, 13, 34, 59), False),
+    (_z(2026, 10, 7, 19, 59, 59), True),
+    (_z(2026, 10, 7, 20, 0), False),                 # the close
+    (_z(2026, 10, 10, 15, 0), False),                # Saturday
+    (_z(2026, 11, 26, 15, 0), False),                # Thanksgiving
+    (_z(2026, 11, 27, 17, 59), True),                # half day: closes 13:00 ET (18:00Z)
+    (_z(2026, 11, 27, 18, 0), False),
+    (datetime(2026, 10, 7, 11, 0, tzinfo=timezone(timedelta(hours=-4))), True),   # any zone
+])
+def test_radar_scan_window(now, open_):
+    why = routes._radar_scan_window(now)
+    assert (why is None) is open_
+    if not open_:
+        assert "market is closed" in why
+
+
+def _scan_open(monkeypatch, message: str | None = None) -> None:
+    monkeypatch.setattr(routes, "_radar_scan_window", lambda now: message)
+
+
+def test_http_scan_now_records_a_pending_request(client_for, radar_store, monkeypatch):
+    _scan_open(monkeypatch)
+    before = datetime.now(UTC).replace(microsecond=0)
+    r = client_for(radar_store, user=MEMBER).post("/api/radar/scan")
+    assert r.status_code == 202
+    req = r.json()
+    assert req["status"] == "pending" and req["requested_by"] == "user@example.com"
+    asked = datetime.fromisoformat(req["requested_at"].replace("Z", "+00:00"))
+    assert before <= asked <= datetime.now(UTC) and re.fullmatch(r"\d{8}T\d{6}\.\d{6}Z", req["id"])
+    assert radar_store.get_scan_request() == req
+    # and GET /api/radar shows it, even before the first scan
+    snap = client_for(radar_store, user=MEMBER).get("/api/radar").json()
+    assert snap["status"] == "no_data" and snap["scan_request"] == req
+
+
+def test_http_scan_now_is_refused_while_the_market_is_closed(client_for, radar_store, monkeypatch):
+    _scan_open(monkeypatch, "The market is closed: try later.")
+    r = client_for(radar_store).post("/api/radar/scan")
+    assert r.status_code == 409
+    assert r.json()["detail"] == {"error": "market_closed", "message": "The market is closed: try later."}
+    assert radar_store.get_scan_request() is None
+
+
+@pytest.mark.parametrize("status", ["pending", "running"])
+def test_http_scan_now_refuses_a_second_request_while_one_is_on_its_way(client_for, monkeypatch, status):
+    _scan_open(monkeypatch)
+    current = {"id": "r1", "status": status, "requested_at": _iso(datetime.now(UTC) - timedelta(seconds=60))}
+    store = FakeStore(scan_request=current)
+    r = client_for(store).post("/api/radar/scan")
+    assert r.status_code == 409 and r.json()["detail"]["error"] == "already_requested"
+    assert r.json()["detail"]["request"] == current and store.scan_request == current
+
+
+def test_http_scan_now_replaces_an_expired_pending_request(client_for, monkeypatch):
+    _scan_open(monkeypatch)
+    old = {"id": "r1", "status": "pending",
+           "requested_at": _iso(datetime.now(UTC) - timedelta(seconds=routes._RADAR_SCAN_TTL_S + 5))}
+    store = FakeStore(scan_request=old)
+    r = client_for(store).post("/api/radar/scan")
+    assert r.status_code == 202 and store.scan_request["status"] == "pending" and store.scan_request["id"] != "r1"
+
+
+@pytest.mark.parametrize("status", ["done", "refused", "error"])
+def test_http_scan_now_cooldown_after_the_last_request(client_for, monkeypatch, status):
+    _scan_open(monkeypatch)
+    recent = {"id": "r1", "status": status, "requested_at": _iso(datetime.now(UTC) - timedelta(seconds=5))}
+    store = FakeStore(scan_request=recent)
+    r = client_for(store).post("/api/radar/scan")
+    assert r.status_code == 429 and r.json()["detail"]["error"] == "cooldown" and store.scan_request == recent
+    store.scan_request = {**recent, "requested_at": _iso(
+        datetime.now(UTC) - timedelta(seconds=routes._RADAR_SCAN_COOLDOWN_S + 5))}
+    assert client_for(store).post("/api/radar/scan").status_code == 202
+
+
+
+def test_http_scan_now_cooldown_counts_from_the_end_of_the_last_scan(client_for, monkeypatch):
+    _scan_open(monkeypatch)
+    now = datetime.now(UTC)
+    last = {"id": "r1", "status": "done", "requested_at": _iso(now - timedelta(seconds=60)),
+            "finished_at": _iso(now - timedelta(seconds=5))}
+    store = FakeStore(scan_request=last)
+    r = client_for(store).post("/api/radar/scan")
+    assert r.status_code == 429 and r.json()["detail"]["error"] == "cooldown"
+    store.scan_request = {**last, "finished_at": _iso(now - timedelta(seconds=routes._RADAR_SCAN_COOLDOWN_S + 5))}
+    assert client_for(store).post("/api/radar/scan").status_code == 202
+
+def _ev(kind: str, ticker: str, ts: str, *, episode: int = 1, session: str = DAY, **kw) -> dict:
+    return {"id": f"{ts}-{ticker}-{kind}-{episode}", "type": kind, "ticker": ticker, "ts": ts, "session": session,
+            "episode": episode, "dir": "up", "price": None, "intensity": None, "detail": None, "reason": None,
+            "late": False, "held_min": None, "move_since_entry_pct": None, **kw}
+
+
+def test_radar_trips_pair_each_exit_with_its_entry():
+    events = [
+        _ev("EXIT", "NVDA", "2026-10-07T15:20:00Z", episode=2, price=104.0, move_since_entry_pct=-0.95,
+            held_min=20, reason="GIVEBACK", detail="gave back 72%"),
+        _ev("ENTER", "NVDA", "2026-10-07T15:00:00Z", episode=2, price=105.0, intensity=66.0),
+        _ev("EXIT", "NVDA", "2026-10-07T14:30:00Z", price=103.0, move_since_entry_pct=3.0, held_min=30,
+            reason="FADE", detail="the move faded"),
+        _ev("ENTER", "NVDA", "2026-10-07T14:00:00Z", price=100.0, intensity=81.0, detail="+2.9 sigma", late=True),
+        _ev("ENTER", "TSLA", "2026-10-07T15:25:00Z", price=250.0),                 # still on the radar
+        _ev("EXIT", "NVDA", "2026-10-06T19:00:00Z", session="2026-10-06", price=90.0),
+    ]
+    trips = routes.radar_trips(events)
+    assert [(t["ticker"], t["session"], t["episode"]) for t in trips] == [
+        ("NVDA", DAY, 2), ("NVDA", DAY, 1), ("NVDA", "2026-10-06", 1)]           # newest exit first
+    second, first, other_day = trips
+    assert first == {
+        "ticker": "NVDA", "direction": "up", "session": DAY, "episode": 1,
+        "entered_at": "2026-10-07T14:00:00Z", "entry_price": 100.0, "entry_detail": "+2.9 sigma",
+        "entry_intensity": 81.0, "late": True, "exited_at": "2026-10-07T14:30:00Z", "exit_price": 103.0,
+        "held_min": 30, "move_since_entry_pct": 3.0, "exit_reason": "FADE", "exit_detail": "the move faded"}
+    assert second["entry_price"] == 105.0 and second["entered_at"] == "2026-10-07T15:00:00Z"
+    assert second["exit_reason"] == "GIVEBACK" and second["late"] is False
+    # the 2026-10-06 exit is not paired with the 2026-10-07 entry of the same episode number
+    assert other_day["entered_at"] is None and other_day["entry_price"] is None
+
+
+def test_radar_trips_derive_the_entry_price_when_the_entry_is_outside_the_window():
+    trips = routes.radar_trips([
+        _ev("EXIT", "AMD", "2026-10-07T15:00:00Z", price=55.0, move_since_entry_pct=10.0),
+        _ev("EXIT", "ZS", "2026-10-07T14:00:00Z", price=80.0, move_since_entry_pct=-20.0),
+        _ev("EXIT", "XX", "2026-10-07T13:50:00Z", price=None, move_since_entry_pct=5.0),
+    ])
+    amd, zs, xx = trips
+    assert amd["entry_price"] == 50.0 and amd["entered_at"] is None and amd["entry_detail"] is None
+    assert zs["entry_price"] == 100.0 and amd["late"] is False
+    assert xx["entry_price"] is None
+    assert routes.radar_trips([]) == []
+    assert routes.radar_trips([_ev("ENTER", "NVDA", "2026-10-07T14:00:00Z")]) == []
+
+
+@pytest.mark.asyncio
+async def test_history_reads_entries_and_exits_in_the_window():
+    evs = [_ev("EXIT", "NVDA", "2026-10-07T14:30:00Z", price=103.0, move_since_entry_pct=3.0),
+           _ev("ENTER", "NVDA", "2026-10-07T14:00:00Z", price=100.0)]
+    store = FakeStore(events=evs)
+    before = datetime.now(UTC)
+    out = await routes.radar_history(days=30, ticker=" nvda ", store=store, user=MEMBER)
+    assert out["days"] == 30 and out["ticker"] == "NVDA" and len(out["trips"]) == 1
+    assert out["trips"][0]["entry_price"] == 100.0
+    _, since, ticker, limit = store.calls[0]
+    assert ticker == "NVDA" and limit == 2 * routes._RADAR_HISTORY_LIMIT and store.event_types == [("ENTER", "EXIT")]
+    assert timedelta(days=30) - timedelta(seconds=5) <= before - since <= timedelta(days=30) + timedelta(seconds=5)
+    out = await routes.radar_history(days=1, ticker=None, store=FakeStore(), user=MEMBER)
+    assert out == {"days": 1, "ticker": None, "trips": []}
+    with pytest.raises(HTTPException) as err:
+        await routes.radar_history(days=1, ticker="NV DA;", store=store, user=MEMBER)
+    assert err.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_history_caps_the_trips(monkeypatch):
+    monkeypatch.setattr(routes, "_RADAR_HISTORY_LIMIT", 2)
+    evs = [_ev("EXIT", f"T{i}", f"2026-10-07T14:{i:02d}:00Z", price=10.0) for i in range(5)]
+    out = await routes.radar_history(days=1, ticker=None, store=FakeStore(events=evs), user=MEMBER)
+    assert [t["ticker"] for t in out["trips"]] == ["T4", "T3"]
+
+
+def test_http_history_on_the_store(client_for, radar_store):
+    tick, day = _commit_sample_tick(radar_store)
+    client = client_for(radar_store, user=MEMBER)
+    r = client.get("/api/radar/history?days=1&ticker=nvda")
+    assert r.status_code == 200
+    (trip,) = r.json()["trips"]
+    assert trip["ticker"] == "NVDA" and trip["session"] == day and trip["exited_at"] == _iso(tick)
+    assert trip["entered_at"] == _iso(tick - timedelta(minutes=5)) and trip["entry_price"] == 181.2
+    assert client.get("/api/radar/history").json()["days"] == 30
+    assert client.get("/api/radar/history?ticker=AMD").json()["trips"] == []
+    assert client.get("/api/radar/history?days=0").status_code == 422
+    assert client.get("/api/radar/history?days=93").status_code == 422
+    assert client.get("/api/radar/history?ticker=NV%20DA;").status_code == 400
