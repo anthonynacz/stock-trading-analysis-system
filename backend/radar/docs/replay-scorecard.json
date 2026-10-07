@@ -1,0 +1,173 @@
+{
+ "params_version": "radar-sm-1",
+ "first_session": "2026-07-31",
+ "last_session": "2026-09-25",
+ "eligible_mean": 507.4,
+ "stage_a": true,
+ "rec": {
+  "sessions": 40,
+  "entries": 206,
+  "entries_per_day": 5.15,
+  "entries_per_day_dist": {
+   "median": 4.0,
+   "p90": 11.0,
+   "max": 15,
+   "days_without_entries": 1
+  },
+  "concurrency": {
+   "median": 0.0,
+   "p95": 2.0,
+   "max": 6,
+   "cap_reached_share": 0.0
+  },
+  "market_mode_tick_share": 0.0443,
+  "stage_b_share_mean": 0.0699,
+  "prec15": 0.5388,
+  "prec30": 0.5437,
+  "prec30_n": 206,
+  "prec30_wilson95": [
+   0.4755,
+   0.6103
+  ],
+  "mean_f30_bp": 7.01,
+  "prec60": 0.5097,
+  "latency_1bar": {
+   "prec15": 0.5388,
+   "prec30": 0.5146,
+   "prec60": 0.5194
+  },
+  "hold30": 0.8592,
+  "mfe_gt_mae": 0.5243,
+  "post_exit_continuation": 0.5049,
+  "dwell_bars": {
+   "median": 7.0,
+   "p25": 5.0,
+   "p75": 11.0
+  },
+  "flaps": 11,
+  "flap_rate": 0.0534,
+  "flaps_per_day": 0.275,
+  "short_episode_share": 0.0534,
+  "reentries_within_30min": 0,
+  "up_share": 0.4078,
+  "distinct_symbol_days": 180,
+  "late_entries": 0,
+  "exit_reasons": {
+   "REVERSAL": 0.505,
+   "FADE": 0.447,
+   "VWAP_CROSS": 0.019,
+   "GIVEBACK": 0.015,
+   "STALL": 0.01,
+   "SESSION_END": 0.005
+  }
+ },
+ "splits": {
+  "calibration": {
+   "sessions": 20,
+   "entries": 92,
+   "prec30": 0.5326,
+   "prec30_n": 92
+  },
+  "validation": {
+   "sessions": 20,
+   "entries": 114,
+   "prec30": 0.5526,
+   "prec30_n": 114
+  }
+ },
+ "baseline_all_ticks": {
+  "prec30": 0.4911,
+  "n": 1267438,
+  "prec30_after_z3_ge_3": 0.4846,
+  "n_z3_ge_3": 18772
+ },
+ "baseline_naive": {
+  "sessions": 40,
+  "entries": 3784,
+  "entries_per_day": 94.6,
+  "entries_per_day_dist": {
+   "median": 91.5,
+   "p90": 125.4,
+   "max": 142,
+   "days_without_entries": 0
+  },
+  "concurrency": {
+   "median": 7.0,
+   "p95": 12.0,
+   "max": 12,
+   "cap_reached_share": 0.2264
+  },
+  "market_mode_tick_share": 0.0443,
+  "stage_b_share_mean": 1.0262,
+  "prec15": 0.482,
+  "prec30": 0.4633,
+  "prec30_n": 3784,
+  "prec30_wilson95": [
+   0.4474,
+   0.4792
+  ],
+  "mean_f30_bp": 0.12,
+  "prec60": 0.4728,
+  "latency_1bar": {
+   "prec15": 0.4945,
+   "prec30": 0.4791,
+   "prec60": 0.4802
+  },
+  "hold30": 0.8708,
+  "mfe_gt_mae": 0.4892,
+  "post_exit_continuation": 0.4886,
+  "dwell_bars": {
+   "median": 5.0,
+   "p25": 3.0,
+   "p75": 7.0
+  },
+  "flaps": 800,
+  "flap_rate": 0.2114,
+  "flaps_per_day": 20.0,
+  "short_episode_share": 0.1609,
+  "reentries_within_30min": 191,
+  "up_share": 0.4997,
+  "distinct_symbol_days": 3160,
+  "late_entries": 0,
+  "exit_reasons": {
+   "FADE": 0.576,
+   "DISPLACED": 0.249,
+   "REVERSAL": 0.12,
+   "DRY": 0.02,
+   "GIVEBACK": 0.016,
+   "VWAP_CROSS": 0.01,
+   "SESSION_END": 0.005,
+   "STALL": 0.004
+  }
+ },
+ "targets": {
+  "entries_per_day": [
+   3.0,
+   12.0
+  ],
+  "prec30_min": 0.53,
+  "flap_rate_max": 0.06
+ },
+ "meets_targets": {
+  "entries_per_day": true,
+  "prec30": true,
+  "flap_rate": true
+ },
+ "symbols": 521,
+ "runtime_s": 332.5,
+ "dataset": {
+  "bars_5m": "scratchpad/radar_design/replay/bars_5m_prepost.csv.gz (Yahoo 5m incl. extended hours; engine uses regular session only)",
+  "daily": "scratchpad/radar_design/replay/bars_1d_1y.csv.gz",
+  "universe": "radar/data/universe.csv: 542 rows, 518 stocks + 24 ETFs; non-reference ETFs dropped -> 521 symbols",
+  "sessions": "60 sessions 2026-07-02..2026-09-25; the first 20 only seed baselines; 40 replay sessions",
+  "command": "python -m radar.tools.replay_cli --bars <bars_5m_prepost.csv.gz> --daily <bars_1d_1y.csv.gz>"
+ },
+ "notes": [
+  "Educational analysis, not financial advice. prec@h is a historical continuation share, not a probability of anything.",
+  "Parity with the fp_lens reference (same 39 sessions 2026-08-03..09-25, the 332 symbols both datasets share): the reference REC listed 142 entries on those names; radar.engine lists 134, 133 of them identical (symbol, session, entry bar) and 131 of those with the same exit bar (132 before the 2026-10-06 DATA_STALE fix, see below). Of the 9 reference entries not reproduced, 7 are blocked by the sector cap (max 3 per sector and direction, e.g. 2026-09-22 Financials falling) and 2 sit on a threshold edge (the pooled time-of-day profile depends on the universe). On those names: 3.4 entries/day, prec@30 57.5%, flap 3.7%.",
+  "The reference's 58.3% prec@30 on 491 names included 81 entries on 159 high-beta mid caps (GME, SNAP, DKNG, ...) that are not in the 542-name S&P 500 + Nasdaq-100 universe; that composition difference, not a logic difference, explains the lower prec@30 and volume here.",
+  "Determinism: rebuilding the Engine from its JSON state_dict on every tick reproduces the same REC scorecard; the largest engine state was 37 KB and the largest snapshot 7 KB over the 40 sessions.",
+  "Re-run 2026-10-06 after the SPEC 12.2 engine amendments. On recorded bars only the DATA_STALE rule changes the result: it now counts consecutive bars without a fresh print instead of 3-bar windows. REC entries, prec@15/30/60, hold30, dwell and flap rate are unchanged; the one REC exit that was DATA_STALE (EXPE 2026-09-23, down, entered slot 21) came from a single zero-volume Yahoo bar at slot 22 and read 'No fresh 5-minute bars for 3 scans' at slot 24; it now exits on FADE at slot 26. The naive baseline loses its DATA_STALE exits as well (3785 -> 3784 entries). The other amendments (quotes_ok, degraded_volume, provisional bars, stored names and sectors, banner pruning, SPY prior-close check) do not act on a replay of complete Yahoo bars.",
+  "Re-run 2026-10-07 after the second DATA_STALE fix (any fresh print now ends a stale run, also on fallback bars, which only never add to it): the scorecard is identical to the 2026-10-06 run apart from runtime, as a replay never feeds fallback bars."
+ ]
+}
