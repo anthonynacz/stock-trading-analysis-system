@@ -70,8 +70,15 @@ const ENTRY_ROWS: EntryRow[] = [
   {
     pill: 'bg-amber-900/40 text-amber-400',
     label: 'REACTIVE',
-    condition: 'Conviction ≥ 30 AND stock already moved > 3%',
-    meaning: "The catalyst already triggered a move — you'd be chasing. Entry is still valid but use smaller size and tighter stops.",
+    condition: "Conviction ≥ 30 AND stock already up > 3% today (the move agrees with the call)",
+    meaning: "The setup is already under way — you'd be chasing. Entry is still valid but use smaller size and tighter stops.",
+  },
+  {
+    pill: 'bg-sky-900/40 text-sky-400',
+    label: 'PULLBACK',
+    condition: 'Conviction ≥ 30 AND stock down > 3% today (the move goes against the bullish call)',
+    meaning:
+      'The signals are still positive but the stock is falling today, often with its sector. Not a chase: wait for the selling to stop (a higher low, a reclaim of VWAP) before acting.',
   },
   {
     pill: 'bg-accent-900/40 text-accent-400',
@@ -380,6 +387,7 @@ export default function TradingGuideTab() {
             <div className="text-xs text-text-secondary space-y-2">
               <p><span className="font-semibold text-text-primary">PRE_POSITION:</span> Set your limit orders the night before or pre-market. Queue them to fire at the open. Best entry for weeklies — you're ahead of the catalyst.</p>
               <p><span className="font-semibold text-text-primary">REACTIVE:</span> Don't market-order at the open — spreads are wide in the first 10 minutes. Wait until 9:45-10:00 AM for spreads to tighten. Size down to 50-75% of normal. Use tighter stops (30% vs 50%).</p>
+              <p><span className="font-semibold text-text-primary">PULLBACK:</span> The stock is red today against a bullish call. Check whether the drop is the whole sector or stock-specific news. Don't catch the falling knife: wait for a higher low or a move back above VWAP, and size down while it stays volatile.</p>
               <p><span className="font-semibold text-text-primary">WAIT:</span> Add to your watchlist and monitor. Enter only when conviction rises above 30 on a subsequent day, or when a confirming signal fires (e.g., unusual call volume, T1 upgrade). Don't force it.</p>
               <p><span className="font-semibold text-text-primary">HOLD:</span> No action. Check back tomorrow — conviction may shift as new data arrives.</p>
             </div>
@@ -390,6 +398,7 @@ export default function TradingGuideTab() {
               <p><span className="font-semibold text-green-400">STRONG_BUY + PRE_POSITION</span> — Best possible setup. High conviction before an earnings catalyst. Enter aggressively with full size.</p>
               <p><span className="font-semibold text-green-400">STRONG_BUY + REACTIVE</span> — Strong signals but the stock has moved. Still tradeable — use spreads or smaller size to manage the chase risk.</p>
               <p><span className="font-semibold text-green-400">BUY + WAIT</span> — Moderate conviction, stock is flat. The signal exists but isn't screaming. Wait for confirmation or a pullback to support before entering.</p>
+              <p><span className="font-semibold text-sky-400">BUY + PULLBACK</span> — Positive signals but a red day. Better price than a chase, but only once the selling stabilizes; a falling sector can keep pulling it down.</p>
               <p><span className="font-semibold text-amber-400">BUY + REACTIVE</span> — Moderate conviction and already moved. Worst risk/reward of the actionable setups. Consider skipping unless Day-by-Day shows rising trend.</p>
               <p><span className="font-semibold text-red-400">SELL/STRONG_SELL + HOLD</span> — Bearish but not actionable for entry. Only trade these if you actively play puts and conviction is below -30.</p>
             </div>

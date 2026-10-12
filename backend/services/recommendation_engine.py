@@ -1600,7 +1600,7 @@ class RecommendationEngine:
             signals.append({
                 "signal": "Stock Already Moved",
                 "points": -5,
-                "detail": f"Stock moved {stock_moved_pct:+.1f}% on catalyst",
+                "detail": f"Stock moved {stock_moved_pct:+.1f}% today",
             })
 
         # Clamp to [-100, 100]
@@ -1740,9 +1740,12 @@ class RecommendationEngine:
                     pre_position_reason = (
                         f"{leading['signal'].lower()} ahead of catalyst"
                     )
+        moved = self._calc_stock_move_pct(stock_data)
         entry_reasons = {
             "PRE_POSITION": pre_position_reason,
-            "REACTIVE": "catalyst already in motion",
+            "REACTIVE": f"stock already {'up' if moved >= 0 else 'down'} {abs(moved):.1f}% today in the call's direction",
+            "PULLBACK": (f"stock {'down' if moved < 0 else 'up'} {abs(moved):.1f}% today against the call; "
+                         "wait for the move to stabilize"),
             "WAIT": "waiting for confirmation",
             "HOLD": "insufficient conviction",
         }
@@ -1793,8 +1796,14 @@ class RecommendationEngine:
                 ):
                     return "PRE_POSITION"
 
-        if conviction >= 30 and abs(stock_moved_pct) > 3:
+        # A move of more than 3% today: REACTIVE when it goes the call's way (the setup is already
+        # under way, so entry chases it), PULLBACK when it goes against a bullish call (the stock
+        # is falling while the signals stay positive; wait for the selling to stabilize). Only
+        # bullish convictions reach here (>= 30).
+        if conviction >= 30 and stock_moved_pct > 3:
             return "REACTIVE"
+        if conviction >= 30 and stock_moved_pct < -3:
+            return "PULLBACK"
         if conviction >= 15:
             return "WAIT"
         return "HOLD"

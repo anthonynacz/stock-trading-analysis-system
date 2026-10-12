@@ -1,5 +1,7 @@
 """Scoring and calculation utilities for EdgeFlow services."""
 
+import re
+
 from config import TIER1_FIRMS, TIER2_FIRMS, WATCHLIST_WEIGHTS
 
 # ── Rating tier lookup ──────────────────────────────────────────────────────
@@ -270,8 +272,17 @@ def assign_impact_level(
     category: str,
     sentiment_score: float,
     firm_tier: int | None = None,
+    *,
+    third_party: bool = False,
 ) -> str:
-    """Return HIGH, MEDIUM, or LOW impact level."""
+    """Return HIGH, MEDIUM, or LOW impact level.
+
+    ``third_party``: the article is another company's announcement that only names the ticker as a
+    partner or platform (see ``is_third_party_mention``). Such press releases are upbeat by design,
+    so their sentiment says little about the ticker: never HIGH, LOW when the tone is mild.
+    """
+    if third_party:
+        return "MEDIUM" if abs(sentiment_score) >= 0.4 else "LOW"
     if abs(sentiment_score) > 0.6:
         return "HIGH"
     if category.upper() == "ANALYST" and firm_tier == 1:
@@ -281,6 +292,55 @@ def assign_impact_level(
     if abs(sentiment_score) < 0.2:
         return "LOW"
     return "MEDIUM"
+
+
+# Words that tie a company to someone else's announcement ("... for the Marvell ...",
+# "... built on NVIDIA ...", "... partners with Marvell ...").
+_PARTNER_LINK = re.compile(
+    r"\b(?:for|with|on|to|into|across|from|via|using|powered\s+by|built\s+on|based\s+on|supports?|"
+    r"supporting|integrat\w*(?:\s+with)?|partner\w*(?:\s+with)?|collaborat\w*(?:\s+with)?|teams?\s+up\s+with|"
+    r"certified\s+(?:for|on)|available\s+(?:for|on))\s+(?:the\s+|an?\s+)?$"
+)
+_SUBJECT_WINDOW = 3     # the company is the headline's subject when named within its first 3 words
+# Press-release verbs: the headline is another company's announcement ("Aviz Networks Delivers ...").
+_ANNOUNCE_VERB = re.compile(
+    r"^(?:deliver|launch|announc|unveil|introduc|expand|releas|debut|add|join|partner|team|integrat|select|"
+    r"deploy|adopt|choos|win|sign|achiev|ship|offer|showcas|demonstrat|bring|enabl|extend|collaborat|"
+    r"certif|complet|open|build|power|support|unite|roll|tap|pick|award)\w*$"
+)
+# First words that mean the headline is commentary, not a company's announcement.
+_NOT_A_SUBJECT = {"the", "a", "an", "why", "how", "what", "is", "are", "could", "should", "will", "can", "this",
+                  "these", "here", "here's", "top", "best", "better", "do", "does", "buy", "sell"}
+
+
+def is_third_party_mention(ticker: str, company_name: str | None, headline: str) -> bool:
+    """True when ``headline`` is another company's news that names the ticker only as a partner,
+    customer or platform: the first mention comes after a linking word ("for", "with", "on",
+    "powered by", "partners with", ...) and not at the start of the headline, where the subject is.
+
+    "Aviz Networks Delivers Production-Ready SONiC for the Marvell Ethernet Switching Portfolio" -> True
+    "Marvell Unveils Second-generation Structera X" -> False (Marvell is the subject)
+    "Better AI Stock: Arm vs. Marvell Technology" -> False (a comparison, not a partner mention)
+    "The AI Spending Boom Could Be Just Getting Started for Microsoft" -> False (commentary, no announcer)
+    """
+    words = re.findall(r"[A-Za-z0-9&'.\-]+", headline or "")
+    if not words:
+        return False
+    tokens = {ticker.lower()}
+    if company_name:
+        first = next((w.strip(",.()").lower() for w in company_name.split() if len(w.strip(",.()")) > 3), None)
+        if first:
+            tokens.add(first)
+    norm = [w.lower().rstrip(".,:;").removesuffix("'s") for w in words]
+    hit = next((i for i, w in enumerate(norm) if w in tokens or w.strip("()") in tokens), None)
+    if hit is None or hit < _SUBJECT_WINDOW:
+        return False
+    if norm[0] in _NOT_A_SUBJECT or norm[0][:1].isdigit():
+        return False
+    if not any(_ANNOUNCE_VERB.match(w) for w in norm[1:hit]):
+        return False
+    before = " ".join(norm[max(0, hit - 4):hit]) + " "
+    return bool(_PARTNER_LINK.search(before))
 
 
 def compute_ticker_relevance(
@@ -315,6 +375,9 @@ def compute_ticker_relevance(
         return any(t in text for t in name_tokens)
 
     if _in_text(headline_lower):
+        if is_third_party_mention(ticker, company_name, headline):
+            # Named, but only as someone else's partner: below the intraday materiality bar (0.7).
+            return 0.6, "THIRD_PARTY"
         return 1.0, "HEADLINE"
 
     if summary_lower and _in_text(summary_lower):

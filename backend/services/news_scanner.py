@@ -19,7 +19,12 @@ from config import settings
 from db.models import MarketNews, NewsTickerRelevance
 from utils.data_sources import DataSourceClient
 from utils.finbert import score_batch
-from utils.scoring import assign_impact_level, classify_news_category, compute_ticker_relevance
+from utils.scoring import (
+    assign_impact_level,
+    classify_news_category,
+    compute_ticker_relevance,
+    is_third_party_mention,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +248,10 @@ class NewsScanner:
             api_related = item.get("related_tickers", [])
 
             category = classify_news_category(headline)
-            impact_level = assign_impact_level(category, sentiment_score)
+            third_party = is_third_party_mention(
+                searched_ticker, (ticker_company_map or {}).get(searched_ticker), headline,
+            ) if searched_ticker else False
+            impact_level = assign_impact_level(category, sentiment_score, third_party=third_party)
 
             published_at = self._parse_datetime(item.get("published_at"))
 

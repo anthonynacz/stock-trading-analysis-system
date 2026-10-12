@@ -46,6 +46,12 @@ Signals are stacked across eight categories. Classification thresholds: ≥60 ST
 - Catalyst window is ACTIVE (T-14 to T-0) AND conviction ≥ 30, OR
 - A leading pre-position signal is present AND conviction ≥ 25. Leading signals: **Analyst Revision Cluster**, **Smart Money Positioning**, **Insider Buy Cluster**. This lets PRE_POSITION fire weeks before an earnings catalyst when institutional positioning clusters. Rationale text names the leading signal instead of "catalyst window active" when it triggers this branch.
 
+Otherwise, with conviction ≥ 30 the move today decides, by direction: **REACTIVE** when the stock is up > 3% (the move agrees with the bullish call, entry chases it) and **PULLBACK** when it is down > 3% (a red day against the call: wait for the selling to stabilize). Before 2026-10-12 REACTIVE used |move| > 3%, so a BUY on a falling stock read "catalyst already in motion". The rationale states the actual move ("stock down 3.9% today against the call").
+
+## Third-party partner news
+
+`utils.scoring.is_third_party_mention()` flags headlines that are another company's announcement naming the ticker only as a partner or platform ("Aviz Networks Delivers ... for the Marvell ..."): the ticker is not in the first 3 words, the headline starts with a named company and an announcement verb, and a linking word (for / with / on / built on / partners with ...) precedes the mention. For such pairs `compute_ticker_relevance` returns 0.6 `THIRD_PARTY` (below the intraday rescore bar of 0.7) and `assign_impact_level(..., third_party=True)` never returns HIGH. Tests: `tests/test_entry_strategy_and_partner_news.py`.
+
 Technical indicators (RSI-14, 5d/20d momentum, volume ratio, drawdown metrics, consecutive down days, down-day volume ratio, OHLC candlestick metrics) are computed from yfinance 2-month price history via `DataSourceClient.get_technical_indicators()`. Moving averages (50d, 200d), short interest, and 52-week range come from yfinance `.info` via `get_stock_data()`. SPY benchmark comes from `get_market_benchmark()`.
 
 ## Strike Recommender

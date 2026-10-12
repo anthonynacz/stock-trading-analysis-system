@@ -53,7 +53,8 @@ const POSITIVE_ACTIONS = new Set(['STRONG_BUY', 'BUY']);
 /** Display order + copy for the engine's entry strategies (see backend/services/CLAUDE.md § Entry Strategy). */
 const ENTRY_GROUPS: { key: string; label: string; hint: string }[] = [
   { key: 'PRE_POSITION', label: 'Pre-position', hint: 'Enter ahead of the catalyst' },
-  { key: 'REACTIVE', label: 'Reactive', hint: 'Catalyst already in motion — enter on confirmation' },
+  { key: 'REACTIVE', label: 'Reactive', hint: 'Already up 3%+ today in the call’s direction — entry chases the move' },
+  { key: 'PULLBACK', label: 'Pullback', hint: 'Down 3%+ today against a bullish call — wait for the selling to stabilize' },
   { key: 'WAIT', label: 'Wait', hint: 'Bullish but waiting for confirmation' },
 ];
 
