@@ -48,6 +48,10 @@ Signals are stacked across eight categories. Classification thresholds: ≥60 ST
 
 Otherwise, with conviction ≥ 30 the move today decides, by direction: **REACTIVE** when the stock is up > 3% (the move agrees with the bullish call, entry chases it) and **PULLBACK** when it is down > 3% (a red day against the call: wait for the selling to stabilize). Before 2026-10-12 REACTIVE used |move| > 3%, so a BUY on a falling stock read "catalyst already in motion". The rationale states the actual move ("stock down 3.9% today against the call").
 
+## Geopolitical signals
+
+`utils/geopolitical.py` (used by the recommendation engine and the industry analyzer) scans 48 h of general news. An article is an event only when its HEADLINE carries an anchor term for that event (tariff, export control, sanctions, missile, OPEC cut, Strait of Hormuz, ...) and headline + summary give >= 2 keyword hits. Matching is whole-word (plural/verb endings count once, overlapping phrases merge; a multi-word anchor in the headline counts double). Skipped: single-company results stories ("X's margins/sales/earnings ..."), tariff or sanctions RELIEF headlines, defense contracts ("missile deal"); fuel export bans are oil events, not trade wars; "nuclear deal" means Iran, not a utility's power deal. Tests: `tests/test_geopolitical.py` (real headlines from 2026-10-05..12).
+
 ## Third-party partner news
 
 `utils.scoring.is_third_party_mention()` flags headlines that are another company's announcement naming the ticker only as a partner or platform ("Aviz Networks Delivers ... for the Marvell ..."): the ticker is not in the first 3 words, the headline starts with a named company and an announcement verb, and a linking word (for / with / on / built on / partners with ...) precedes the mention. For such pairs `compute_ticker_relevance` returns 0.6 `THIRD_PARTY` (below the intraday rescore bar of 0.7) and `assign_impact_level(..., third_party=True)` never returns HIGH. Tests: `tests/test_entry_strategy_and_partner_news.py`.
