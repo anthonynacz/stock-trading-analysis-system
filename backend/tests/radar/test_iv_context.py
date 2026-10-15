@@ -37,6 +37,7 @@ def test_atm_iv_picks_the_nearest_strike_and_skips_unquoted():
     assert options.atm_iv(chain, 124.0) == pytest.approx(40.0)
     assert options.atm_iv({"calls": [{"strike": 125, "impliedVolatility": 0.00001}]}, 124.0) is None
     assert options.atm_iv(None, 124.0) is None
+    assert options.atm_iv({"calls": [{"strike": 125, "impliedVolatility": 0.016}]}, 124.0) is None   # GTX-style noise
 
 
 def test_the_first_reading_of_the_day_is_kept_and_the_change_measured():
@@ -148,7 +149,10 @@ def test_catalysts_rank_company_and_analyst_items_first_and_drop_stale_ones():
                "previousGrade": "Equal-Weight", "newGrade": "Overweight", "newsURL": "g"}]
     got = context.catalysts_for("EBAY", now, news, press, filings, grades)
     assert [c["kind"] for c in got] == ["8-K", "press", "analyst"]
-    assert got[2]["title"] == "Morgan Stanley upgrade Equal-Weight → Overweight"
+    assert got[2]["title"] == "Morgan Stanley upgrades Equal-Weight → Overweight"
+    held = context.catalysts_for("X", now, [], None, None, [{"publishedDate": "2026-10-15T12:00:00.000Z",
+                                  "gradingCompany": "Oppenheimer", "action": "hold", "newGrade": "Outperform"}])
+    assert held[0]["title"] == "Oppenheimer maintains Outperform"
     only_news = context.catalysts_for("EBAY", now, news, None, None, None)
     assert [c["title"] for c in only_news] == ["eBay Jumps 5% on Takeover Speculation"]     # deduped, stale dropped
     assert only_news[0]["at"] == "2026-10-15T17:05:00Z"

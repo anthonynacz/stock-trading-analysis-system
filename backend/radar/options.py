@@ -34,6 +34,8 @@ YAHOO_OPTIONS = "https://query2.finance.yahoo.com/v7/finance/options/{}"
 RETRY_STATUSES = (429, 500, 502, 503, 504)
 
 Fetch = Callable[[str, dict, float], tuple[int, Any]]
+# Yahoo reports near-zero IVs (0.00001, 0.016 ...) for unquoted contracts: below 5% an equity option IV is noise.
+MIN_IV = 0.05
 
 # IV visibility (what hit EBAY on 2026-10-15: a takeover rumour lifted the front-week IV to 1.7x the stock's
 # normal volatility, then it bled from 44% to 36% while the stock drifted): the ~30-day IV for the term
@@ -127,7 +129,7 @@ def atm_iv(chain: dict | None, spot: float | None) -> float | None:
         return None
     atm = min(calls, key=lambda c: (abs(float(c["strike"]) - spot), -float(c["strike"])))
     iv = _num(atm.get("impliedVolatility"))
-    return iv * 100.0 if iv is not None and iv >= 0.01 else None
+    return iv * 100.0 if iv is not None and iv >= MIN_IV else None
 
 
 def grade(oi: int, spread: float | None, ntm_volume: int, limits: dict) -> str:
@@ -180,7 +182,7 @@ def chain_metrics(result: dict, chain: dict | None, now: float, *, baseline: dic
     atm = min(calls, key=lambda c: (abs(float(c["strike"]) - spot), -float(c["strike"])))
     strike, bid, ask = float(atm["strike"]), _num(atm.get("bid")), _num(atm.get("ask"))
     iv = _num(atm.get("impliedVolatility"))
-    iv = iv * 100.0 if iv is not None and iv >= 0.01 else None        # Yahoo shows ~0 for unquoted contracts
+    iv = iv * 100.0 if iv is not None and iv >= MIN_IV else None        # Yahoo shows ~0 for unquoted contracts
     sp = spread_pct(bid, ask)
     call_vol = sum(_int(c.get("volume")) for c in calls)
     put_vol = sum(_int(p.get("volume")) for p in puts)

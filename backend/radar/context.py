@@ -33,6 +33,10 @@ CONTEXT = {
 }
 # Company-issued and analyst items explain a move better than third-party articles.
 KIND_RANK = {"8-K": 0, "press": 1, "analyst": 2, "news": 3}
+# FMP grade actions as words ("hold" means the rating was maintained, not a Hold rating).
+ANALYST_VERB = {"upgrade": "upgrades", "downgrade": "downgrades", "hold": "maintains", "maintain": "maintains",
+                "init": "starts coverage at", "initialise": "starts coverage at", "initialize": "starts coverage at",
+                "reiterate": "reiterates"}
 
 Get = Callable[[str, dict], Any]
 
@@ -139,8 +143,9 @@ def catalysts_for(sym: str, now: datetime, news: list[dict], press: list[dict] |
         if (t := et_to_utc(g.get("publishedDate"))) and t >= grade_cut:
             firm, action = g.get("gradingCompany") or "Analyst", (g.get("action") or "").lower()
             prev, new = g.get("previousGrade"), g.get("newGrade")
-            change = f"{prev} → {new}" if prev and new and prev != new else (new or "")
-            items.append({"kind": "analyst", "title": f"{firm} {action} {change}".strip(), "at": _iso(t),
+            verb = ANALYST_VERB.get(action, action or "rates")
+            change = f"{prev} → {new}" if action in ("upgrade", "downgrade") and prev and new and prev != new else (new or "")
+            items.append({"kind": "analyst", "title": f"{firm} {verb} {change}".strip(), "at": _iso(t),
                           "source": firm, "url": g.get("newsURL")})
     seen: set[str] = set()
     unique = []
