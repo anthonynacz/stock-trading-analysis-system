@@ -61,6 +61,34 @@ RUNTIME: dict = {
     "stale_warning_min": 12,       # the page and GET /api/radar flag a stale scan after this many minutes
 }
 
+# Financial Modeling Prep (radar/fetch.py): the primary source of quotes, 5-minute bars, daily bars and movers
+# when FMP_API_KEY is set in the environment (empty: Yahoo first, as before). Yahoo, then Nasdaq, serve whatever
+# FMP did not, call by call. Measured on the production key in 2026-10 (the FMP notes in radar/fetch.py's docstring).
+FMP: dict = {
+    "enabled": True,
+    "timeout_s": 10,
+    "workers": 8,                  # concurrent 5-minute and daily requests
+    "quote_batch": 600,            # symbols per /quote request (the 542-symbol universe went in one, 0.2-1 s)
+    "daily_batch": 5,              # /historical-price-full answers at most 5 symbols per request
+    "intraday_window_days": 10,    # /historical-chart/5min returns at most 10 calendar days per request
+    # Today's 5-minute bars are FMP's 1-minute bars summed: its 5-minute endpoint serves the newest bar 3-4 minutes
+    # late. A bar's last minute reaches FMP 15-50 s after the bar ends; a bar still missing it is provisional
+    # (Bars.provisional_last: the engine holds decisions on it) until this many seconds after its end.
+    "settle_s": 90,
+    # Multi-day 5-minute ranges (the baselines): "yahoo" = Yahoo first, FMP only fills symbols Yahoo missed;
+    # "fmp" = FMP's 5-minute endpoint first. Its history is off the basis of FMP's own 1-minute bars (an opening
+    # minute counted twice, bars missing volume) and of Yahoo's; FMP's 1-minute sums match Yahoo's bars best
+    # (the FMP notes in radar/fetch.py's docstring). Switching changes the baselines at the next warmup.
+    "bars_history": "yahoo",
+    # Today's 5-minute bars (the scan): "fmp" = FMP's 1-minute sums first; "yahoo" = Yahoo first, FMP fills misses
+    # (keeps the scan on the baselines' basis while those come from Yahoo).
+    # 2026-10-15: "yahoo" in production. FMP's 1-minute volume differs from the Yahoo-built baselines by > 10% on
+    # ~18% of symbol-days, which would shift the volume gates; FMP serves the scan's bars only when Yahoo fails.
+    # Moving the scan to FMP bars means building the baselines from FMP too (the 1-minute engine work, backtested).
+    "bars_today": "yahoo",
+    "movers_screen_limit": 10_000, # stock-screener rows (US stocks, cap >= $2B, price >= $5: ~2,100 in 2026-10)
+}
+
 # Monthly gzip backups of archived radar rows (radar/housekeeping.py); a docker volume in production.
 BACKUP_DIR = os.environ.get("RADAR_BACKUP_DIR", "/backups/radar")
 # Nightly housekeeping (US Eastern) and the row-level retention of hot rows, backups and manifest entries.

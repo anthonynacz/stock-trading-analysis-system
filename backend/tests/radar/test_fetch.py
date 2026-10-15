@@ -106,9 +106,11 @@ def nasdaq_ok(url, params):
 
 
 def make(transport, health=None, workers=16, **kw):
+    """A Fetcher on the fake clock. FMP stays off unless a test passes fmp_key (FMP_API_KEY in the environment,
+    e.g. inside the radar container, must not route these Yahoo/Nasdaq tests to FMP)."""
     sleeps: list[float] = []
     f = Fetcher(health=health, workers=workers, transport=transport,
-                **{"sleep": sleeps.append, "clock": lambda: T0, "rng": random.Random(7), **kw})
+                **{"sleep": sleeps.append, "clock": lambda: T0, "rng": random.Random(7), "fmp_key": "", **kw})
     return f, sleeps
 
 
@@ -1153,7 +1155,7 @@ LIVE_SYMBOLS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B"
 
 @pytest.mark.live      # skipped unless RADAR_LIVE=1 (tests/radar/conftest.py)
 def test_live_quotes_and_bars_for_20_symbols():
-    f = Fetcher()
+    f = Fetcher(fmp_key="")                     # the Yahoo path; tests/radar/test_fetch_fmp.py has FMP's
     quotes, qr = f.quotes(LIVE_SYMBOLS)
     bars, br = f.bars_5m(LIVE_SYMBOLS)
     assert qr.source == "yahoo" and qr.ok >= 18 and br.ok >= 18

@@ -1,4 +1,25 @@
-"""Keyless market data for the radar (SPEC 4.2): Yahoo first, Nasdaq behind a circuit breaker.
+"""Market data for the radar (SPEC 4.2): FMP first when FMP_API_KEY is set, then Yahoo, Nasdaq behind a breaker.
+
+Financial Modeling Prep (paid, keyed) serves quotes, 5-minute bars, daily bars and movers when the key is in the
+environment. Whatever it does not serve in a call (a failed request, a symbol it lacks, its breaker open) goes to
+the keyless path below for that call, so an FMP outage costs a fallback, never a stalled tick. FMP has its own
+breaker (family "fmp"). The key is sent in a header, never in a URL, and never appears in notes, health or logs.
+
+FMP, measured on the production key on 2026-10-15 (v3 API; the "stable" batch quote is not in the plan, 402):
+- /quote: the 542-symbol universe in one request (0.2-1 s). Against Yahoo's v7 quote for 520 names in session:
+  volume ratio median 1.0000 (p5 0.9994), previous close identical, price within 2 bp (median 0.5). No quote type,
+  market state or sector; exchanges are NASDAQ/NYSE/AMEX/CBOE (Yahoo: NMS or NGM/NYQ/PCX for Arca ETFs/BTS).
+- 5-minute endpoint: at most 10 calendar days per request; regular session only unless extended=true. It serves
+  a bar once it has ended, but the newest bar can hold one minute's volume until the next bar appears 3-4 minutes
+  later. Its history counts the 09:30 minute twice in the first bar on some days and drops volume from some bars.
+- 1-minute endpoint: at most 3 calendar days per request. A bar's last minute arrives 15-45 s after the bar ends
+  (32 bar ends, 16 names) and did not change after that (one exception in 3 more samples). Its 5-minute sums
+  match Yahoo's bars better than FMP's own 5-minute history (22 names x 5 sessions, per symbol-day volume vs
+  Yahoo: 1-minute sums median 0.998, p5-p95 0.85-1.08; 5-minute history median 0.974, p5 0.83). So today's bars
+  are 1-minute sums and the baselines' multi-day ranges stay on Yahoo by default (FMP["bars_history"]).
+- Daily /historical-price-full: at most 5 symbols per request; close and volume equal to Yahoo's (1,560 rows).
+- Movers: /stock_market/gainers|losers|actives return 50 rows of mostly micro caps; the stock screener plus a batch
+  quote rebuilds Yahoo's screens instead (~2,100 stocks with cap >= $2B and price >= $5, ~3 s).
 
 Transport rules come from measurements (radar/docs/data-sources.md):
 - Yahoo v8 chart goes through curl_cffi with Chrome impersonation: plain requests gets 429 at once.
@@ -11,7 +32,10 @@ The breaker is kept per endpoint family (SPEC 12.1): "chart" (v8 chart: bars_5m,
 """
 from __future__ import annotations
 
+import calendar
+import logging
 import math
+import os
 import random
 import re
 import threading
@@ -19,7 +43,7 @@ import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from datetime import time as dtime
 from functools import cached_property, partial, wraps
 from typing import Any, Protocol
@@ -29,10 +53,15 @@ from curl_cffi import requests as creq
 from yfinance.data import YfData
 from yfinance.exceptions import YFRateLimitError
 
-from radar.calendar_nyse import ET, session_for
-from radar.config import REFERENCE_SYMBOLS, US_EXCHANGES
+from radar.calendar_nyse import ET, phase_at, previous_sessions, session_for
+from radar.config import FMP, REFERENCE_SYMBOLS, US_EXCHANGES
 from radar.types import Bars, DailyBars, FetchReport, Quote
 from radar.universe import gics_sector, load_universe
+
+# httpx logs every request line, URL and query string included, at INFO. The radar's FMP key travels in a header,
+# but nothing that runs in the radar's process may log a keyed URL (security requirement): request lines stay out.
+for _logger in ("httpx", "httpcore"):
+    logging.getLogger(_logger).setLevel(logging.WARNING)
 
 YAHOO_CHART = "https://query2.finance.yahoo.com/v8/finance/chart/{}"
 YAHOO_QUOTE = "https://query1.finance.yahoo.com/v7/finance/quote"
@@ -75,7 +104,25 @@ NQ_LOSER_PCT = -2.5
 NQ_ACTIVE_VOLUME = 5_000_000
 _NQ_NUMBER_JUNK = re.compile(r"[$,%+\s]")
 
+FMP_BASE = "https://financialmodelingprep.com/api/v3"
+FMP_QUOTE = "/quote/{}"
+FMP_CHART = "/historical-chart/5min/{}"
+FMP_DAILY = "/historical-price-full/{}"
+FMP_PROFILE = "/profile/{}"
+FMP_SCREENER = "/stock-screener"
+FMP_FAMILY = "fmp"
+FMP_PROFILE_BATCH = 100
+# FMP exchange short names -> the Yahoo codes the universe filter knows (US_EXCHANGES). FMP says AMEX for NYSE
+# American and for NYSE Arca alike; Yahoo calls Arca's ETFs PCX and NYSE American's stocks ASE.
+FMP_EXCHANGES = {"NASDAQ": "NMS", "NYSE": "NYQ", "AMEX": "ASE", "CBOE": "BTS", "BATS": "BTS",
+                 "NYSEARCA": "PCX", "ARCA": "PCX"}
+FMP_PHASES = {"pre": "PRE", "regular": "REGULAR", "post": "POST", "closed": "CLOSED"}
+_FMP_RANGE = re.compile(r"(\d+)(d|wk|mo|y)")
+
 Reply = tuple[int, Any]
+# A source's attempt, run under one _Budget, and a builder of attempts for a symbol subset (None for movers).
+type Attempt[T] = Callable[[_Budget], tuple[T, FetchReport]]
+type Attempts[T] = Callable[[Any], Attempt[T]]
 
 
 def to_nasdaq(symbol: str, sep: str = ".") -> str:
@@ -104,12 +151,19 @@ class Transport(Protocol):
 
     def nasdaq(self, url: str, params: dict | list, timeout: float) -> Reply: ...
 
+    # Optional: a transport without `fmp` (or a Fetcher without a key) never uses FMP.
+    def fmp(self, path: str, params: dict, timeout: float) -> Reply: ...
+
 
 class HttpTransport:
     """curl_cffi Chrome sessions (one per worker thread) plus yfinance for the crumb-guarded endpoints."""
 
-    def __init__(self) -> None:
+    def __init__(self, fmp_key: str = "") -> None:
         self._local = threading.local()
+        self._fmp_key = fmp_key
+
+    def __repr__(self) -> str:
+        return "HttpTransport()"    # never the key
 
     def _session(self) -> creq.Session:
         session = getattr(self._local, "session", None)
@@ -174,6 +228,19 @@ class HttpTransport:
             return code, None
         if body.get("data") is None and status.get("bCodeMessage"):
             return 503, None    # HTTP 200 with "Something went wrong. Please try again later.": retry it
+        return 200, body
+
+    def fmp(self, path: str, params: dict, timeout: float) -> Reply:
+        """FMP v3 GET. The key goes in the `apikey` header (FMP accepts it there), never in the query string, so
+        no URL that a library logs or puts in an error message carries it. Unknown symbols are HTTP 200 with an
+        empty body; a bad key is 401 (final); a refusal sent as HTTP 200 with an "Error Message" is mapped to 429
+        when it is a rate limit (retried) and to 403 otherwise."""
+        r = self._session().get(FMP_BASE + path, params=params, headers={"apikey": self._fmp_key}, timeout=timeout)
+        if r.status_code != 200:
+            return r.status_code, None
+        body = r.json()
+        if isinstance(body, dict) and "Error Message" in body:
+            return (429 if "limit" in str(body["Error Message"]).lower() else 403), None
         return 200, body
 
 
@@ -241,6 +308,8 @@ def _reports_health(method: Callable[..., tuple[Any, FetchReport]]) -> Callable[
                 self._on_health(self.health_state())
             except Exception as e:  # noqa: BLE001 - the side file is best effort
                 report.notes.append(f"on_health failed: {type(e).__name__}")
+        if self._fmp_key:   # defence in depth: no note ever carries the key (none is built from a URL)
+            report.notes = [n.replace(self._fmp_key, "***") for n in report.notes]
         return result, report
     return call
 
@@ -251,17 +320,22 @@ class Fetcher:
     `deadline` is an absolute time on `clock` (time.time by default), e.g. tick start + tick_timeout_s - 40:
     past it no request starts and no retry is made, so a hung or blocked source cannot outlive the tick.
     `on_health` receives `health_state()` after every public call.
+    `fmp_key`: None reads FMP_API_KEY from the environment; empty (or a transport without `fmp`) means no FMP.
     `transport`, `sleep`, `clock` and `rng` exist for tests.
     """
 
     def __init__(self, *, health: dict | None = None, workers: int = 16, timeout_s: float = 12.0,
                  deadline: float | None = None, on_health: Callable[[dict], None] | None = None,
                  transport: Transport | None = None, sleep: Callable[[float], None] = time.sleep,
-                 clock: Callable[[], float] = time.time, rng: random.Random | None = None) -> None:
+                 clock: Callable[[], float] = time.time, rng: random.Random | None = None,
+                 fmp_key: str | None = None) -> None:
         self._max_workers = max(1, workers)
         self._min_workers = min(MIN_WORKERS, self._max_workers)
         self._timeout = timeout_s
-        self._tx = transport or HttpTransport()
+        self._fmp_key = (os.environ.get("FMP_API_KEY", "") if fmp_key is None else fmp_key).strip()
+        self._tx = transport or HttpTransport(fmp_key=self._fmp_key)
+        self._fmp_on = bool(self._fmp_key) and bool(FMP["enabled"]) and callable(getattr(self._tx, "fmp", None))
+        self._fmp_timeout = min(timeout_s, float(FMP["timeout_s"]))
         self._sleep = sleep
         self._clock = clock
         self._rng = rng or random.Random()
@@ -278,19 +352,30 @@ class Fetcher:
         symbols = _unique(symbols)
         if not symbols:
             return {}, FetchReport(source="none", status="ok")
-        return self._serve("crumb", partial(self._yahoo_quotes, symbols), partial(self._nasdaq_quotes, symbols))
+        return self._serve_primary("crumb", symbols, lambda rest: partial(self._fmp_quotes, rest),
+                                   lambda rest: partial(self._yahoo_quotes, rest),
+                                   lambda rest: partial(self._nasdaq_quotes, rest))
 
     @_reports_health
     def bars_5m(self, symbols: list[str], *, range_: str = "1d",
                 include_prepost: bool = False) -> tuple[dict[str, Bars], FetchReport]:
+        """FMP serves one session ("1d") first unless FMP["bars_today"] is "yahoo". Multi-day ranges (the
+        baselines) go to Yahoo first unless FMP["bars_history"] is "fmp": FMP's 5-minute history is not on the
+        basis of its own 1-minute bars nor of Yahoo's (see the module docstring), so it only fills symbols Yahoo
+        did not serve."""
         symbols = _unique(symbols)
         if not symbols:
             return {}, FetchReport(source="none", status="ok")
         params = {"range": range_, "interval": "5m", "includePrePost": "true" if include_prepost else "false"}
-        yahoo = partial(self._yahoo_charts, symbols, params, _parse_bars)
-        # Nasdaq's chart covers one session only, so baseline ranges have no fallback.
-        nasdaq = partial(self._nasdaq_bars, symbols, include_prepost) if range_ == "1d" else None
-        return self._serve("chart", yahoo, nasdaq)
+        span = self._fmp_span(range_)
+        fmp = (lambda rest: partial(self._fmp_bars, rest, span, include_prepost)) if span else None
+        history = span is not None and span[0] != span[1]
+        # Nasdaq's chart covers one session only, so baseline ranges have no Nasdaq fallback.
+        return self._serve_primary("chart", symbols, fmp,
+                                   lambda rest: partial(self._yahoo_charts, rest, params, _parse_bars),
+                                   lambda rest: partial(self._nasdaq_bars, rest, include_prepost)
+                                   if range_ == "1d" else None,
+                                   fmp_first=FMP["bars_history" if history else "bars_today"] == "fmp")
 
     @_reports_health
     def daily(self, symbols: list[str], *, range_: str = "3mo") -> tuple[dict[str, DailyBars], FetchReport]:
@@ -298,33 +383,116 @@ class Fetcher:
         if not symbols:
             return {}, FetchReport(source="none", status="ok")
         params = {"range": range_, "interval": "1d"}
-        return self._serve("chart", partial(self._yahoo_charts, symbols, params, _parse_daily), None)
+        span = self._fmp_span(range_)
+        return self._serve_primary("chart", symbols,
+                                   (lambda rest: partial(self._fmp_daily, rest, span)) if span else None,
+                                   lambda rest: partial(self._yahoo_charts, rest, params, _parse_daily),
+                                   lambda rest: None)
 
     @_reports_health
     def movers(self) -> tuple[list[Quote], FetchReport]:
-        return self._serve("crumb", self._yahoo_movers, self._nasdaq_movers)
+        return self._serve_primary("crumb", None, lambda _: self._fmp_movers, lambda _: self._yahoo_movers,
+                                   lambda _: self._nasdaq_movers)
 
     def health_state(self) -> dict:
-        """Per-family breakers under `families`; the top level keeps the flat fields state.json shows,
-        each the worst of the two families (last_ok_at: the older one)."""
-        fams = {name: _family_json(h) for name, h in self._fam.items()}
+        """Per-family breakers under `families`; the top level keeps the flat fields state.json shows.
+
+        Without FMP the top level is the worst of the two Yahoo families (last_ok_at: the older one) and
+        `name` says nasdaq while either Yahoo breaker is open, exactly as before FMP. With FMP on, `families`
+        also holds "fmp" and `primary` says which source leads: while FMP's breaker is closed it serves, so the
+        top level is FMP's own record and `name` stays "yahoo" (the label state.json and tick._source_ok know;
+        a Yahoo breaker FMP makes irrelevant does not flag the scan as on backup data). While FMP's breaker is
+        open the Yahoo families drive the top level as without FMP."""
+        fams = {name: _family_json(self._fam[name]) for name in FAMILIES}
+        yahoo = [self._fam[name] for name in FAMILIES]
         worst = max(FAMILIES, key=lambda name: _badness(self._fam[name]))
-        last_ok = [h.last_ok_at for h in self._fam.values() if h.last_ok_at]
-        return {"schema": 1, "name": "nasdaq" if any(h.breaker_open for h in self._fam.values()) else "yahoo",
-                "status": max((h.status for h in self._fam.values()), key=STATUSES.index),
-                "consecutive_failures": max(h.consecutive_failures for h in self._fam.values()),
-                "last_ok_at": min(last_ok) if last_ok else None,
-                "workers": self._workers, "breaker": fams[worst]["breaker"], "families": fams}
+        last_ok = [h.last_ok_at for h in yahoo if h.last_ok_at]
+        state = {"schema": 1, "name": "nasdaq" if any(h.breaker_open for h in yahoo) else "yahoo",
+                 "status": max((h.status for h in yahoo), key=STATUSES.index),
+                 "consecutive_failures": max(h.consecutive_failures for h in yahoo),
+                 "last_ok_at": min(last_ok) if last_ok else None,
+                 "workers": self._workers, "breaker": fams[worst]["breaker"], "families": fams}
+        if self._fmp_on:
+            f = self._fam[FMP_FAMILY]
+            fams[FMP_FAMILY] = _family_json(f)
+            state["primary"] = "yahoo" if f.breaker_open else "fmp"
+            if not f.breaker_open:
+                state.update(name="yahoo", status=f.status, consecutive_failures=f.consecutive_failures,
+                             last_ok_at=f.last_ok_at, breaker=fams[FMP_FAMILY]["breaker"])
+        return state
 
     # ------------------------------------------------------------------ breaker and degraded mode
     def _restore(self, d: dict) -> tuple[int, dict[str, _Health]]:
         """Health read back from engine.json; anything malformed falls back to a fresh, closed breaker.
-        A flat record from before the per-family breakers applies to both families."""
+        A flat record from before the per-family breakers applies to both Yahoo families (not to FMP)."""
         d = d if isinstance(d, dict) else {}
         workers = _int(d.get("workers")) or self._max_workers
         families = d.get("families")
-        return (min(self._max_workers, max(self._min_workers, workers)),
-                {name: _family_from(families.get(name) if isinstance(families, dict) else d) for name in FAMILIES})
+        fams = {name: _family_from(families.get(name) if isinstance(families, dict) else d) for name in FAMILIES}
+        fams[FMP_FAMILY] = _family_from(families.get(FMP_FAMILY) if isinstance(families, dict) else None)
+        return min(self._max_workers, max(self._min_workers, workers)), fams
+
+    def _serve_primary[T](self, family: str, symbols: list[str] | None, fmp: Attempts[T] | None,
+                          yahoo: Attempts[T], nasdaq: Callable[[Any], Attempt[T] | None],
+                          *, fmp_first: bool = True) -> tuple[T, FetchReport]:
+        """FMP and the Yahoo family's own routing (_serve: Yahoo, Nasdaq behind its breaker), one after the other.
+
+        Each argument builds a source's attempt for a symbol subset (None for movers; nasdaq may give None: no
+        fallback). FMP first (the default): the Yahoo family fetches only the symbols FMP did not serve and the
+        results are merged; for movers a non-ok FMP answer is replaced as a whole. fmp_first=False: the Yahoo
+        family first and FMP fills what it left out. Without FMP (no key, an unsupported range), past the deadline,
+        or while FMP's breaker is open between probes, the call is exactly the Yahoo-first call it was before FMP."""
+        start = time.perf_counter()
+        expired = self._deadline is not None and self._clock() >= self._deadline
+        if not self._fmp_on or fmp is None or expired:
+            return self._serve(family, yahoo(symbols), nasdaq(symbols))
+        if not fmp_first:
+            result, report = self._serve(family, yahoo(symbols), nasdaq(symbols))
+            if symbols is None or not report.failed or self._clock() >= (self._deadline or math.inf):
+                return result, report
+            rest = list(report.failed)
+            tried = self._try_fmp(fmp(rest))
+            if tried is None:
+                return result, report
+            result = {**tried[0], **result}
+            report = _merged_report(symbols, result, report, tried[1])
+        else:
+            tried = self._try_fmp(fmp(symbols))
+            if tried is None:                           # FMP's breaker is open and this call is not a probe
+                result, report = self._serve(family, yahoo(symbols), nasdaq(symbols))
+                report.notes.insert(0, "fmp breaker open")
+                return result, report
+            result, report = tried
+            if symbols is None:
+                if report.status != "ok":
+                    fb, fb_report = self._serve(family, yahoo(None), nasdaq(None))
+                    fb_report.http_429 += report.http_429
+                    fb_report.notes.insert(0, f"fmp {report.status}: {report.ok}/{report.requested} ok")
+                    result, report = fb, fb_report
+            elif report.failed:
+                rest = list(report.failed)
+                fb, fb_report = self._serve(family, yahoo(rest), nasdaq(rest))
+                result = {**fb, **result}
+                report = _merged_report(symbols, result, report, fb_report)
+        report.ms = int((time.perf_counter() - start) * 1000)
+        return result, report
+
+    def _try_fmp[T](self, fn: Callable[[_Budget], tuple[T, FetchReport]]) -> tuple[T, FetchReport] | None:
+        """One FMP attempt under the breaker: closed, a full attempt; open, every PROBE_EVERY-th call is a probe
+        (one try per request) and the others return None (not tried)."""
+        h = self._fam[FMP_FAMILY]
+        if h.breaker_open:
+            h.calls_open += 1
+            if h.calls_open % PROBE_EVERY:
+                return None
+            result, report = self._run(fn, 1, fail_fast=True)
+            if report.status == "ok":
+                report.notes.append("fmp probe ok")
+        else:
+            result, report = self._run(fn, TRIES, fail_fast=True)
+        self._record(FMP_FAMILY, report)
+        h.status = report.status
+        return result, report
 
     def _serve[T](self, family: str, yahoo: Callable[[_Budget], tuple[T, FetchReport]],
                nasdaq: Callable[[_Budget], tuple[T, FetchReport]] | None) -> tuple[T, FetchReport]:
@@ -341,14 +509,14 @@ class Fetcher:
                 result, report = self._run(nasdaq, TRIES)
             else:
                 result, report = self._run(yahoo, 1, fail_fast=True)   # the probe: one try per request
-                self._record_yahoo(family, report)
+                self._record(family, report)
                 if report.status == "ok":
                     report.notes.append("yahoo probe ok")
                 else:
                     result, report = self._fall_back(nasdaq, report, "yahoo probe")
         else:
             result, report = self._run(yahoo, TRIES, fail_fast=True)
-            self._record_yahoo(family, report)
+            self._record(family, report)
             if h.breaker_open and nasdaq is not None and report.status == "down":
                 result, report = self._fall_back(nasdaq, report, "yahoo")   # this call opened the breaker
         report.ms = int((time.perf_counter() - start) * 1000)
@@ -377,7 +545,7 @@ class Fetcher:
         report.notes.insert(0, f"{label} {yahoo_report.status}: {yahoo_report.ok}/{yahoo_report.requested} ok")
         return result, report
 
-    def _record_yahoo(self, family: str, report: FetchReport) -> None:
+    def _record(self, family: str, report: FetchReport) -> None:
         h = self._fam[family]
         ok = report.status == "ok"
         if family == "chart":   # the chart is the only Yahoo endpoint fetched by the worker pool
@@ -517,6 +685,134 @@ class Fetcher:
             return self._request(partial(self._tx.nasdaq, *request, self._timeout), budget)
         return _pool_map(fetch, requests, NASDAQ_WORKERS)
 
+    # ------------------------------------------------------------------ FMP (primary when keyed)
+    @cached_property
+    def _universe(self) -> dict[str, dict]:
+        return {r["symbol"]: r for r in load_universe()}
+
+    def _fmp_gets(self, requests: list[tuple[str, dict]], budget: _Budget) -> list[_Reply]:
+        def fetch(request: tuple[str, dict]) -> _Reply:
+            return self._request(partial(self._tx.fmp, *request, self._fmp_timeout), budget)
+        return _pool_map(fetch, requests, int(FMP["workers"])) if requests else []
+
+    def _fmp_span(self, range_: str) -> tuple[date, date] | None:
+        """(first, last) ET dates a Yahoo-style range covers on FMP, or None for a range FMP is not asked for.
+        `last` is today once today's session has reached its pre-open, else the latest session before it;
+        Nd counts sessions back from it, Nwk/Nmo/Ny calendar time back from today (as Yahoo's ranges do)."""
+        m = _FMP_RANGE.fullmatch(range_)
+        if not m or int(m[1]) <= 0:
+            return None
+        now = self._clock()
+        today = datetime.fromtimestamp(now, ET).date()
+        s = session_for(today)
+        last = today if s is not None and now >= s.pre_open.timestamp() else previous_sessions(today, 1)[0].day
+        n, unit = int(m[1]), m[2]
+        if unit == "d":
+            first = last if n == 1 else previous_sessions(last, n - 1)[0].day
+        elif unit == "wk":
+            first = today - timedelta(weeks=n)
+        else:
+            first = _months_back(today, n if unit == "mo" else 12 * n)
+        return min(first, last), last
+
+    def _market_state(self) -> str:
+        return FMP_PHASES[phase_at(datetime.fromtimestamp(self._clock(), UTC))[0]]
+
+    def _fmp_profiles(self, symbols: list[str], budget: _Budget) -> dict[str, dict]:
+        """Profile rows (isEtf, sector, exchangeShortName, companyName) for symbols outside the universe, whose
+        ETF flag and sector universe.csv cannot give. Best effort: a failed request leaves them unknown."""
+        replies = self._fmp_gets([(FMP_PROFILE.format(",".join(b)), {}) for b in _chunks(symbols, FMP_PROFILE_BATCH)],
+                                 budget)
+        return {str(row.get("symbol")): row for r in replies for row in _rows(r.body)}
+
+    def _fmp_quotes(self, symbols: list[str], budget: _Budget) -> tuple[dict[str, Quote], FetchReport]:
+        batches = _chunks(symbols, int(FMP["quote_batch"]))
+        replies = self._fmp_gets([(FMP_QUOTE.format(",".join(b)), {}) for b in batches], budget)
+        wanted = set(symbols)
+        rows = [row for r in replies for row in _rows(r.body) if _text(row.get("symbol")) in wanted]
+        outside = [row["symbol"] for row in rows if row["symbol"] not in self._universe]
+        profiles = self._fmp_profiles(outside, budget) if outside else {}
+        state, out = self._market_state(), {}
+        for row in rows:
+            q = _fmp_quote(row, self._universe.get(row["symbol"]), profiles.get(row["symbol"]), state)
+            if q.price is not None:
+                out[q.symbol] = q
+        return out, _report("fmp", symbols, out, sum(r.http_429 for r in replies))
+
+    def _fmp_movers(self, budget: _Budget) -> tuple[list[Quote], FetchReport]:
+        """Yahoo's three predefined screens rebuilt on FMP: the stock screener lists the US-listed stocks (no
+        ETFs or funds) with cap >= $2B and price >= $5, a batch quote prices them, and the screens' thresholds
+        pick the movers (as the Nasdaq fallback does). FMP's own gainers/losers/actives lists are not used: their
+        50 rows are almost all micro caps, so names the radar could add (cap >= $2B) rarely appear in them."""
+        params = {"marketCapMoreThan": int(NQ_MOVER_CAP_MIN), "priceMoreThan": NQ_MOVER_PRICE_MIN,
+                  "isEtf": "false", "isFund": "false", "isActivelyTrading": "true",
+                  "exchange": "NYSE,NASDAQ,AMEX", "limit": int(FMP["movers_screen_limit"])}
+        [screen] = self._fmp_gets([(FMP_SCREENER, params)], budget)
+        listed = {row["symbol"]: row for row in _rows(screen.body) if _text(row.get("symbol"))}
+        replies = self._fmp_gets([(FMP_QUOTE.format(",".join(b)), {})
+                                  for b in _chunks(list(listed), int(FMP["quote_batch"]))], budget)
+        state = self._market_state()
+        quotes = [_fmp_quote(row, None, listed[row["symbol"]], state)
+                  for r in replies for row in _rows(r.body) if _text(row.get("symbol")) in listed]
+        answered = {"screener"} if listed else set()
+        if replies and all(r.status == 200 for r in replies):
+            answered.add("quotes")
+        movers = [q for q in _threshold_movers(quotes) if q.exchange in US_EXCHANGES]
+        return movers, _report("fmp", ["screener", "quotes"], answered,
+                               screen.http_429 + sum(r.http_429 for r in replies))
+
+    def _fmp_bars(self, symbols: list[str], span: tuple[date, date], include_prepost: bool,
+                  budget: _Budget) -> tuple[dict[str, Bars], FetchReport]:
+        """One session ("1d"): FMP's 1-minute bars summed into 5-minute bars, because its 5-minute endpoint
+        serves the newest bar long before it is complete (measured: a 1-minute share of the volume at +50 s,
+        still incomplete at +120 s), while a bar's last 1-minute row arrives 15-45 s after its end. Longer
+        ranges: the 5-minute endpoint, in windows of FMP's per-request limit. A symbol fails when any of its
+        requests failed, or when it has no regular-session bar although a session in the range has been open
+        for 10 minutes (an unknown symbol is an empty 200)."""
+        first, last = span
+        minute = first == last
+        windows = [(last, last)] if minute else _fmp_windows(first, last, int(FMP["intraday_window_days"]))
+        path = "/historical-chart/1min/{}" if minute else FMP_CHART
+        extra = {"extended": "true"} if include_prepost else {}
+        jobs = [(s, a, b) for s in symbols for a, b in windows]
+        replies = self._fmp_gets([(path.format(s), {"from": a.isoformat(), "to": b.isoformat(), **extra})
+                                  for s, a, b in jobs], budget)
+        rows: dict[str, list] = {s: [] for s in symbols}
+        bad: set[str] = set()
+        for (s, _, _), reply in zip(jobs, replies, strict=True):
+            if reply.status != 200 or not isinstance(reply.body, list):
+                bad.add(s)
+            else:
+                rows[s].extend(reply.body)
+        now = self._clock()
+        expect = any(s.open_epoch + 600 <= now for s in _sessions_between(first, last))
+        out = {}
+        for s in symbols:
+            if s in bad:
+                continue
+            bars = _parse_or_none(_parse_fmp_bars, s, rows[s], include_prepost, minute, now)
+            if bars is not None and (len(bars) or not expect):
+                out[s] = bars
+        return out, _report("fmp", symbols, out, sum(r.http_429 for r in replies))
+
+    def _fmp_daily(self, symbols: list[str], span: tuple[date, date],
+                   budget: _Budget) -> tuple[dict[str, DailyBars], FetchReport]:
+        first, _ = span
+        today = datetime.fromtimestamp(self._clock(), ET).date()     # today's live row, as Yahoo's daily has it
+        batches = list(_chunks(symbols, int(FMP["daily_batch"])))
+        replies = self._fmp_gets([(FMP_DAILY.format(",".join(b)), {"from": first.isoformat(), "to": today.isoformat()})
+                                  for b in batches], budget)
+        wanted, out = set(symbols), {}
+        for reply in replies:
+            body = reply.body if reply.status == 200 and isinstance(reply.body, dict) else {}
+            items = body.get("historicalStockList")     # several symbols; one symbol is the item itself
+            for item in _rows(items) if isinstance(items, list) else ([body] if "historical" in body else []):
+                sym = str(item.get("symbol", ""))
+                daily = _parse_or_none(_parse_fmp_daily, sym, item.get("historical"))
+                if sym in wanted and daily is not None and len(daily.day):
+                    out[sym] = daily
+        return out, _report("fmp", symbols, out, sum(r.http_429 for r in replies))
+
 
 # ---------------------------------------------------------------------- reports
 def _grade(requested: int, ok: int, http_429: int) -> str:
@@ -536,6 +832,23 @@ def _report(source: str, requested: list[str], got: dict | set, http_429: int, *
         status = "degraded"     # the fallback source is never full quality (no auctions, 1-minute H/L)
     return FetchReport(source=source, status=status, requested=len(requested), ok=ok, failed=failed,
                        http_429=http_429, notes=["nasdaq fallback"] if fallback else [])
+
+
+def _merged_report(symbols: list[str], got: dict, first: FetchReport, second: FetchReport) -> FetchReport:
+    """One report for a call one source served in part and the other completed (FMP and the Yahoo family, in
+    either order). The source is the first one's when it served any symbol, but "nasdaq" whenever Nasdaq served
+    any: the tick reads that as volume off the baselines' basis (degraded_volume). Graded on the merged coverage
+    plus the Yahoo family's 429s; a call the deadline cut, or one Nasdaq helped, is at best degraded."""
+    failed = [s for s in symbols if s not in got]
+    ok = len(symbols) - len(failed)
+    nasdaq = any(r.source == "nasdaq" and r.ok > 0 for r in (first, second))
+    status = _grade(len(symbols), ok, sum(r.http_429 for r in (first, second) if r.source != "fmp"))
+    if status == "ok" and (nasdaq or any(n.startswith("deadline reached") for n in first.notes + second.notes)):
+        status = "degraded"
+    return FetchReport(source="nasdaq" if nasdaq else (first.source if first.ok else second.source), status=status,
+                       requested=len(symbols), ok=ok, failed=failed, http_429=first.http_429 + second.http_429,
+                       notes=[(f"{first.source} {first.status}: {first.ok}/{first.requested} ok; "
+                               f"{second.source} served {second.ok}/{second.requested}")] + first.notes + second.notes)
 
 
 def _retryable(status: int) -> bool:
@@ -761,7 +1074,13 @@ def _nasdaq_screener_quote(row: dict) -> Quote:
 
 def _nasdaq_movers(rows: list[dict]) -> list[Quote]:
     """Gainers, losers and most actives from the screener, with Yahoo's predefined-screen thresholds."""
-    big = [q for q in map(_nasdaq_screener_quote, rows)
+    return _threshold_movers(list(map(_nasdaq_screener_quote, rows)))
+
+
+def _threshold_movers(quotes: list[Quote]) -> list[Quote]:
+    """Yahoo's predefined screens rebuilt from quotes: day_gainers (> +3%), day_losers (< -2.5%), most_actives
+    (> 5M shares), each cap >= $2B and price >= $5, at most SCREEN_COUNT per screen, deduplicated in that order."""
+    big = [q for q in quotes
            if (q.market_cap or 0) >= NQ_MOVER_CAP_MIN and (q.price or 0) >= NQ_MOVER_PRICE_MIN
            and q.change_pct is not None]
     gainers = sorted((q for q in big if q.change_pct > NQ_GAINER_PCT), key=lambda q: -q.change_pct)
@@ -807,6 +1126,178 @@ def _parse_nasdaq_bars(symbol: str, body: Any, include_prepost: bool) -> Bars | 
     ends = np.r_[starts[1:], len(bucket)] - 1
     return Bars(symbol, bucket[starts], y[starts], np.maximum.reduceat(y, starts), np.minimum.reduceat(y, starts),
                 y[ends], np.rint(np.add.reduceat(w, starts)).astype(np.int64))
+
+
+# ---------------------------------------------------------------------- FMP parsing
+def _rows(body: Any) -> list[dict]:
+    return [r for r in body if isinstance(r, dict)] if isinstance(body, list) else []
+
+
+def _months_back(d: date, months: int) -> date:
+    y, m = divmod(d.year * 12 + d.month - 1 - months, 12)
+    return date(y, m + 1, min(d.day, calendar.monthrange(y, m + 1)[1]))
+
+
+def _sessions_between(first: date, last: date) -> Iterator[Any]:
+    d = first
+    while d <= last:
+        s = session_for(d)
+        if s is not None:
+            yield s
+        d += timedelta(days=1)
+
+
+def _fmp_windows(first: date, last: date, size: int) -> list[tuple[date, date]]:
+    """[first, last] cut into request windows of at most `size` calendar days, newest first. Each window ends on a
+    session day, and stretches holding no session are not requested."""
+    out, end = [], last
+    while end >= first:
+        while end >= first and session_for(end) is None:
+            end -= timedelta(days=1)
+        if end < first:
+            break
+        start = max(first, end - timedelta(days=size - 1))
+        out.append((start, end))
+        end = start - timedelta(days=1)
+    return out
+
+
+def _fmp_epochs(stamps: list[str]) -> np.ndarray:
+    """FMP's "YYYY-MM-DD HH:MM:SS" (US/Eastern wall clock, bar start) -> UTC epoch seconds. The ET offset is taken
+    at noon of each date: bars run 04:00-20:00, clear of the 02:00 DST switch."""
+    base: dict[str, int] = {}
+    out = np.empty(len(stamps), dtype=np.int64)
+    for i, s in enumerate(stamps):
+        b = base.get(s[:10])
+        if b is None:
+            day = date.fromisoformat(s[:10])
+            b = base[s[:10]] = (int(datetime.combine(day, dtime(0), UTC).timestamp())
+                                - int(datetime.combine(day, dtime(12), ET).utcoffset().total_seconds()))
+        if len(s) != 19 or s[10] != " ":
+            raise ValueError(f"unexpected FMP date {s!r}")
+        out[i] = b + int(s[11:13]) * 3600 + int(s[14:16]) * 60 + int(s[17:19])
+    return out
+
+
+def _parse_fmp_bars(symbol: str, rows: list[dict], include_prepost: bool, minute: bool, now: float) -> Bars:
+    """FMP intraday rows (newest first, ET bar starts, float volumes) -> Bars on the Yahoo contract: ascending
+    unique UTC bar starts on the 5-minute grid, regular session only unless include_prepost, int64 volume.
+    1-minute rows are summed into 5-minute bars (open first, high max, low min, close last, volume sum).
+
+    provisional_last (FMP has no last-trade row): a 1-minute aggregate whose last minute has not arrived is
+    provisional until FMP["settle_s"] after its end. Measured live (32 bar ends, 16 names): the last minute
+    arrived 15-45 s after the bar's end and the bar did not change after that (in 3 earlier samples one arrived
+    minute was revised within 50 s). A thin name's last minute may never come (no trade): the clock settles it.
+    Not covered: the session's last bar gains the closing auction in its last minute 30-130 s after the close,
+    after that minute has arrived. FMP's 5-minute endpoint rebuilds its newest bar only when the next one appears
+    (3-4 minutes after the end; until then it can hold one minute's volume), so that bar stays provisional until
+    5 minutes + settle_s after its end."""
+    rows = [r for r in rows if r.get("close") is not None and r.get("date")]
+    if not rows:
+        return _empty_bars(symbol)
+    ts = _fmp_epochs([str(r["date"]) for r in rows])
+    cols = {k: np.array([_nan_float(r.get(k)) for r in rows], dtype=np.float64)
+            for k in ("open", "high", "low", "close", "volume")}
+    order = np.argsort(ts, kind="stable")
+    ts = ts[order]
+    c = cols["close"][order]
+    keep = np.isfinite(c)
+    if not include_prepost:
+        sessions: dict[int, Any] = {}
+        inside = np.zeros(len(ts), dtype=bool)
+        for i, t in enumerate(ts):
+            day = (int(t) - 4 * 3600) // 86400       # any instant 04:00-20:00 ET lies on its ET date in UTC-4h
+            if day not in sessions:
+                sessions[day] = session_for(date.fromordinal(day + 719163))
+            s = sessions[day]
+            inside[i] = s is not None and s.open_epoch <= t < s.close_epoch
+        keep &= inside
+    ts, c = ts[keep], c[keep]
+    a = {}
+    for k in ("open", "high", "low"):
+        x = cols[k][order][keep]
+        a[k] = np.where(np.isfinite(x), x, c)       # a missing open/high/low is the close, as for Yahoo
+    v = np.nan_to_num(cols["volume"][order][keep])
+    last = _last_of_runs(ts)                        # a repeated stamp: the later row wins
+    ts, c, v, a = ts[last], c[last], v[last], {k: x[last] for k, x in a.items()}
+    if not len(ts):
+        return _empty_bars(symbol)
+    settle = float(FMP["settle_s"])
+    if minute:
+        bucket = ts - ts % 300
+        starts = np.flatnonzero(np.r_[True, bucket[1:] != bucket[:-1]])
+        ends = np.r_[starts[1:], len(bucket)] - 1
+        complete = int(ts[-1]) >= int(bucket[-1]) + 240         # the newest bar's last minute is in
+        ts, o, h, lo, c = (bucket[starts], a["open"][starts], np.maximum.reduceat(a["high"], starts),
+                           np.minimum.reduceat(a["low"], starts), c[ends])
+        v = np.add.reduceat(v, starts)
+        provisional = not complete and now < int(ts[-1]) + 300 + settle
+    else:
+        on_grid = ts % 300 == 0
+        ts, c, v = ts[on_grid], c[on_grid], v[on_grid]
+        o, h, lo = a["open"][on_grid], a["high"][on_grid], a["low"][on_grid]
+        provisional = bool(len(ts)) and now < int(ts[-1]) + 600 + settle
+    return Bars(symbol, ts, o, h, lo, c, np.rint(v).astype(np.int64), provisional_last=provisional)
+
+
+def _parse_fmp_daily(symbol: str, rows: Any) -> DailyBars | None:
+    """FMP daily rows (newest first; close is split-adjusted like Yahoo's, adjClose also has dividends) ->
+    DailyBars ascending by session date, one row per date (the later row wins), today's live row included."""
+    if not isinstance(rows, list):
+        return None
+    rows = [r for r in rows if isinstance(r, dict) and r.get("date") and _float(r.get("close")) is not None]
+    rows.sort(key=lambda r: str(r["date"]))
+    day = np.array([str(r["date"])[:10] for r in rows], dtype="datetime64[D]")
+    c = np.array([r["close"] for r in rows], dtype=np.float64)
+    keep = _last_of_runs(day.astype(np.int64))
+    cols = {k: np.array([_nan_float(r.get(k)) for r in rows], dtype=np.float64) for k in ("open", "high", "low")}
+    ohl = {k: np.where(np.isfinite(x), x, c) for k, x in cols.items()}
+    v = np.rint(np.nan_to_num(np.array([_nan_float(r.get("volume")) for r in rows], dtype=np.float64)))
+    return DailyBars(symbol, day[keep], ohl["open"][keep], ohl["high"][keep], ohl["low"][keep], c[keep],
+                     v[keep].astype(np.int64))
+
+
+def _fmp_exchange(code: Any, etf: bool) -> str | None:
+    """FMP exchange short name -> Yahoo code (unknown codes, e.g. OTC, pass through and fail the US filter)."""
+    if not isinstance(code, str) or not code.strip():
+        return None
+    c = code.strip().upper()
+    return "PCX" if c == "AMEX" and etf else FMP_EXCHANGES.get(c, c)
+
+
+def _fmp_quote(row: dict, meta: dict | None, profile: dict | None, market_state: str) -> Quote:
+    """FMP /quote row -> Quote. FMP has no quote type, market state or sector in /quote: universe names take
+    their ETF flag and sector from universe.csv (as GICS), others from a profile or screener row (isEtf, sector);
+    without either the type stays unknown. The market state comes from the NYSE calendar at the fetcher's clock.
+    volume is the consolidated regular-session volume (equal to Yahoo's regularMarketVolume, median ratio 1.000
+    over 520 names in session, measured)."""
+    symbol = str(row.get("symbol", ""))
+    if meta is not None:
+        etf: bool | None = bool(meta.get("is_etf")) or symbol in REFERENCE_SYMBOLS
+    elif profile is not None and isinstance(profile.get("isEtf"), bool):
+        etf = profile["isEtf"]
+    else:
+        etf = None
+    sector = (meta or {}).get("sector") or gics_sector((profile or {}).get("sector") or None)
+    return Quote(
+        symbol=symbol,
+        price=_float(row.get("price")),
+        prev_close=_float(row.get("previousClose")),
+        change_pct=_float(row.get("changesPercentage")),
+        day_volume=_int(row.get("volume")),
+        market_time=_int(row.get("timestamp")),
+        market_state=market_state,
+        avg_volume_3m=_int(row.get("avgVolume")),
+        market_cap=_float(row.get("marketCap")),
+        exchange=_fmp_exchange(row.get("exchange") or (profile or {}).get("exchangeShortName"), bool(etf)),
+        quote_type=None if etf is None else ("ETF" if etf else "EQUITY"),
+        name=row.get("name") or (meta or {}).get("name") or (profile or {}).get("companyName"),
+        sector=None if etf else sector)
+
+
+def _nan_float(v: Any) -> float:
+    f = _float(v)
+    return math.nan if f is None else f
 
 
 def _empty_bars(symbol: str) -> Bars:
