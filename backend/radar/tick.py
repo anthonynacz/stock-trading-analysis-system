@@ -691,6 +691,7 @@ class Tick:
                 "market": snap.get("market") or dict(DEFAULT_MARKET), "counts": counts,
                 "members": snap.get("members") or [], "heating": snap.get("heating") or [],
                 "recent_exits": snap.get("recent_exits") or [], "sector_banners": snap.get("sector_banners") or [],
+                "trending": snap.get("trending") or [],
                 "health": self._health(), "disclaimer": DISCLAIMER, "sensitivity": self.sensitivity}
 
     def _closed_state(self) -> dict:

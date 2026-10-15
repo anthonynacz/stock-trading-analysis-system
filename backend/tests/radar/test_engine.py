@@ -167,7 +167,7 @@ def test_snapshot_shapes(run_day):
     session, _, _, outs, _ = run_day
     k = events(outs, "RUN")[0]["slot"]
     heat_snap = outs[k - 1].snapshot
-    assert set(heat_snap) == {"members", "heating", "recent_exits", "market", "sector_banners", "counts"}
+    assert set(heat_snap) == {"members", "heating", "recent_exits", "market", "sector_banners", "counts", "trending"}
     h = next(x for x in heat_snap["heating"] if x["ticker"] == "RUN")
     assert set(h) == HEATING_KEYS and h["direction"] == "up" and ISO_Z.match(h["since"])
     snap = outs[k + 2].snapshot

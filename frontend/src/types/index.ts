@@ -981,6 +981,26 @@ export interface RadarExit {
   exit_detail: string;
 }
 
+/** "Trending today": a stock grinding one way since the open on heavy volume (radar/trend.py). Display only. */
+export interface RadarTrend {
+  ticker: string;
+  name: string | null;
+  sector: string;
+  direction: RadarDirection;
+  /** Still trending (false: dropped off after 4 closes on the wrong side of VWAP). */
+  active: boolean;
+  flagged_at: string;
+  flag_price: number;
+  price: number | null;
+  move_since_flag_pct: number | null;
+  chg_day_pct: number | null;
+  rvol_day: number | null;
+  zday: number | null;
+  vwap_dist_pct: number | null;
+  exited_at: string | null;
+  exit_reason: string | null;
+}
+
 /** Names the per-sector cap kept off the radar (never members). */
 export interface RadarSectorBanner {
   sector: string;
@@ -1020,6 +1040,8 @@ export interface RadarState {
   /** Current session, newest first, ≤ 30. A closed heartbeat keeps the last session's exits. */
   recent_exits: RadarExit[];
   sector_banners: RadarSectorBanner[];
+  /** Trending today, active first (absent on older snapshots). */
+  trending?: RadarTrend[];
   health: RadarHealth;
   disclaimer: string;
   /** The scan sensitivity these results were computed with (absent on older snapshots). */

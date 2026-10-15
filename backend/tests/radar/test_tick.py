@@ -37,7 +37,7 @@ SCAN = ["AAPL", "NVDA", "XOM", "SPY", "QQQ", "IWM"]
 
 STATE_KEYS = {"schema", "generated_at", "tick_id", "last_bar", "status", "message", "session", "next_tick_at",
               "params_version", "source", "market", "counts", "members", "heating", "recent_exits", "sector_banners",
-              "health", "disclaimer", "sensitivity"}
+              "health", "disclaimer", "sensitivity", "trending"}
 SCAN_KEYS = {"v", "tick", "run_id", "written_at", "session", "phase", "status", "lag_s", "universe", "stage_b",
              "quotes_ok", "quotes_err", "bars_ok", "bars_err", "members", "heating", "entered", "exited",
              "processed_slots", "source", "ms", "git_prev", "hot_bytes", "errors"}

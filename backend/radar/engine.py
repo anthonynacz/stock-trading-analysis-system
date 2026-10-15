@@ -9,6 +9,7 @@ The output describes what is moving now. It is educational analysis, not advice 
 from __future__ import annotations
 
 import copy
+import dataclasses
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -18,6 +19,8 @@ import numpy as np
 from radar.baselines import BaselinePack
 from radar.calendar_nyse import Session
 from radar.config import REFERENCE_SYMBOLS
+from radar.trend import (EXIT as TREND_EXIT, RECOMMENDED as TREND_SET, THRESHOLDS as TREND_THRESHOLDS, TrendEntry,
+                         trend_features, trend_flags, update_trend_list)
 from radar.features import (NS, Grid, SessionFeatures, build_grid, direction, entry_gates, extreme,
                             halt_flags, score, split_flags)
 from radar.types import Bars, Quote
@@ -75,6 +78,9 @@ class TickOutput:
     events: list[dict] = field(default_factory=list)
     member_rows: list[dict] = field(default_factory=list)
     snapshot: dict = field(default_factory=dict)
+
+
+TREND_FIELDS = {f.name for f in dataclasses.fields(TrendEntry)}
 
 
 @dataclass
@@ -169,7 +175,9 @@ class Engine:
         `quotes_ok=False` (the quote call is down): members, heating names and the references only. The scan
         never widens to the whole universe during an outage, and missing data never evicts a member."""
         st = self.st
-        must = set(st["members"]) | set(st["heating"]) | set(REFERENCE_SYMBOLS)
+        # Listed trend names keep their bars coming, so their exit rule can be evaluated.
+        trending = {s for s, e in (st.get("trend") or {}).items() if e.get("exit_slot") is None}
+        must = set(st["members"]) | set(st["heating"]) | set(REFERENCE_SYMBOLS) | trending
         k = self._final_slot(now_epoch)
         if k < 0 or not quotes_ok:
             return sorted(must)
@@ -313,7 +321,32 @@ class Engine:
         if self.first_entry <= k <= self.last_entry:
             self._new_heating(k, f, sc, ok, ctx, cands)
         self._admit(sorted(cands, key=lambda c: (-c[0], c[1])), k, k_now, f, sc, ctx, out)
+        self._trend(k, ctx, f)
         self._rows(k, out)
+
+    def _trend(self, k: int, ctx: _Ctx, f: dict) -> None:
+        """The "Trending today" list (radar/trend.py, display only: it never touches members or entries).
+        Names that grind one way from the open on heavy volume; at most one listing per name and day."""
+        th = TREND_THRESHOLDS[TREND_SET]
+        raw = self.st.setdefault("trend", {})
+        listed = {s: TrendEntry(**{k_: v for k_, v in e.items() if k_ in TREND_FIELDS}) for s, e in raw.items()}
+        g, pix = ctx.grid, ctx.pix
+        tf = trend_features(g.o, g.h, g.l, g.c, g.v, k=k, spy=ctx.spy, beta=self.beta[pix], sigd=self.sigd[pix],
+                            pc=self.pc[pix], cvm_k=self.cvm[pix, k], slope_bars=th["slope_bars"])
+        ok = ctx.eligible & (g.first <= k) & f["fresh"]
+        flags = trend_flags(tf, k, th) & np.isfinite(self.sigd[pix]) & np.isfinite(self.pc[pix])
+        update_trend_list(listed, ctx.symbols, tf, k, flags, g.c[:, k], ok, TREND_EXIT)
+        for sym, e in listed.items():
+            doc = {**raw.get(sym, {}), **dataclasses.asdict(e)}
+            i = ctx.row.get(sym)
+            if i is not None and g.first[i] <= k:
+                vwap = float(tf["vwap"][i])
+                doc["view"] = {"slot": k, "price": float(g.c[i, k]), "chg_day": _pct(f["rday"][i]),
+                               "rvol_day": _r(tf["rvolc"][i], 2), "zday": _r(tf["zday"][i], 2),
+                               "vwap_dist": round((float(g.c[i, k]) / vwap - 1.0) * 100.0, 2) if vwap else None}
+                doc.setdefault("name", self.names[pix[i]])
+                doc.setdefault("sector", self.sectors[pix[i]])
+            raw[sym] = doc
 
     def _process_frozen(self, k: int, k_now: int, out: TickOutput) -> None:
         """A slot with no usable market data (only reached when the session end is already due)."""
@@ -686,5 +719,22 @@ class Engine:
         counts = {"universe": int(self.elig.sum()), "stage_b": st["counts"]["stage_b"], "members": len(members),
                   "heating": len(heating), "entered_today": st["counts"]["entered"],
                   "exited_today": st["counts"]["exited"]}
+        trending = []
+        for sym, e in (st.get("trend") or {}).items():
+            v = e.get("view") or {}
+            price = v.get("price")
+            moved = _pct(math.log(price / e["flag_price"])) if price and e.get("flag_price") else None
+            trending.append({
+                "ticker": sym, "name": e.get("name"), "sector": e.get("sector") or "Unknown",
+                "direction": _dir_word(e["dir"]), "active": e.get("exit_slot") is None,
+                "flagged_at": iso(ss.slot_start(e["flag_slot"]) + 300), "flag_price": round(e["flag_price"], 4),
+                "price": round(price, 4) if price else None, "move_since_flag_pct": moved,
+                "chg_day_pct": v.get("chg_day"), "rvol_day": v.get("rvol_day"), "zday": v.get("zday"),
+                "vwap_dist_pct": v.get("vwap_dist"),
+                "exited_at": iso(ss.slot_start(e["exit_slot"]) + 300) if e.get("exit_slot") is not None else None,
+                "exit_reason": e.get("exit_reason")})
+        trending.sort(key=lambda t: t["flagged_at"], reverse=True)       # newest first, active ones on top
+        trending.sort(key=lambda t: not t["active"])
         return {"members": members, "heating": heating, "recent_exits": copy.deepcopy(st["exits"]),
+                "trending": trending,
                 "market": market, "sector_banners": banners, "counts": counts}

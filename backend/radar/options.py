@@ -364,6 +364,7 @@ def radar_tickers(state: dict, limit: int) -> list[str]:
     session (positions opened on them are often still open: their IV keeps being tracked)."""
     members = sorted(state.get("members") or [], key=lambda m: -(m.get("intensity") or 0))
     names = [m.get("ticker") for m in members] + [h.get("ticker") for h in state.get("heating") or []]
+    names += [t.get("ticker") for t in state.get("trending") or [] if t.get("active")]
     session = (state.get("session") or {}).get("date")
     names += [x.get("ticker") for x in state.get("recent_exits") or []
               if session and str(x.get("exited_at") or "")[:10] == session]

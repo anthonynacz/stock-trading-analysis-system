@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import type { RadarExit, RadarHeating, RadarOptionMetrics } from '../../types';
+import type { RadarExit, RadarHeating, RadarOptionMetrics, RadarTrend } from '../../types';
 import { fmtDuration, fmtEt, toMs } from './clock';
 import { exitText, fmtIntensity, fmtMove, fmtRadarPrice, signClass, tickerHref } from './model';
 import { DirArrow } from './DirArrow';
@@ -144,6 +144,53 @@ export function RadarExitList({
               )}
             </div>
             <div className="text-xs text-text-secondary text-right whitespace-nowrap">left {fmtEt(exited)}</div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** "Trending today": names grinding one way since the open (display only, never radar members). */
+export function RadarTrendingList({
+  items,
+  options,
+}: {
+  items: RadarTrend[];
+  options?: Record<string, RadarOptionMetrics>;
+}) {
+  return (
+    <ul className="divide-y divide-border">
+      {items.map((t) => {
+        const since = toMs(t.flagged_at);
+        const left = toMs(t.exited_at);
+        return (
+          <li key={`${t.ticker}|${t.flagged_at}`} className={`flex justify-between gap-3 py-2.5 text-sm ${t.active ? '' : 'opacity-50'}`}>
+            <div className="min-w-0">
+              <div className="leading-snug">
+                <DirArrow dir={t.direction} /> <TickerLink ticker={t.ticker} />
+                {t.name && <span className="text-text-secondary"> {t.name}</span>}
+                <span className={`font-semibold tabular-nums ${signClass(t.chg_day_pct)}`}> {fmtMove(t.chg_day_pct)} today</span>
+                {t.move_since_flag_pct !== null && (
+                  <span className="text-text-secondary tabular-nums"> · {fmtMove(t.move_since_flag_pct)} since listed</span>
+                )}
+              </div>
+              <div className="text-xs text-text-secondary leading-snug mt-0.5 tabular-nums">
+                {t.rvol_day !== null ? `Day volume ${t.rvol_day.toFixed(1)}× normal` : ''}
+                {t.vwap_dist_pct !== null ? ` · ${fmtMove(t.vwap_dist_pct)} vs VWAP` : ''}
+                {!t.active && left !== null ? ` · dropped off ${fmtEt(left)} (back through VWAP)` : ''}
+              </div>
+              {options?.[t.ticker] && (
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
+                  <IvBadge o={options[t.ticker]} />
+                  <CatalystLine o={options[t.ticker]} />
+                </div>
+              )}
+            </div>
+            <div className="text-xs text-text-secondary text-right whitespace-nowrap tabular-nums">
+              {fmtRadarPrice(t.price)}
+              {since !== null && <span className="block">listed {fmtEt(since)} at {fmtRadarPrice(t.flag_price)}</span>}
+            </div>
           </li>
         );
       })}

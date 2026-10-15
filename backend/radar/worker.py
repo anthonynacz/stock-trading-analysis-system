@@ -726,7 +726,7 @@ class Worker:
             scanned, _ = resolve_session(slot.tick_epoch, now, ignore_calendar=False, final=slot.final)
             if not same_session_scan(state, scanned.day.isoformat() if scanned else None):
                 state.update(last_bar=None, market=dict(DEFAULT_MARKET), counts=dict(EMPTY_COUNTS),
-                             **{k: [] for k in ("members", "heating", "recent_exits", "sector_banners")})
+                             **{k: [] for k in ("members", "heating", "recent_exits", "sector_banners", "trending")})
             if scanned is not None:
                 state["session"] = session_json(scanned, cal.phase_at(datetime.fromtimestamp(now, cal.UTC))[0])
             what = "timed out" if res.get("status") == "timeout" else "failed"
@@ -739,6 +739,7 @@ class Worker:
                 state["source"] = source_block(engine["source_health"])
             if not isinstance(state.get("sensitivity"), dict):
                 state["sensitivity"] = self._sensitivity()
+            state.setdefault("trending", [])
             published = state
         else:
             # The warmup (or a tick before any snapshot exists) leaves the snapshot as it is: the store
