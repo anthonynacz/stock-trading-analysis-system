@@ -883,6 +883,8 @@ export interface RadarSession {
 
 export interface RadarSource {
   name: string;
+  /** "fmp" when FMP serves quotes, daily bars and movers (5-minute bars stay on `name`). */
+  primary?: 'fmp' | 'yahoo';
   status: 'ok' | 'degraded' | 'down' | null;
   consecutive_failures: number | null;
   last_ok_at: string | null;

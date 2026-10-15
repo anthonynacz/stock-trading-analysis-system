@@ -193,9 +193,13 @@ def source_block(h: Any) -> dict:
         failures = int(h.get("consecutive_failures") or 0)
     except (TypeError, ValueError):
         failures = 0
-    return {"name": h["name"] if h.get("name") in ("yahoo", "nasdaq") else "yahoo",
-            "status": h["status"] if h.get("status") in SOURCE_STATUSES else "ok",
-            "consecutive_failures": failures, "last_ok_at": last_ok if isinstance(last_ok, str) else None}
+    block = {"name": h["name"] if h.get("name") in ("yahoo", "nasdaq") else "yahoo",
+             "status": h["status"] if h.get("status") in SOURCE_STATUSES else "ok",
+             "consecutive_failures": failures, "last_ok_at": last_ok if isinstance(last_ok, str) else None}
+    if h.get("primary") in ("fmp", "yahoo"):
+        # FMP serves quotes, daily bars and movers first when its key is set; "name" stays the bar source.
+        block["primary"] = h["primary"]
+    return block
 
 
 def session_json(s: cal.Session, phase: str) -> dict:

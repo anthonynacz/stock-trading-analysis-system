@@ -103,7 +103,11 @@ export function RadarScannerHealth({ st }: { st: RadarSnapshot }) {
     [
       'Data source',
       [
-        src.name ? src.name.charAt(0).toUpperCase() + src.name.slice(1) : '—',
+        src.primary === 'fmp'
+          ? `FMP for quotes and movers, ${src.name ? src.name.charAt(0).toUpperCase() + src.name.slice(1) : 'Yahoo'} for 5-minute bars`
+          : src.name
+            ? src.name.charAt(0).toUpperCase() + src.name.slice(1)
+            : '—',
         src.status,
         src.consecutive_failures ? `${src.consecutive_failures} failed calls in a row` : null,
         lastOk !== null ? `last good answer ${fmtEt(lastOk)}` : null,

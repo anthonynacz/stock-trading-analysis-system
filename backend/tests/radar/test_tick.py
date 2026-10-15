@@ -1525,3 +1525,10 @@ def test_cli_passes_rebuild_to_the_tick(monkeypatch, capsys, argv, rebuild, fina
 
 def test_tick_args_default_to_a_live_tick():
     assert tick.TickArgs(TICK).rebuild is False
+
+
+def test_source_block_carries_the_primary_source():
+    from radar.tick import source_block
+    assert source_block({"name": "yahoo", "status": "ok", "primary": "fmp"})["primary"] == "fmp"
+    assert "primary" not in source_block({"name": "yahoo", "status": "ok"})
+    assert "primary" not in source_block({"name": "yahoo", "primary": "bogus"})
