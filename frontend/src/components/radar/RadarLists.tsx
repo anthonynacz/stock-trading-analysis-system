@@ -5,7 +5,7 @@ import { fmtDuration, fmtEt, toMs } from './clock';
 import { exitText, fmtIntensity, fmtMove, fmtRadarPrice, signClass, tickerHref } from './model';
 import { DirArrow } from './DirArrow';
 import { DEFAULT_EXIT_RULES, exitRuleText, type ExitRules } from './exitRules';
-import { OptionChip } from './OptionInfo';
+import { CatalystLine, IvBadge, OptionChip } from './OptionInfo';
 
 /** Card section with an uppercase heading, a count chip and optional tools / note. */
 export function RadarSection({
@@ -82,7 +82,8 @@ export function RadarHeatingList({
               </div>
               {h.reasons?.length > 0 && <div className="text-xs leading-snug mt-0.5">{h.reasons.join(' · ')}</div>}
               {options && (
-                <div className="mt-1">
+                <div className="mt-1 space-y-1">
+                  <CatalystLine o={options[h.ticker]} />
                   <OptionChip o={options[h.ticker]} />
                 </div>
               )}
@@ -99,7 +100,16 @@ export function RadarHeatingList({
 }
 
 /** Recently dropped off, newest first, with the engine's plain-English reason. */
-export function RadarExitList({ items, rules = DEFAULT_EXIT_RULES }: { items: RadarExit[]; rules?: ExitRules }) {
+export function RadarExitList({
+  items,
+  rules = DEFAULT_EXIT_RULES,
+  options,
+}: {
+  items: RadarExit[];
+  rules?: ExitRules;
+  /** Option metrics: today's exits keep their IV tracked (positions may still be open). */
+  options?: Record<string, RadarOptionMetrics>;
+}) {
   const sorted = [...items].sort((a, b) => (toMs(b.exited_at) ?? 0) - (toMs(a.exited_at) ?? 0));
   return (
     <ul className="divide-y divide-border">
@@ -125,6 +135,12 @@ export function RadarExitList({ items, rules = DEFAULT_EXIT_RULES }: { items: Ra
               <div className="text-xs text-text-secondary leading-snug mt-0.5">{exitText(x)}</div>
               {exitRuleText(x.exit_reason, rules) && (
                 <div className="text-[11px] text-text-secondary/70 leading-snug mt-0.5">{exitRuleText(x.exit_reason, rules)}</div>
+              )}
+              {options?.[x.ticker] && (
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
+                  <IvBadge o={options[x.ticker]} />
+                  <CatalystLine o={options[x.ticker]} />
+                </div>
               )}
             </div>
             <div className="text-xs text-text-secondary text-right whitespace-nowrap">left {fmtEt(exited)}</div>

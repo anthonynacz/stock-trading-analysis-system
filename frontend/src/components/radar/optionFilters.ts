@@ -21,6 +21,8 @@ export interface OptionFilters {
   noEarnings: boolean;
   /** Only names with weekly options. */
   weekliesOnly: boolean;
+  /** Hide names whose IV is crushing or at risk of crushing (earnings before expiry, just reported). */
+  noIvCrush: boolean;
 }
 
 export const NO_FILTERS: OptionFilters = {
@@ -32,6 +34,7 @@ export const NO_FILTERS: OptionFilters = {
   maxIvHv: 0,
   noEarnings: false,
   weekliesOnly: false,
+  noIvCrush: false,
 };
 
 /** "Call-friendly": liquid stock, tradable calls, premium not inflated, no earnings in the window. */
@@ -44,6 +47,7 @@ export const CALL_PRESET: OptionFilters = {
   maxIvHv: 2,
   noEarnings: true,
   weekliesOnly: false,
+  noIvCrush: true,
 };
 
 export const ADV_CHOICES = [0, 10, 20, 50, 100, 500];
@@ -66,7 +70,8 @@ export const activeCount = (f: OptionFilters) =>
 
 /** Filters that need option metrics (a name without them fails these). */
 const needsOptions = (f: OptionFilters) =>
-  f.liquidity !== 'any' || f.minNtmOi > 0 || f.maxSpreadPct > 0 || f.maxIvHv > 0 || f.noEarnings || f.weekliesOnly;
+  f.liquidity !== 'any' || f.minNtmOi > 0 || f.maxSpreadPct > 0 || f.maxIvHv > 0 || f.noEarnings || f.weekliesOnly ||
+  f.noIvCrush;
 
 /**
  * Why a name fails the filters (first failing check), or null when it passes.
@@ -92,6 +97,8 @@ export function failReason(f: OptionFilters, o: RadarOptionMetrics | undefined, 
   if (f.maxIvHv > 0 && o.iv_hv !== null && o.iv_hv > f.maxIvHv) return `IV over ${f.maxIvHv}× realised`;
   if (f.noEarnings && o.earnings_before_expiry) return 'earnings before expiry';
   if (f.weekliesOnly && !o.weeklies) return 'no weekly options';
+  if (f.noIvCrush && (o.iv_risk?.level === 'crushing' || o.iv_risk?.level === 'high'))
+    return o.iv_risk.level === 'crushing' ? 'IV crushing' : 'IV crush risk';
   return null;
 }
 

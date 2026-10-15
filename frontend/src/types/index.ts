@@ -1071,6 +1071,43 @@ export interface RadarOptionMetrics {
   /** One-standard-deviation move by expiry implied by the ATM IV, in %. */
   expected_move_pct: number | null;
   liquidity: RadarOptionLiquidity;
+  // ── IV visibility ──
+  /** ATM IV of the first expiry ~30 days out, and front / 30-day ratio (> 1.2: an event priced this week). */
+  iv_30d_pct?: number | null;
+  iv_30d_expiry?: string | null;
+  term_ratio?: number | null;
+  /** Dollar change of one ATM contract for a 1-point IV move. */
+  vega_per_pt_usd?: number | null;
+  /** The day's first IV reading (same front expiry) and the change since. */
+  iv_first?: { day: string; expiry: string | null; pct: number; at: string } | null;
+  iv_change_pts?: number | null;
+  iv_change_pct?: number | null;
+  iv_risk?: RadarIvRisk;
+  // ── market context (FMP) ──
+  catalysts?: RadarCatalyst[];
+  earnings_time?: string | null;
+  last_earnings_date?: string | null;
+  last_earnings_time?: string | null;
+  float?: { shares: number | null; free_pct: number | null; low: boolean } | null;
+  context_source?: string;
+}
+
+export type RadarIvRiskLevel = 'crushing' | 'high' | 'elevated' | 'normal';
+
+export interface RadarIvRisk {
+  level: RadarIvRiskLevel;
+  label: string;
+  /** Plain-language reasons, most serious first. */
+  reasons: string[];
+}
+
+/** One item that can explain the move (newest company-issued and analyst items first). */
+export interface RadarCatalyst {
+  kind: '8-K' | 'press' | 'analyst' | 'news';
+  title: string;
+  at: string;
+  source: string;
+  url: string | null;
 }
 
 /** Scan sensitivity in effect (`state.sensitivity`) or saved (GET /api/radar/settings `saved`). */

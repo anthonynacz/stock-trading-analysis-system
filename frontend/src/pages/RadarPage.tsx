@@ -251,7 +251,7 @@ export default function RadarPage() {
           ) : exits.length === 0 ? (
             <RadarEmpty>Nothing has dropped off this session.</RadarEmpty>
           ) : (
-            <RadarExitList items={exits} rules={rules} />
+            <RadarExitList items={exits} rules={rules} options={options} />
           )}
         </RadarSection>
 

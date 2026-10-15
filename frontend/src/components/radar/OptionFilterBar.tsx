@@ -153,6 +153,13 @@ export default function OptionFilterBar({
               <input type="checkbox" className="accent-sky-400" checked={value.weekliesOnly} onChange={(e) => set('weekliesOnly', e.target.checked)} />
               Weekly options only
             </label>
+            <label
+              className={`flex items-center gap-2 text-xs self-end pb-1 ${value.noIvCrush ? 'text-sky-100 font-semibold' : 'text-text-primary'}`}
+              title="Hide names whose IV is already falling today, or with earnings before expiry / just reported"
+            >
+              <input type="checkbox" className="accent-sky-400" checked={value.noIvCrush} onChange={(e) => set('noIvCrush', e.target.checked)} />
+              No IV crush risk
+            </label>
           </div>
           <p className="text-[10.5px] text-text-secondary leading-snug">
             Option data are Yahoo quotes (delayed), refreshed after each scan for the stocks on the radar and warming up,

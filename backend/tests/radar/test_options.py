@@ -272,7 +272,8 @@ def test_unquoted_iv_and_ask_are_left_out():
 def test_ticker_metrics_requests_the_chosen_expiry_second():
     y = Yahoo(NOW)
     doc = options.ticker_metrics(y, "XYZ", NOW, {"sigma_d": SIGMA_D})
-    assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 9)}]     # 2 DTE skipped
+    # 2 DTE skipped; the third request is the ~30-day expiry for the IV term structure
+    assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 9)}, {"date": exp_epoch(NOW, 30)}]
     assert all(c[0] == options.YAHOO_OPTIONS.format("XYZ") for c in y.calls)
     assert all(c[2] == float(OPTIONS["fetch_timeout_s"]) for c in y.calls)
     assert doc["expiry"] == "2026-10-16" and doc["dte"] == 9 and doc["liquidity"] == "good"
@@ -281,7 +282,8 @@ def test_ticker_metrics_requests_the_chosen_expiry_second():
 def test_ticker_metrics_uses_the_first_chain_when_it_is_the_chosen_expiry():
     y = Yahoo(NOW, by_symbol={"XYZ": result(NOW, days=(9, 16, 23))})
     doc = options.ticker_metrics(y, "XYZ", NOW, None)
-    assert [c[1] for c in y.calls] == [{}] and doc["expiry"] == "2026-10-16"
+    # no expiry 30+ days out: the farthest one (23 days) stands in for the term structure
+    assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 23)}] and doc["expiry"] == "2026-10-16"
 
 
 def test_ticker_metrics_without_expiries():
@@ -303,7 +305,8 @@ def test_a_rate_limit_or_server_error_is_retried_once(status, monkeypatch):
     y = Yahoo(NOW, statuses={"XYZ": [status]})
     doc = options.ticker_metrics(y, "XYZ", NOW, None)
     assert doc is not None and doc["expiry"] == "2026-10-16"
-    assert [c[1] for c in y.calls] == [{}, {}, {"date": exp_epoch(NOW, 9)}] and naps == [1.0]
+    assert [c[1] for c in y.calls] == [{}, {}, {"date": exp_epoch(NOW, 9)}, {"date": exp_epoch(NOW, 30)}]
+    assert naps == [1.0]
 
 
 def test_a_second_rate_limit_gives_up():

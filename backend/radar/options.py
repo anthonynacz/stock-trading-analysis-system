@@ -35,6 +35,18 @@ RETRY_STATUSES = (429, 500, 502, 503, 504)
 
 Fetch = Callable[[str, dict, float], tuple[int, Any]]
 
+# IV visibility (what hit EBAY on 2026-10-15: a takeover rumour lifted the front-week IV to 1.7x the stock's
+# normal volatility, then it bled from 44% to 36% while the stock drifted): the ~30-day IV for the term
+# structure, the change since the day's first reading, the dollar cost per IV point and a crush-risk label.
+IV = {
+    "term_dte": 30,              # the "30-day" expiry: first one at least this many days out
+    "rich_ratio": 1.5,           # IV / realised volatility above this: an event or rumour premium
+    "term_inverted": 1.2,        # front IV / 30-day IV above this: the front week prices an event
+    "crush_drop": 0.10,          # IV down this share since the day's first reading: crushing
+    "crush_min_minutes": 30,     # ... measured over at least this long
+    "rate": 0.04,
+}
+
 
 # ---------------------------------------------------------------- pure helpers
 
@@ -90,6 +102,32 @@ def spread_pct(bid: float | None, ask: float | None) -> float | None:
     if not bid or not ask or bid <= 0 or ask < bid:
         return None
     return (ask - bid) / ((ask + bid) / 2.0) * 100.0
+
+
+def _npdf(x: float) -> float:
+    return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
+
+
+def vega_per_point(spot: float | None, strike: float | None, iv_pct: float | None, dte: int | None,
+                   rate: float = IV["rate"]) -> float | None:
+    """Dollar change of ONE contract (100 shares) for a 1-point IV move: S * phi(d1) * sqrt(T)
+    (Black-Scholes vega per 1.00 of volatility, x100 shares / 100 points)."""
+    if not spot or not strike or not iv_pct or iv_pct <= 0 or dte is None:
+        return None
+    t = max(dte, 0.5) / 365.0
+    sig = iv_pct / 100.0
+    d1 = (math.log(spot / strike) + (rate + sig * sig / 2) * t) / (sig * math.sqrt(t))
+    return spot * _npdf(d1) * math.sqrt(t)
+
+
+def atm_iv(chain: dict | None, spot: float | None) -> float | None:
+    """ATM call IV (%) of one expiry's chain, None when unquoted."""
+    calls = [c for c in (chain or {}).get("calls") or [] if _num(c.get("strike")) is not None]
+    if not calls or not spot:
+        return None
+    atm = min(calls, key=lambda c: (abs(float(c["strike"]) - spot), -float(c["strike"])))
+    iv = _num(atm.get("impliedVolatility"))
+    return iv * 100.0 if iv is not None and iv >= 0.01 else None
 
 
 def grade(oi: int, spread: float | None, ntm_volume: int, limits: dict) -> str:
@@ -202,7 +240,84 @@ def ticker_metrics(fetch: Fetch, symbol: str, now: float, baseline: dict | None,
         chains = second.get("options") or []
         chain = chains[0] if chains else None
         result = {**result, "quote": second.get("quote") or result.get("quote")}
-    return chain_metrics(result, chain, now, baseline=baseline, params=params)
+    doc = chain_metrics(result, chain, now, baseline=baseline, params=params)
+    # The ~30-day expiry for the term structure (one more request; skipped when it is the same expiry).
+    term = pick_expiry(exps, et_date(now), int(IV["term_dte"]))
+    if term is not None and term != chosen and doc.get("price"):
+        third = _get(fetch, symbol, {"date": term}, timeout)
+        chains3 = (third or {}).get("options") or []
+        doc["iv_30d_pct"] = _r(atm_iv(chains3[0] if chains3 else None, doc["price"]), 1)
+        doc["iv_30d_expiry"] = exp_date(term).isoformat()
+    elif term is not None and term == chosen:
+        doc["iv_30d_pct"], doc["iv_30d_expiry"] = doc.get("iv_pct"), doc.get("expiry")
+    atm = doc.get("atm") or {}
+    doc["vega_per_pt_usd"] = _r(vega_per_point(doc.get("price"), atm.get("strike"), doc.get("iv_pct"),
+                                               doc.get("dte")), 2)
+    front, back = doc.get("iv_pct"), doc.get("iv_30d_pct")
+    doc["term_ratio"] = _r(front / back, 2) if front and back else None
+    return doc
+
+
+def carry_iv_first(doc: dict, prev: dict | None, now: float) -> dict:
+    """Keep the day's first IV reading (same ET day and same front expiry) and the change since then."""
+    today = et_date(now).isoformat()
+    first = (prev or {}).get("iv_first") if isinstance(prev, dict) else None
+    keep = (isinstance(first, dict) and first.get("day") == today and first.get("expiry") == doc.get("expiry")
+            and first.get("pct"))
+    if not keep:
+        first = ({"day": today, "expiry": doc.get("expiry"), "pct": doc.get("iv_pct"), "at": doc.get("as_of")}
+                 if doc.get("iv_pct") else None)
+    doc["iv_first"] = first
+    if first and doc.get("iv_pct"):
+        doc["iv_change_pts"] = _r(doc["iv_pct"] - first["pct"], 1)
+        doc["iv_change_pct"] = _r((doc["iv_pct"] / first["pct"] - 1.0) * 100.0, 1)
+    else:
+        doc["iv_change_pts"] = doc["iv_change_pct"] = None
+    return doc
+
+
+def _minutes_between(a: str | None, b: str | None) -> float | None:
+    try:
+        ta = datetime.strptime(a, "%Y-%m-%dT%H:%M:%SZ")
+        tb = datetime.strptime(b, "%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError):
+        return None
+    return (tb - ta).total_seconds() / 60.0
+
+
+def iv_risk(doc: dict, now: float, params: dict = IV) -> dict:
+    """How exposed a long option is to an IV drop: crushing (IV already falling today), high (earnings
+    before expiry, or just reported), elevated (rumour / event premium), normal. Reasons in plain words."""
+    reasons: list[tuple[int, str]] = []
+    iv, hv, ratio = doc.get("iv_pct"), doc.get("hv_pct"), doc.get("iv_hv")
+    first = doc.get("iv_first") or {}
+    mins = _minutes_between(first.get("at"), doc.get("as_of"))
+    chg = doc.get("iv_change_pct")
+    vega = doc.get("vega_per_pt_usd")
+    if chg is not None and mins is not None and mins >= params["crush_min_minutes"] and chg <= -100 * params["crush_drop"]:
+        cost = f", about ${abs(doc['iv_change_pts']) * vega:,.0f} per contract" if vega and doc.get("iv_change_pts") else ""
+        reasons.append((3, f"IV crushing: {first.get('pct'):.0f}% → {iv:.0f}% since {first.get('at', '')[11:16]} UTC{cost}"))
+    today = et_date(now)
+    last_e = doc.get("last_earnings_date")
+    if last_e:
+        try:
+            days = (today - date.fromisoformat(last_e)).days
+        except ValueError:
+            days = None
+        if days is not None and 0 <= days <= 1:
+            reasons.append((2, f"Reported earnings {('today' if days == 0 else 'yesterday')}: IV has just reset"))
+    if doc.get("earnings_before_expiry"):
+        reasons.append((2, f"Earnings {doc.get('earnings_date')} before this expiry: IV usually collapses after the report"))
+    if ratio is not None and ratio >= params["rich_ratio"]:
+        reasons.append((1, f"IV {iv:.0f}% is {ratio:.1f}× the stock's normal {hv:.0f}%: a news or rumour premium that "
+                           "fades if the story does"))
+    term = doc.get("term_ratio")
+    if term is not None and term >= params["term_inverted"]:
+        reasons.append((1, f"Front-week IV {iv:.0f}% vs {doc.get('iv_30d_pct'):.0f}% for ~30 days: an event is priced "
+                           "into this week"))
+    level = {3: "crushing", 2: "high", 1: "elevated"}.get(max((r for r, _ in reasons), default=0), "normal")
+    label = {"crushing": "IV crushing", "high": "IV crush risk", "elevated": "IV rich", "normal": "IV normal"}[level]
+    return {"level": level, "label": label, "reasons": [t for _, t in sorted(reasons, key=lambda x: -x[0])]}
 
 
 def _yahoo_fetch() -> Fetch:
@@ -238,9 +353,13 @@ def baselines_for(store: Any, session_date: str | None) -> dict[str, dict]:
 
 
 def radar_tickers(state: dict, limit: int) -> list[str]:
-    """The members (highest intensity first), then the warming-up names."""
+    """The members (highest intensity first), the warming-up names, then the names that left the radar this
+    session (positions opened on them are often still open: their IV keeps being tracked)."""
     members = sorted(state.get("members") or [], key=lambda m: -(m.get("intensity") or 0))
     names = [m.get("ticker") for m in members] + [h.get("ticker") for h in state.get("heating") or []]
+    session = (state.get("session") or {}).get("date")
+    names += [x.get("ticker") for x in state.get("recent_exits") or []
+              if session and str(x.get("exited_at") or "")[:10] == session]
     return list(dict.fromkeys(t for t in names if isinstance(t, str) and t))[:limit]
 
 
@@ -260,6 +379,19 @@ def refresh(store: Any, tickers: list[str] | None = None, *, fetch: Fetch | None
     got = {s: d for s, d in zip(syms, docs) if d is not None}
     failed = [s for s, d in zip(syms, docs) if d is None]
     if got:
+        try:
+            prev = store.load_option_metrics(list(got))
+        except Exception as e:  # noqa: BLE001 - no history: the first reading starts today's IV trail
+            logger.info("options: previous metrics unreadable: %s", e)
+            prev = {}
+        try:
+            from .context import add_context
+            add_context(got, now)            # FMP: catalysts, exact earnings dates, float (when a key is set)
+        except Exception:  # noqa: BLE001 - context is a bonus; the option metrics are stored regardless
+            logger.warning("options: market context failed", exc_info=True)
+        for sym, doc in got.items():
+            carry_iv_first(doc, prev.get(sym), now)
+            doc["iv_risk"] = iv_risk(doc, now)
         store.put_option_metrics(got, datetime.fromtimestamp(now, timezone.utc), int(params["keep_days"]))
     status = "ok" if not failed else "degraded" if got else "error"
     return {"status": status, "tickers": len(syms), "ok": len(got), "failed": failed,

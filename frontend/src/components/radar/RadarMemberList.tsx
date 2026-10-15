@@ -21,7 +21,7 @@ import RadarSparkline from './RadarSparkline';
 import { DirArrow } from './DirArrow';
 import ExitWatch, { ExitWatchPill } from './ExitWatch';
 import { DEFAULT_EXIT_RULES, type ExitRules } from './exitRules';
-import { OptionChip, OptionDetails } from './OptionInfo';
+import { CatalystLine, OptionChip, OptionDetails } from './OptionInfo';
 
 // Literal class maps (Tailwind purge).
 const STATE_CHIP = {
@@ -193,7 +193,8 @@ function MemberCard({ m, o, rules, tickId, open, onToggle, dim }: Omit<RowProps,
         </span>
       </div>
       {m.reasons?.length > 0 && <p className="text-xs text-text-secondary mt-2 leading-snug">{m.reasons.join(' · ')}</p>}
-      <div className="mt-1.5">
+      <div className="mt-1.5 space-y-1">
+        <CatalystLine o={o} />
         <OptionChip o={o} />
       </div>
       {open && <MemberDetails m={m} o={o} rules={rules} id={detailsId(m, 'card')} />}
@@ -241,6 +242,9 @@ function MemberRows({ m, o, rules, tickId, open, onToggle, dim }: Omit<RowProps,
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
               <span>{m.reasons?.join(' · ')}</span>
               <OptionChip o={o} />
+            </div>
+            <div className="mt-1">
+              <CatalystLine o={o} />
             </div>
           </td>
         </tr>
