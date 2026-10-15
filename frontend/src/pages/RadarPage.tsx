@@ -68,6 +68,7 @@ export default function RadarPage() {
   const now = useNow(15_000, radar.data);
   const [view, setView] = useState<RadarView>(readView);
   const [showHidden, setShowHidden] = useState(false);
+  const [allTrending, setAllTrending] = useState(false);
   useEffect(() => {
     try {
       localStorage.setItem(VIEW_KEY, JSON.stringify(view));
@@ -106,8 +107,13 @@ export default function RadarPage() {
   );
   const heatingHidden = heatingAll.length - heating.length;
   const exits = st?.recent_exits ?? [];
-  // Trending names stay listed until the next session's first scan (like exits); the list is the snapshot's.
+  // Trending names stay listed until the next session's first scan (like exits). Busy days list dozens: show the
+  // strongest active names first (largest day move for the stock, in its own daily volatility), then the rest.
   const trending = st?.trending ?? [];
+  const TRENDING_SHOWN = 12;
+  const trendingVisible = trending
+    .filter((t) => (view.f === 'all' || t.direction === view.f) && !failReason(view.opt, options?.[t.ticker], t.price))
+    .sort((a, b) => Number(b.active) - Number(a.active) || Math.abs(b.zday ?? 0) - Math.abs(a.zday ?? 0));
 
   const summary: string[] = [];
   const day = st ? listsDay(st) : null;
@@ -247,10 +253,18 @@ export default function RadarPage() {
           ) : trending.length === 0 ? (
             <RadarEmpty>{c.scanning ? 'Nothing trending yet today. Names can appear from 10:00 ET.' : 'Nothing trended this session.'}</RadarEmpty>
           ) : (
-            <RadarTrendingList
-              items={trending.filter((t) => (view.f === 'all' || t.direction === view.f) && !failReason(view.opt, options?.[t.ticker], t.price))}
-              options={options}
-            />
+            <>
+              <RadarTrendingList items={allTrending ? trendingVisible : trendingVisible.slice(0, TRENDING_SHOWN)} options={options} />
+              {trendingVisible.length > TRENDING_SHOWN && (
+                <button
+                  type="button"
+                  onClick={() => setAllTrending((x) => !x)}
+                  className="mt-2 text-xs font-semibold text-accent-300 hover:text-accent-200"
+                >
+                  {allTrending ? 'Show the strongest 12' : `Show all ${trendingVisible.length} (strongest ${TRENDING_SHOWN} shown)`}
+                </button>
+              )}
+            </>
           )}
         </RadarSection>
 
