@@ -262,6 +262,11 @@ def carry_iv_first(doc: dict, prev: dict | None, now: float) -> dict:
     """Keep the day's first IV reading (same ET day and same front expiry) and the change since then."""
     today = et_date(now).isoformat()
     first = (prev or {}).get("iv_first") if isinstance(prev, dict) else None
+    if not first and isinstance(prev, dict) and prev.get("iv_pct") and prev.get("as_of"):
+        # A row written before iv_first existed: its own reading is the earliest one known today.
+        at = str(prev["as_of"])
+        if et_date(datetime.strptime(at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()).isoformat() == today:
+            first = {"day": today, "expiry": prev.get("expiry"), "pct": prev["iv_pct"], "at": at}
     keep = (isinstance(first, dict) and first.get("day") == today and first.get("expiry") == doc.get("expiry")
             and first.get("pct"))
     if not keep:

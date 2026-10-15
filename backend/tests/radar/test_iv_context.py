@@ -54,6 +54,14 @@ def test_the_first_reading_resets_on_a_new_day_or_a_new_expiry():
     assert options.carry_iv_first(doc(), prev, NOW)["iv_change_pts"] == 0.0
 
 
+def test_a_row_from_before_iv_first_existed_seeds_the_first_reading():
+    prev = {"as_of": "2026-10-15T15:45:56Z", "expiry": "2026-10-23", "iv_pct": 43.7}
+    d = options.carry_iv_first(doc(), prev, NOW)
+    assert d["iv_first"]["pct"] == 43.7 and d["iv_change_pts"] == pytest.approx(-5.3)
+    stale = {"as_of": "2026-10-14T15:45:56Z", "expiry": "2026-10-23", "iv_pct": 43.7}
+    assert options.carry_iv_first(doc(), stale, NOW)["iv_first"]["pct"] == 38.4
+
+
 def test_ebay_is_flagged_as_crushing_with_the_cost_per_contract():
     d = options.carry_iv_first(doc(), {"iv_first": {"day": "2026-10-15", "expiry": "2026-10-23", "pct": 47.0,
                                                     "at": "2026-10-15T15:15:00Z"}}, NOW)
