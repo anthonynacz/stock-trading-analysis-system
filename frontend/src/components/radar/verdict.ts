@@ -10,6 +10,7 @@
 import type { RadarDirection, RadarMemberState, RadarOptionMetrics } from '../../types';
 import { etParts } from './clock';
 import { fmtShortDate } from './optionFilters';
+import { ivPrice } from './ivPrice';
 import { sideOf, type SideView } from './optionSide';
 import type { WatchLevel } from './exitRules';
 
@@ -19,10 +20,17 @@ export interface VerdictResult {
   verdict: Verdict;
   /** The main reason, one sentence. */
   headline: string;
-  /** Every point considered, worst first. */
-  points: { level: Exclude<Verdict, 'unknown'>; text: string }[];
+  /** Every point considered, worst first; `good` points never change the verdict. */
+  points: VerdictPoint[];
+  /** The points not used as the headline. */
+  details: VerdictPoint[];
   /** "Costs: about $76 round trip on the spread · time decay about $18/day" when known. */
   costs: string | null;
+}
+
+export interface VerdictPoint {
+  level: 'avoid' | 'caution' | 'good';
+  text: string;
 }
 
 export interface VerdictContext {
@@ -39,9 +47,6 @@ export interface VerdictContext {
 
 export const SPREAD_OK = 10;      // % of mid
 export const SPREAD_MAX = 15;
-// Same thresholds as backend/radar/options.py IV rich_ratio / term_inverted.
-const IV_RICH = 1.5;
-const TERM_INVERTED = 1.2;
 
 const usd = (v: number) => `$${Math.round(Math.abs(v)).toLocaleString('en-US')}`;
 
@@ -55,16 +60,17 @@ function costLine(s: SideView): string | null {
 export function verdictFor(o: RadarOptionMetrics | undefined, ctx: VerdictContext): VerdictResult {
   const side = sideOf(o, ctx.direction);
   if (!o) {
-    return { verdict: 'unknown', headline: 'Option data arrives after the next scan.', points: [], costs: null };
+    return { verdict: 'unknown', headline: 'Option data arrives after the next scan.', points: [], details: [], costs: null };
   }
   if (!o.has_options) {
-    return { verdict: 'avoid', headline: 'No listed options on this stock.', points: [{ level: 'avoid', text: 'No listed options.' }], costs: null };
+    const none: VerdictPoint = { level: 'avoid', text: 'No listed options.' };
+    return { verdict: 'avoid', headline: 'No listed options on this stock.', points: [none], details: [], costs: null };
   }
   if (!side) {
-    return { verdict: 'unknown', headline: 'Put data arrives after the next scan.', points: [], costs: null };
+    return { verdict: 'unknown', headline: 'Put data arrives after the next scan.', points: [], details: [], costs: null };
   }
-  const pts: VerdictResult['points'] = [];
-  const add = (level: 'avoid' | 'caution', text: string) => pts.push({ level, text });
+  const pts: VerdictPoint[] = [];
+  const add = (level: VerdictPoint['level'], text: string) => pts.push({ level, text });
   const what = side.plural;
 
   // 1. Cost of trading: liquidity and spread (the deciding factor in the backtest).
@@ -79,13 +85,18 @@ export function verdictFor(o: RadarOptionMetrics | undefined, ctx: VerdictContex
     add('caution', `The spread is ${side.spreadPct.toFixed(0)}% of the ${side.kind}'s price${side.spreadMovePct ? ` (the stock must move ${side.spreadMovePct.toFixed(1)}% to cover it)` : ''}: use a limit order near the middle.`);
   }
 
-  // 2. Implied volatility and earnings.
-  // Read the fields, not only iv_risk.level: the level keeps just the worst reason (backend options.iv_risk).
-  if (o.iv_risk?.level === 'crushing') add('avoid', 'IV is falling fast today: the option loses value even if the stock holds still.');
+  // 2. Implied volatility: what the option costs to buy NOW (low IV is cheaper, for calls and puts alike).
+  // A crush earlier today hurt contracts bought before it; for a new entry it only matters if IV is still rich.
+  const price = ivPrice(o);
+  const crushing = o.iv_risk?.level === 'crushing';
+  const times = o.iv_hv ? ` ${o.iv_hv.toFixed(1)}× the stock's normal` : ' above normal';
   if (o.earnings_before_expiry) add('caution', `Earnings ${fmtShortDate(o.earnings_date)} before this expiry: close the trade the same day; holding through the report usually loses a big part of the price.`);
-  if (o.iv_risk?.reasons?.some((r) => r.startsWith('Reported earnings'))) add('caution', 'Earnings were just reported: IV has reset and moves can reverse sharply.');
-  const rich = (o.iv_hv ?? 0) >= IV_RICH || (o.term_ratio ?? 0) >= TERM_INVERTED;
-  if (rich) add('caution', `Options are pricey${o.iv_hv ? ` (IV ${o.iv_hv.toFixed(1)}× the stock's normal)` : ''}: if the story fades, the premium deflates.`);
+  else if (price.level === 'expensive' || price.level === 'rich') {
+    if (crushing) add('caution', `IV is falling and still${times}: the premium has room to deflate further.`);
+    else add('caution', `Options are ${price.level === 'expensive' ? 'expensive' : 'pricey'} (IV${times}): if the story fades, the premium deflates.`);
+  } else if (crushing) add('good', 'IV already reset today: options are cheaper now than this morning.');
+  else if (price.level === 'cheap') add('good', "Options are cheap: IV is close to the stock's normal swings.");
+  if (o.iv_risk?.reasons?.some((r) => r.startsWith('Reported earnings'))) add('caution', 'Earnings were just reported: moves can reverse sharply.');
 
   // 3. Momentum and timing.
   if (ctx.role === 'member') {
@@ -103,13 +114,19 @@ export function verdictFor(o: RadarOptionMetrics | undefined, ctx: VerdictContex
   if (minutes >= 15 * 60 && minutes < 16 * 60) add('caution', 'Less than an hour of trading left: little time for the move to pay for the spread.');
   if (o.dte !== null && o.dte !== undefined && o.dte <= 3) add('caution', `This expiry is ${o.dte} day${o.dte === 1 ? '' : 's'} out: time decay is fast.`);
 
-  pts.sort((a, b) => (a.level === b.level ? 0 : a.level === 'avoid' ? -1 : 1));
-  const verdict: Verdict = pts.some((p) => p.level === 'avoid') ? 'avoid' : pts.length ? 'caution' : 'favorable';
-  const headline =
-    verdict === 'favorable'
-      ? `Liquid ${what}, normal IV and the move is still going.`
-      : pts[0].text;
-  return { verdict, headline, points: pts, costs: costLine(side) };
+  const RANK = { avoid: 0, caution: 1, good: 2 } as const;
+  pts.sort((a, b) => RANK[a.level] - RANK[b.level]);
+  const verdict: Verdict = pts.some((p) => p.level === 'avoid')
+    ? 'avoid'
+    : pts.some((p) => p.level === 'caution')
+      ? 'caution'
+      : 'favorable';
+  if (verdict === 'favorable') {
+    const liq = side.liquidity === 'good' ? 'Liquid' : 'Tradable';
+    const iv = price.level === 'cheap' ? ', cheap options' : price.level === 'fair' ? ', fairly priced options' : '';
+    return { verdict, headline: `${liq} ${what}${iv} and the move is still going.`, points: pts, details: pts, costs: costLine(side) };
+  }
+  return { verdict, headline: pts[0].text, points: pts, details: pts.slice(1), costs: costLine(side) };
 }
 
 export const VERDICT_TEXT: Record<Verdict, string> = {

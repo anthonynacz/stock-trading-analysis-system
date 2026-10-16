@@ -3,41 +3,76 @@ import { fmtStrike } from '../../utils/format';
 import { fmtEt, toMs } from './clock';
 import { LIQ_CLASS, fmtCompact, fmtShortDate, fmtUsdCompact, liqHint, liqText } from './optionFilters';
 import { kindFor, sideOf } from './optionSide';
+import { ivChangeNote, ivPrice, type IvPriceLevel } from './ivPrice';
 
 const n1 = (v: number | null | undefined, suffix = '') =>
   v === null || v === undefined || Number.isNaN(v) ? '—' : `${v.toFixed(1)}${suffix}`;
 const n0 = (v: number | null | undefined, suffix = '') =>
   v === null || v === undefined || Number.isNaN(v) ? '—' : `${v.toFixed(0)}${suffix}`;
 
-// Literal class maps (Tailwind purge).
-const RISK_CLASS: Record<RadarIvRiskLevel, string> = {
-  crushing: 'bg-red-500/25 text-red-200 border-red-400/60',
-  high: 'bg-orange-500/20 text-orange-200 border-orange-400/50',
-  elevated: 'bg-amber-500/15 text-amber-200 border-amber-400/40',
-  normal: 'bg-gray-500/10 text-text-secondary border-border',
+// Literal class maps (Tailwind purge). The IV badge is coloured by what the option costs to buy now: green cheap,
+// grey fair, amber pricey, red expensive. Never by the day's IV change (shown apart, read for the direction).
+const PRICE_CLASS: Record<IvPriceLevel, string> = {
+  cheap: 'bg-emerald-500/15 text-emerald-200 border-emerald-400/50',
+  fair: 'bg-gray-500/10 text-text-secondary border-border',
+  rich: 'bg-amber-500/15 text-amber-200 border-amber-400/50',
+  expensive: 'bg-red-500/20 text-red-200 border-red-400/60',
+  unknown: 'bg-gray-500/10 text-text-secondary border-border',
 };
-const RISK_ICON: Record<RadarIvRiskLevel, string> = { crushing: '▼', high: '⚠', elevated: '▲', normal: '' };
+// Holders' warning on the exits list (positions may still be open).
+const CRUSH_CLASS = 'bg-red-500/20 text-red-200 border-red-400/60';
+const HOLDER_RISK: Partial<Record<RadarIvRiskLevel, string>> = { crushing: 'IV crushing' };
 
 const EARN_TIME: Record<string, string> = { bmo: 'before the open', amc: 'after the close' };
 
-/** "IV 38% · 1.5× · ↓18% today", coloured by crush risk; the reasons are in the tooltip. */
-export function IvBadge({ o }: { o: RadarOptionMetrics | undefined }) {
+/**
+ * "IV 38% · 1.5×" coloured by what the option costs to buy now (lower is cheaper, for calls and puts alike),
+ * then today's change as plain text read for the move's direction. `holder` (exits list) adds the crush warning
+ * for contracts bought earlier.
+ */
+export function IvBadge({
+  o,
+  direction,
+  holder = false,
+}: {
+  o: RadarOptionMetrics | undefined;
+  direction?: RadarDirection;
+  holder?: boolean;
+}) {
   if (!o || !o.iv_pct) return null;
-  const risk = o.iv_risk?.level ?? 'normal';
+  const price = ivPrice(o);
   const chg = o.iv_change_pct;
+  const note = ivChangeNote(o, direction);
   const tip = [
-    o.iv_risk?.label ?? 'Implied volatility',
-    ...(o.iv_risk?.reasons ?? []),
+    price.label,
+    price.why,
+    'Lower IV means a cheaper option, for calls and puts alike.',
     o.vega_per_pt_usd ? `Each IV point is worth about $${o.vega_per_pt_usd.toFixed(0)} per contract.` : '',
   ]
     .filter(Boolean)
     .join('\n');
+  const holderRisk = holder ? HOLDER_RISK[o.iv_risk?.level ?? 'normal'] : undefined;
   return (
-    <span className={`px-1.5 py-px rounded border font-semibold tabular-nums cursor-help whitespace-nowrap ${RISK_CLASS[risk]}`} title={tip}>
-      {RISK_ICON[risk] && <span aria-hidden="true">{RISK_ICON[risk]} </span>}
-      IV {n0(o.iv_pct, '%')}
-      {o.iv_hv ? ` · ${o.iv_hv.toFixed(1)}×` : ''}
-      {chg !== null && chg !== undefined && Math.abs(chg) >= 3 ? ` · ${chg < 0 ? '↓' : '↑'}${Math.abs(chg).toFixed(0)}% today` : ''}
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      <span className={`px-1.5 py-px rounded border font-semibold tabular-nums cursor-help ${PRICE_CLASS[price.level]}`} title={tip}>
+        IV {n0(o.iv_pct, '%')}
+        {o.iv_hv ? ` · ${o.iv_hv.toFixed(1)}×` : ''}
+      </span>
+      {note && chg !== null && chg !== undefined && (
+        <span className="tabular-nums text-text-secondary cursor-help" title={note}>
+          {chg < 0 ? '↓' : '↑'}
+          {Math.abs(chg).toFixed(0)}% today
+        </span>
+      )}
+      {holderRisk && (
+        <span
+          className={`px-1.5 py-px rounded border font-semibold cursor-help ${CRUSH_CLASS}`}
+          title={`For contracts already held: ${(o.iv_risk?.reasons ?? []).join(' ')}`}
+        >
+          <span aria-hidden="true">▼ </span>
+          {holderRisk}
+        </span>
+      )}
     </span>
   );
 }
@@ -99,7 +134,7 @@ export function OptionChip({ o, direction }: { o: RadarOptionMetrics | undefined
       ) : (
         <span className={`px-1.5 py-px rounded border font-semibold ${LIQ_CLASS.none}`}>No options</span>
       )}
-      <IvBadge o={o} />
+      <IvBadge o={o} direction={direction} />
       {o.has_options && o.expiry && (
         <span className="tabular-nums" title="First expiry at least 7 days out">
           {fmtShortDate(o.expiry)} ({o.dte}d)
@@ -144,33 +179,34 @@ function Fact({ label, hint, children }: { label: string; hint?: string; childre
   );
 }
 
-/** IV crush risk: label, reasons, and the numbers behind them. */
-function IvSection({ o }: { o: RadarOptionMetrics }) {
-  const risk = o.iv_risk?.level ?? 'normal';
+/** What the option costs to buy now, today's IV change for this direction, holders' risks, and the numbers. */
+function IvSection({ o, direction }: { o: RadarOptionMetrics; direction?: RadarDirection }) {
+  const price = ivPrice(o);
+  const note = ivChangeNote(o, direction);
   const first = o.iv_first;
   const firstAt = toMs(first?.at);
   return (
-    <div className={`rounded border px-2.5 py-2 space-y-1.5 ${RISK_CLASS[risk]}`}>
+    <div className={`rounded border px-2.5 py-2 space-y-1.5 ${PRICE_CLASS[price.level]}`}>
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <span className="text-[11px] font-bold uppercase tracking-wider">
-          {RISK_ICON[risk] && <span aria-hidden="true">{RISK_ICON[risk]} </span>}
-          {o.iv_risk?.label ?? 'IV'}
-        </span>
+        <span className="text-[11px] font-bold uppercase tracking-wider">{price.label}</span>
         {o.vega_per_pt_usd ? (
           <span className="text-[11px] tabular-nums" title="Black-Scholes vega of one at-the-money contract (100 shares)">
             1 IV point ≈ ${o.vega_per_pt_usd.toFixed(0)} per contract
           </span>
         ) : null}
       </div>
+      <p className="text-[11px] leading-snug">{price.why}</p>
+      {note && <p className="text-[11px] leading-snug">{note}</p>}
       {o.iv_risk?.reasons?.length ? (
-        <ul className="list-disc pl-4 text-[11px] leading-snug space-y-0.5">
-          {o.iv_risk.reasons.map((r) => (
-            <li key={r}>{r}</li>
-          ))}
-        </ul>
-      ) : (
-        <p className="text-[11px] leading-snug">IV is in line with the stock's usual volatility and no event is priced into this expiry.</p>
-      )}
+        <div className="text-[11px] leading-snug">
+          <span className="font-semibold">If you already hold contracts:</span>
+          <ul className="list-disc pl-4 space-y-0.5">
+            {o.iv_risk.reasons.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <dl className="flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-text-primary">
         <Fact label="IV vs normal" hint="At-the-money implied volatility against the stock's realised volatility (20 days)">
           {n1(o.iv_pct, '%')} vs {n1(o.hv_pct, '%')}
@@ -202,7 +238,7 @@ export function OptionDetails({ o, direction }: { o: RadarOptionMetrics | undefi
         <span className="text-[10px] font-bold uppercase tracking-wider text-text-secondary">{Kind}s, IV & catalysts</span>
         <span className="text-[11px] text-text-secondary">Option quotes from Yahoo (delayed) · {o.as_of.slice(11, 16)} UTC</span>
       </div>
-      {o.has_options && o.iv_pct ? <IvSection o={o} /> : null}
+      {o.has_options && o.iv_pct ? <IvSection o={o} direction={direction} /> : null}
       {o.catalysts && o.catalysts.length > 0 && (
         <ul className="space-y-0.5 text-[11px] leading-snug">
           {o.catalysts.map((c) => {

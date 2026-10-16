@@ -10,7 +10,7 @@ const PILL: Record<Verdict, string> = {
   unknown: 'bg-gray-500/10 text-text-secondary border-border',
 };
 const ICON: Record<Verdict, string> = { favorable: '✓', caution: '!', avoid: '✕', unknown: '·' };
-const DOT: Record<string, string> = { avoid: 'text-red-300', caution: 'text-amber-300' };
+const DOT: Record<string, string> = { avoid: 'text-red-300', caution: 'text-amber-300', good: 'text-emerald-300' };
 
 /**
  * "Enter with options?" verdict: a coloured pill (Favorable / Caution / Avoid) and the main reason in one
@@ -43,7 +43,7 @@ export default function VerdictBadge({
         </span>
         <span className="text-text-primary min-w-0">
           {v.headline}
-          {!full && v.points.length > 1 && (
+          {!full && v.details.length > 0 && (
             <button
               type="button"
               onClick={(e) => {
@@ -53,14 +53,14 @@ export default function VerdictBadge({
               className="ml-1.5 text-accent-300 hover:text-accent-200"
               aria-expanded={more}
             >
-              {more ? 'less' : `+${v.points.length - 1} more`}
+              {more ? 'less' : `+${v.details.length} more`}
             </button>
           )}
         </span>
       </div>
-      {((showAll && v.points.length > 1) || showCosts || full) && (
+      {((showAll && v.details.length > 0) || showCosts || full) && (
         <div className="mt-1 pl-1 space-y-0.5">
-          {(showAll ? v.points.slice(1) : []).map((p) => (
+          {(showAll ? v.details : []).map((p) => (
             <div key={p.text} className="text-text-secondary">
               <span aria-hidden="true" className={DOT[p.level]}>● </span>
               {p.text}

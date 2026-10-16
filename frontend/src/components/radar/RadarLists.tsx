@@ -143,7 +143,7 @@ export function RadarExitList({
               )}
               {options?.[x.ticker] && (
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
-                  <IvBadge o={options[x.ticker]} />
+                  <IvBadge o={options[x.ticker]} direction={x.direction} holder />
                   <CatalystLine o={options[x.ticker]} />
                 </div>
               )}
@@ -194,7 +194,7 @@ export function RadarTrendingList({
                     <VerdictBadge o={options[t.ticker]} ctx={{ direction: t.direction, role: 'trending', active: t.active, nowMs: now }} />
                   )}
                   <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                    <IvBadge o={options[t.ticker]} />
+                    <IvBadge o={options[t.ticker]} direction={t.direction} />
                     <CatalystLine o={options[t.ticker]} />
                   </div>
                 </div>
