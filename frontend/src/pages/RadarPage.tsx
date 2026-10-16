@@ -96,14 +96,14 @@ export default function RadarPage() {
   // Call filters: hidden names are listed by reason and can be shown faded.
   const hidden = new Map<string, { ticker: string; why: string }>();
   for (const m of inDir) {
-    const why = failReason(view.opt, options?.[m.ticker], m.last_price);
+    const why = failReason(view.opt, options?.[m.ticker], m.last_price, m.direction);
     if (why) hidden.set(memberKey(m), { ticker: m.ticker, why });
   }
   const members = showHidden ? inDir : inDir.filter((m) => !hidden.has(memberKey(m)));
   const dimmed = showHidden ? new Set(hidden.keys()) : undefined;
   const heatingAll = live ? st.heating ?? [] : [];
   const heating = heatingAll.filter(
-    (h) => (view.f === 'all' || h.direction === view.f) && !failReason(view.opt, options?.[h.ticker], h.price),
+    (h) => (view.f === 'all' || h.direction === view.f) && !failReason(view.opt, options?.[h.ticker], h.price, h.direction),
   );
   const heatingHidden = heatingAll.length - heating.length;
   const exits = st?.recent_exits ?? [];
@@ -112,7 +112,7 @@ export default function RadarPage() {
   const trending = st?.trending ?? [];
   const TRENDING_SHOWN = 12;
   const trendingVisible = trending
-    .filter((t) => (view.f === 'all' || t.direction === view.f) && !failReason(view.opt, options?.[t.ticker], t.price))
+    .filter((t) => (view.f === 'all' || t.direction === view.f) && !failReason(view.opt, options?.[t.ticker], t.price, t.direction))
     .sort((a, b) => Number(b.active) - Number(a.active) || Math.abs(b.zday ?? 0) - Math.abs(a.zday ?? 0));
 
   const summary: string[] = [];
@@ -217,7 +217,7 @@ export default function RadarPage() {
           ) : members.length === 0 ? (
             <RadarEmpty>{hidden.size ? 'Every stock on the radar is hidden by the call filters.' : membersEmpty}</RadarEmpty>
           ) : (
-            <RadarMemberList members={members} tickId={st.tick_id} options={options} dimmed={dimmed} rules={rules} />
+            <RadarMemberList members={members} tickId={st.tick_id} options={options} dimmed={dimmed} rules={rules} now={now} />
           )}
         </RadarSection>
 
@@ -236,7 +236,7 @@ export default function RadarPage() {
           ) : heating.length === 0 ? (
             <RadarEmpty>No stocks warming up right now.</RadarEmpty>
           ) : (
-            <RadarHeatingList items={heating} options={options} />
+            <RadarHeatingList items={heating} options={options} now={now} />
           )}
         </RadarSection>
 
@@ -254,7 +254,7 @@ export default function RadarPage() {
             <RadarEmpty>{c.scanning ? 'Nothing trending yet today. Names can appear from 10:00 ET.' : 'Nothing trended this session.'}</RadarEmpty>
           ) : (
             <>
-              <RadarTrendingList items={allTrending ? trendingVisible : trendingVisible.slice(0, TRENDING_SHOWN)} options={options} />
+              <RadarTrendingList items={allTrending ? trendingVisible : trendingVisible.slice(0, TRENDING_SHOWN)} options={options} now={now} />
               {trendingVisible.length > TRENDING_SHOWN && (
                 <button
                   type="button"

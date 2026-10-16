@@ -20,8 +20,10 @@ import IntensityMeter from './IntensityMeter';
 import RadarSparkline from './RadarSparkline';
 import { DirArrow } from './DirArrow';
 import ExitWatch, { ExitWatchPill } from './ExitWatch';
-import { DEFAULT_EXIT_RULES, type ExitRules } from './exitRules';
+import { DEFAULT_EXIT_RULES, exitWatch, type ExitRules } from './exitRules';
 import { CatalystLine, OptionChip, OptionDetails } from './OptionInfo';
+import VerdictBadge from './VerdictBadge';
+import type { VerdictContext } from './verdict';
 
 // Literal class maps (Tailwind purge).
 const STATE_CHIP = {
@@ -44,11 +46,21 @@ interface RowProps {
   onToggle: (key: string) => void;
   /** Distinguishes the card and table copies of the same member (both stay in the DOM). */
   idSuffix: 'card' | 'row';
+  /** Client clock (ms), for the time-of-day part of the entry verdict. */
+  now: number;
 }
+
+const verdictCtx = (m: RadarMember, rules: ExitRules, now: number): VerdictContext => ({
+  direction: m.direction,
+  role: 'member',
+  state: m.state,
+  exitLevel: exitWatch(m, rules).level,
+  nowMs: now,
+});
 
 const detailsId = (m: RadarMember, suffix: string) => `radar-more-${m.ticker.replace(/[^A-Za-z0-9]/g, '_')}-${suffix}`;
 
-function MemberHead({ m, rules, open, onToggle, idSuffix }: Omit<RowProps, 'tickId' | 'o'>) {
+function MemberHead({ m, rules, open, onToggle, idSuffix }: Omit<RowProps, 'tickId' | 'o' | 'now'>) {
   const key = memberKey(m);
   return (
     <div className="flex items-center gap-x-2 gap-y-1 flex-wrap">
@@ -112,7 +124,19 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function MemberDetails({ m, o, rules, id }: { m: RadarMember; o: RadarOptionMetrics | undefined; rules: ExitRules; id: string }) {
+function MemberDetails({
+  m,
+  o,
+  rules,
+  id,
+  now,
+}: {
+  m: RadarMember;
+  o: RadarOptionMetrics | undefined;
+  rules: ExitRules;
+  id: string;
+  now: number;
+}) {
   const lastBar = toMs(m.last_bar_at);
   return (
     <div
@@ -136,8 +160,12 @@ function MemberDetails({ m, o, rules, id }: { m: RadarMember; o: RadarOptionMetr
         </Fact>
         <Fact label="Sector">{m.sector || '—'}</Fact>
       </dl>
+      <div className="rounded border border-border/70 bg-card/40 px-3 py-2.5">
+        <div className="text-[10px] font-bold uppercase tracking-wider text-text-secondary mb-1.5">Enter with options?</div>
+        <VerdictBadge o={o} ctx={verdictCtx(m, rules, now)} full />
+      </div>
       <ExitWatch m={m} rules={rules} />
-      <OptionDetails o={o} />
+      <OptionDetails o={o} direction={m.direction} />
       {m.state === 'halted' && (
         <p>
           No new trades since {fmtEt(lastBar)}: possibly a trading halt. It stays on the radar until trading resumes
@@ -156,7 +184,7 @@ function MemberDetails({ m, o, rules, id }: { m: RadarMember; o: RadarOptionMetr
   );
 }
 
-function MemberCard({ m, o, rules, tickId, open, onToggle, dim }: Omit<RowProps, 'idSuffix'> & { dim?: boolean }) {
+function MemberCard({ m, o, rules, tickId, open, onToggle, dim, now }: Omit<RowProps, 'idSuffix'> & { dim?: boolean }) {
   const mins = minutesOnRadar(m, tickId);
   return (
     <li className={`py-3 cursor-pointer ${dim ? 'opacity-40' : ''}`} onClick={() => onToggle(memberKey(m))}>
@@ -193,18 +221,19 @@ function MemberCard({ m, o, rules, tickId, open, onToggle, dim }: Omit<RowProps,
         </span>
       </div>
       {m.reasons?.length > 0 && <p className="text-xs text-text-secondary mt-2 leading-snug">{m.reasons.join(' · ')}</p>}
-      <div className="mt-1.5 space-y-1">
+      <div className="mt-2 space-y-1">
+        <VerdictBadge o={o} ctx={verdictCtx(m, rules, now)} />
         <CatalystLine o={o} />
-        <OptionChip o={o} />
+        <OptionChip o={o} direction={m.direction} />
       </div>
-      {open && <MemberDetails m={m} o={o} rules={rules} id={detailsId(m, 'card')} />}
+      {open && <MemberDetails m={m} o={o} rules={rules} id={detailsId(m, 'card')} now={now} />}
     </li>
   );
 }
 
 const NUM_TD = 'px-1.5 py-2 text-right tabular-nums whitespace-nowrap';
 
-function MemberRows({ m, o, rules, tickId, open, onToggle, dim }: Omit<RowProps, 'idSuffix'> & { dim?: boolean }) {
+function MemberRows({ m, o, rules, tickId, open, onToggle, dim, now }: Omit<RowProps, 'idSuffix'> & { dim?: boolean }) {
   const mins = minutesOnRadar(m, tickId);
   const hasReasons = true; // the second row always carries the option chip
   return (
@@ -241,10 +270,13 @@ function MemberRows({ m, o, rules, tickId, open, onToggle, dim }: Omit<RowProps,
           <td colSpan={11} className="pl-7 pr-2 pb-2 text-xs text-text-secondary leading-snug">
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
               <span>{m.reasons?.join(' · ')}</span>
-              <OptionChip o={o} />
+              <OptionChip o={o} direction={m.direction} />
             </div>
             <div className="mt-1">
               <CatalystLine o={o} />
+            </div>
+            <div className="mt-1.5">
+              <VerdictBadge o={o} ctx={verdictCtx(m, rules, now)} />
             </div>
           </td>
         </tr>
@@ -252,7 +284,7 @@ function MemberRows({ m, o, rules, tickId, open, onToggle, dim }: Omit<RowProps,
       {open && (
         <tr>
           <td colSpan={11} className="px-1 pb-3">
-            <MemberDetails m={m} o={o} rules={rules} id={detailsId(m, 'row')} />
+            <MemberDetails m={m} o={o} rules={rules} id={detailsId(m, 'row')} now={now} />
           </td>
         </tr>
       )}
@@ -273,8 +305,11 @@ export default function RadarMemberList({
   options,
   dimmed,
   rules = DEFAULT_EXIT_RULES,
+  now,
 }: {
   members: RadarMember[];
+  /** Client clock (ms), for the entry verdict. */
+  now: number;
   tickId: string;
   options?: Record<string, RadarOptionMetrics>;
   /** Keys (memberKey) shown faded: filtered out but revealed on request. */
@@ -305,6 +340,7 @@ export default function RadarMemberList({
             open={open.has(memberKey(m))}
             onToggle={toggle}
             dim={dimmed?.has(memberKey(m))}
+            now={now}
           />
         ))}
       </ul>
@@ -332,6 +368,7 @@ export default function RadarMemberList({
             open={open.has(memberKey(m))}
             onToggle={toggle}
             dim={dimmed?.has(memberKey(m))}
+            now={now}
           />
         ))}
       </table>

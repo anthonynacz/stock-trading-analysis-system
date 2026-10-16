@@ -1114,6 +1114,24 @@ export interface RadarOptionMetrics {
   last_earnings_time?: string | null;
   float?: { shares: number | null; free_pct: number | null; low: boolean } | null;
   context_source?: string;
+  /** Both sides of the expiry, same shape: up moves trade calls, down moves trade puts. */
+  sides?: { call: RadarOptionSide | null; put: RadarOptionSide | null };
+}
+
+/** One side (calls or puts) of the chosen expiry: the at-the-money contract and near-the-money liquidity. */
+export interface RadarOptionSide {
+  atm: RadarOptionAtm & {
+    delta: number | null;
+    /** Time decay of one contract, $ per calendar day (negative). */
+    theta_day_usd: number | null;
+    /** Time decay per day as % of the contract's mid price. */
+    theta_pct: number | null;
+    /** Stock move (%) needed just to pay the bid-ask spread. */
+    spread_move_pct: number | null;
+  };
+  ntm_oi: number;
+  ntm_volume: number;
+  liquidity: RadarOptionLiquidity;
 }
 
 export type RadarIvRiskLevel = 'crushing' | 'high' | 'elevated' | 'normal';

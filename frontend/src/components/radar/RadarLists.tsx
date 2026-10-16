@@ -6,6 +6,7 @@ import { exitText, fmtIntensity, fmtMove, fmtRadarPrice, signClass, tickerHref }
 import { DirArrow } from './DirArrow';
 import { DEFAULT_EXIT_RULES, exitRuleText, type ExitRules } from './exitRules';
 import { CatalystLine, IvBadge, OptionChip } from './OptionInfo';
+import VerdictBadge from './VerdictBadge';
 
 /** Card section with an uppercase heading, a count chip and optional tools / note. */
 export function RadarSection({
@@ -60,9 +61,12 @@ function TickerLink({ ticker, muted = false }: { ticker: string; muted?: boolean
 export function RadarHeatingList({
   items,
   options,
+  now,
 }: {
   items: RadarHeating[];
   options?: Record<string, RadarOptionMetrics>;
+  /** Client clock (ms), for the entry verdict. */
+  now: number;
 }) {
   const sorted = [...items].sort((a, b) => (b.intensity ?? 0) - (a.intensity ?? 0));
   return (
@@ -83,8 +87,9 @@ export function RadarHeatingList({
               {h.reasons?.length > 0 && <div className="text-xs leading-snug mt-0.5">{h.reasons.join(' · ')}</div>}
               {options && (
                 <div className="mt-1 space-y-1">
+                  <VerdictBadge o={options[h.ticker]} ctx={{ direction: h.direction, role: 'heating', nowMs: now }} />
                   <CatalystLine o={options[h.ticker]} />
-                  <OptionChip o={options[h.ticker]} />
+                  <OptionChip o={options[h.ticker]} direction={h.direction} />
                 </div>
               )}
             </div>
@@ -155,9 +160,12 @@ export function RadarExitList({
 export function RadarTrendingList({
   items,
   options,
+  now,
 }: {
   items: RadarTrend[];
   options?: Record<string, RadarOptionMetrics>;
+  /** Client clock (ms), for the entry verdict. */
+  now: number;
 }) {
   return (
     <ul className="divide-y divide-border">
@@ -181,9 +189,14 @@ export function RadarTrendingList({
                 {!t.active && left !== null ? ` · dropped off ${fmtEt(left)} (back through VWAP)` : ''}
               </div>
               {options?.[t.ticker] && (
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]">
-                  <IvBadge o={options[t.ticker]} />
-                  <CatalystLine o={options[t.ticker]} />
+                <div className="mt-1 space-y-1">
+                  {t.active && (
+                    <VerdictBadge o={options[t.ticker]} ctx={{ direction: t.direction, role: 'trending', active: t.active, nowMs: now }} />
+                  )}
+                  <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                    <IvBadge o={options[t.ticker]} />
+                    <CatalystLine o={options[t.ticker]} />
+                  </div>
                 </div>
               )}
             </div>

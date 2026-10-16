@@ -2,7 +2,8 @@
 // option cost, event risk). Pure: no React. The metrics come from
 // backend/radar/options.py via GET /api/radar `options`.
 
-import type { RadarOptionLiquidity, RadarOptionMetrics } from '../../types';
+import type { RadarDirection, RadarOptionLiquidity, RadarOptionMetrics } from '../../types';
+import { sideOf } from './optionSide';
 
 export interface OptionFilters {
   /** Typical daily dollar volume of the stock, in $ millions (0 = any). */
@@ -75,9 +76,15 @@ const needsOptions = (f: OptionFilters) =>
 
 /**
  * Why a name fails the filters (first failing check), or null when it passes.
- * `price` is the radar's last price, used when the metrics are missing.
+ * `price` is the radar's last price, used when the metrics are missing. The option checks read the side the
+ * move is traded with: calls for up moves, puts for down moves (`direction`).
  */
-export function failReason(f: OptionFilters, o: RadarOptionMetrics | undefined, price: number | null): string | null {
+export function failReason(
+  f: OptionFilters,
+  o: RadarOptionMetrics | undefined,
+  price: number | null,
+  direction?: RadarDirection,
+): string | null {
   const px = o?.price ?? price;
   if (f.minPrice > 0 && (px === null || px === undefined || px < f.minPrice)) return `price under $${f.minPrice}`;
   if (f.minAdvM > 0) {
@@ -87,12 +94,17 @@ export function failReason(f: OptionFilters, o: RadarOptionMetrics | undefined, 
   if (!needsOptions(f)) return null;
   if (!o) return 'no option data yet';
   if (!o.has_options) return 'no listed options';
-  if (f.liquidity !== 'any' && LIQ_RANK[o.liquidity] < LIQ_RANK[f.liquidity]) return `${o.liquidity} call liquidity`;
-  if (f.minNtmOi > 0 && (o.ntm_call_oi ?? 0) < f.minNtmOi) return `call open interest under ${f.minNtmOi}`;
-  if (f.maxSpreadPct > 0) {
-    const sp = o.atm?.spread_pct;
-    if (sp === null || sp === undefined) return 'no live call quote';
-    if (sp > f.maxSpreadPct) return `call spread over ${f.maxSpreadPct}%`;
+  const side = sideOf(o, direction);
+  const needsSide = f.liquidity !== 'any' || f.minNtmOi > 0 || f.maxSpreadPct > 0;
+  if (needsSide && !side) return 'no put data yet';
+  if (side) {
+    const k = side.kind;
+    if (f.liquidity !== 'any' && LIQ_RANK[side.liquidity] < LIQ_RANK[f.liquidity]) return `${side.liquidity} ${k} liquidity`;
+    if (f.minNtmOi > 0 && (side.ntmOi ?? 0) < f.minNtmOi) return `${k} open interest under ${f.minNtmOi}`;
+    if (f.maxSpreadPct > 0) {
+      if (side.spreadPct === null || side.spreadPct === undefined) return `no live ${k} quote`;
+      if (side.spreadPct > f.maxSpreadPct) return `${k} spread over ${f.maxSpreadPct}%`;
+    }
   }
   if (f.maxIvHv > 0 && o.iv_hv !== null && o.iv_hv > f.maxIvHv) return `IV over ${f.maxIvHv}× realised`;
   if (f.noEarnings && o.earnings_before_expiry) return 'earnings before expiry';
@@ -135,19 +147,17 @@ export function fmtShortDate(iso: string | null | undefined): string {
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
-export const LIQ_TEXT: Record<RadarOptionLiquidity, string> = {
-  good: 'Liquid calls',
-  fair: 'Tradable calls',
-  thin: 'Thin calls',
-  none: 'No options',
-};
+const LIQ_WORD: Record<RadarOptionLiquidity, string> = { good: 'Liquid', fair: 'Tradable', thin: 'Thin', none: 'No' };
 
-export const LIQ_HINT: Record<RadarOptionLiquidity, string> = {
-  good: 'Near-the-money calls: open interest 2,000+, 500+ traded today, at-the-money spread ≤ 10%.',
-  fair: 'Near-the-money calls: open interest 300+, at-the-money spread ≤ 25%.',
-  thin: 'Few near-the-money calls open or a wide bid-ask spread: fills can be costly.',
-  none: 'No listed options found for this stock.',
-};
+/** "Liquid calls", "Thin puts", "No options". */
+export const liqText = (l: RadarOptionLiquidity, plural = 'calls') => (l === 'none' ? 'No options' : `${LIQ_WORD[l]} ${plural}`);
+
+export function liqHint(l: RadarOptionLiquidity, plural = 'calls'): string {
+  if (l === 'good') return `Near-the-money ${plural}: open interest 2,000+, 500+ traded today, at-the-money spread ≤ 10%.`;
+  if (l === 'fair') return `Near-the-money ${plural}: open interest 300+, at-the-money spread ≤ 25%.`;
+  if (l === 'thin') return `Few near-the-money ${plural} open or a wide bid-ask spread: fills can be costly.`;
+  return 'No listed options found for this stock.';
+}
 
 // Literal class maps (Tailwind purge).
 export const LIQ_CLASS: Record<RadarOptionLiquidity, string> = {

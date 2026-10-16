@@ -122,6 +122,66 @@ def vega_per_point(spot: float | None, strike: float | None, iv_pct: float | Non
     return spot * _npdf(d1) * math.sqrt(t)
 
 
+def _ncdf(x: float) -> float:
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def greeks(spot: float | None, strike: float | None, iv_pct: float | None, dte: int | None, kind: str,
+           rate: float = IV["rate"]) -> dict:
+    """Black-Scholes delta and time decay of ONE contract (100 shares): theta in dollars per calendar day."""
+    if not spot or not strike or not iv_pct or iv_pct <= 0 or dte is None:
+        return {"delta": None, "theta_day_usd": None}
+    t = max(dte, 0.5) / 365.0
+    sig = iv_pct / 100.0
+    d1 = (math.log(spot / strike) + (rate + sig * sig / 2) * t) / (sig * math.sqrt(t))
+    d2 = d1 - sig * math.sqrt(t)
+    decay = -spot * _npdf(d1) * sig / (2 * math.sqrt(t))
+    if kind == "call":
+        delta, theta = _ncdf(d1), decay - rate * strike * math.exp(-rate * t) * _ncdf(d2)
+    else:
+        delta, theta = _ncdf(d1) - 1.0, decay + rate * strike * math.exp(-rate * t) * _ncdf(-d2)
+    return {"delta": round(delta, 3), "theta_day_usd": round(theta / 365.0 * 100.0, 2)}
+
+
+def side_metrics(contracts: list[dict], spot: float, dte: int, kind: str, params: dict = OPTIONS) -> dict | None:
+    """The at-the-money contract and near-the-money liquidity of one side (calls or puts) of an expiry.
+
+    Beyond the quote: delta, time decay per day and per cent of the price, and `spread_move_pct`, the stock
+    move needed just to pay the bid-ask spread (spread / |delta| / price): with ~40-minute holds the spread,
+    not the direction call, decided whether a trade made money in the backtest (2026-10-16)."""
+    rows = [c for c in contracts or [] if _num(c.get("strike")) is not None]
+    if not rows or not spot:
+        return None
+    band = params["ntm_band"]
+    ntm = [c for c in rows if abs(float(c["strike"]) / spot - 1.0) <= band]
+    # Calls: the higher strike on a tie (slightly out of the money); puts: the lower one.
+    atm = min(rows, key=lambda c: (abs(float(c["strike"]) - spot), -float(c["strike"]) if kind == "call" else float(c["strike"])))
+    strike, bid, ask = float(atm["strike"]), _num(atm.get("bid")), _num(atm.get("ask"))
+    iv = _num(atm.get("impliedVolatility"))
+    iv = iv * 100.0 if iv is not None and iv >= MIN_IV else None
+    sp = spread_pct(bid, ask)
+    mid = (bid + ask) / 2.0 if bid and ask and bid > 0 and ask >= bid else None
+    g = greeks(spot, strike, iv, dte, kind)
+    ntm_oi = sum(_int(c.get("openInterest")) for c in ntm)
+    ntm_vol = sum(_int(c.get("volume")) for c in ntm)
+    spread_move = ((ask - bid) / (abs(g["delta"]) * spot) * 100.0
+                   if mid and g["delta"] and abs(g["delta"]) > 0.05 else None)
+    if ask and ask > 0:
+        be = ((strike + ask) / spot - 1.0) * 100.0 if kind == "call" else ((strike - ask) / spot - 1.0) * 100.0
+    else:
+        be = None
+    return {
+        "atm": {"strike": strike, "bid": _r(bid), "ask": _r(ask), "mid": _r(mid), "spread_pct": _r(sp, 1),
+                "volume": _int(atm.get("volume")), "oi": _int(atm.get("openInterest")), "iv_pct": _r(iv, 1),
+                "breakeven_pct": _r(be, 1), "contract": atm.get("contractSymbol"), "delta": g["delta"],
+                "theta_day_usd": g["theta_day_usd"],
+                "theta_pct": _r(abs(g["theta_day_usd"]) / (mid * 100.0) * 100.0, 1) if mid and g["theta_day_usd"] else None,
+                "spread_move_pct": _r(spread_move, 2)},
+        "ntm_oi": ntm_oi, "ntm_volume": ntm_vol,
+        "liquidity": grade(ntm_oi, sp, ntm_vol, params["grade"]),
+    }
+
+
 def atm_iv(chain: dict | None, spot: float | None) -> float | None:
     """ATM call IV (%) of one expiry's chain, None when unquoted."""
     calls = [c for c in (chain or {}).get("calls") or [] if _num(c.get("strike")) is not None]
@@ -166,7 +226,7 @@ def chain_metrics(result: dict, chain: dict | None, now: float, *, baseline: dic
         "expiry": None, "dte": None, "earnings_before_expiry": None,
         "atm": None, "ntm_call_oi": None, "ntm_call_volume": None, "call_volume": None, "put_volume": None,
         "put_call_volume": None, "iv_pct": None, "iv_hv": None, "expected_move_pct": None,
-        "liquidity": "none",
+        "liquidity": "none", "sides": {"call": None, "put": None},
     }
     if not exps or not chain or not spot:
         return doc
@@ -200,6 +260,8 @@ def chain_metrics(result: dict, chain: dict | None, now: float, *, baseline: dic
         iv_pct=_r(iv, 1), iv_hv=_r(iv / hv, 2) if iv and hv else None,
         expected_move_pct=_r(iv * math.sqrt(max(dte, 1) / 365.0), 1) if iv else None,
         liquidity=grade(ntm_oi, sp, ntm_vol, params["grade"]),
+        # Both sides, the same shape: up moves are traded with calls, down moves with puts.
+        sides={"call": side_metrics(calls, spot, dte, "call", params), "put": side_metrics(puts, spot, dte, "put", params)},
     )
     return doc
 

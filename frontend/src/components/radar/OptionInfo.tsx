@@ -1,7 +1,8 @@
-import type { RadarCatalyst, RadarIvRiskLevel, RadarOptionMetrics } from '../../types';
+import type { RadarCatalyst, RadarDirection, RadarIvRiskLevel, RadarOptionMetrics } from '../../types';
 import { fmtStrike } from '../../utils/format';
 import { fmtEt, toMs } from './clock';
-import { LIQ_CLASS, LIQ_HINT, LIQ_TEXT, fmtCompact, fmtShortDate, fmtUsdCompact } from './optionFilters';
+import { LIQ_CLASS, fmtCompact, fmtShortDate, fmtUsdCompact, liqHint, liqText } from './optionFilters';
+import { kindFor, sideOf } from './optionSide';
 
 const n1 = (v: number | null | undefined, suffix = '') =>
   v === null || v === undefined || Number.isNaN(v) ? '—' : `${v.toFixed(1)}${suffix}`;
@@ -78,27 +79,48 @@ export function CatalystLine({ o }: { o: RadarOptionMetrics | undefined }) {
   );
 }
 
-/** Compact one-line summary: liquidity pill, expiry, call OI, spread, IV badge, earnings flag. */
-export function OptionChip({ o }: { o: RadarOptionMetrics | undefined }) {
+/**
+ * Compact one-line summary of the side the move is traded with (calls up, puts down): liquidity pill, IV badge,
+ * expiry, open interest, spread, time decay, earnings flag.
+ */
+export function OptionChip({ o, direction }: { o: RadarOptionMetrics | undefined; direction?: RadarDirection }) {
   if (!o) return <span className="text-[11px] text-text-secondary/70">Option data after the next scan</span>;
   const earn = o.earnings_before_expiry;
+  const s = sideOf(o, direction);
+  const plural = `${kindFor(direction)}s`;
   return (
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-text-secondary">
-      <span className={`px-1.5 py-px rounded border font-semibold cursor-help ${LIQ_CLASS[o.liquidity]}`} title={LIQ_HINT[o.liquidity]}>
-        {LIQ_TEXT[o.liquidity]}
-      </span>
+      {s ? (
+        <span className={`px-1.5 py-px rounded border font-semibold cursor-help ${LIQ_CLASS[s.liquidity]}`} title={liqHint(s.liquidity, plural)}>
+          {liqText(s.liquidity, plural)}
+        </span>
+      ) : o.has_options ? (
+        <span className="text-text-secondary/70">Put data after the next scan</span>
+      ) : (
+        <span className={`px-1.5 py-px rounded border font-semibold ${LIQ_CLASS.none}`}>No options</span>
+      )}
       <IvBadge o={o} />
       {o.has_options && o.expiry && (
+        <span className="tabular-nums" title="First expiry at least 7 days out">
+          {fmtShortDate(o.expiry)} ({o.dte}d)
+        </span>
+      )}
+      {s && (
         <>
-          <span className="tabular-nums" title="First expiry at least 7 days out">
-            {fmtShortDate(o.expiry)} ({o.dte}d)
+          <span className="tabular-nums" title={`Open interest of ${plural} within ±10% of the price`}>
+            OI {fmtCompact(s.ntmOi)}
           </span>
-          <span className="tabular-nums" title="Open interest of calls within ±10% of the price">
-            OI {fmtCompact(o.ntm_call_oi)}
+          <span
+            className="tabular-nums cursor-help"
+            title={`At-the-money ${s.kind} bid-ask spread, % of mid${s.spreadUsd !== null ? `: about $${s.spreadUsd} per contract lost on a round trip` : ''}`}
+          >
+            spread {n1(s.spreadPct, '%')}
           </span>
-          <span className="tabular-nums" title="At-the-money call bid-ask spread, % of mid">
-            spread {n1(o.atm?.spread_pct, '%')}
-          </span>
+          {s.thetaDayUsd !== null && (
+            <span className="tabular-nums cursor-help" title={`Time decay of one at-the-money ${s.kind} (100 shares), per calendar day`}>
+              decay ${Math.abs(s.thetaDayUsd).toFixed(0)}/day
+            </span>
+          )}
         </>
       )}
       {earn && (
@@ -169,13 +191,15 @@ function IvSection({ o }: { o: RadarOptionMetrics }) {
 }
 
 /** The full option picture of one name, for the expanded member details. Informational only. */
-export function OptionDetails({ o }: { o: RadarOptionMetrics | undefined }) {
+export function OptionDetails({ o, direction }: { o: RadarOptionMetrics | undefined; direction?: RadarDirection }) {
   if (!o) return null;
-  const a = o.atm;
+  const a = sideOf(o, direction);
+  const kind = kindFor(direction);
+  const Kind = kind === 'put' ? 'Put' : 'Call';
   return (
     <div className="rounded border border-border/70 bg-card/40 px-3 py-2.5 space-y-2">
       <div className="flex items-baseline justify-between gap-2 flex-wrap">
-        <span className="text-[10px] font-bold uppercase tracking-wider text-text-secondary">Calls, IV & catalysts</span>
+        <span className="text-[10px] font-bold uppercase tracking-wider text-text-secondary">{Kind}s, IV & catalysts</span>
         <span className="text-[11px] text-text-secondary">Option quotes from Yahoo (delayed) · {o.as_of.slice(11, 16)} UTC</span>
       </div>
       {o.has_options && o.iv_pct ? <IvSection o={o} /> : null}
@@ -217,24 +241,34 @@ export function OptionDetails({ o }: { o: RadarOptionMetrics | undefined }) {
             <Fact label="Expiry" hint="First expiry at least 7 days out">
               {fmtShortDate(o.expiry)} ({o.dte} days){o.weeklies ? ' · weeklies' : ' · monthlies only'}
             </Fact>
-            {a && (
-              <Fact label="At-the-money call" hint="Strike nearest the price: bid / ask, volume today, open interest">
-                {fmtStrike(a.strike)} · {a.bid ?? '—'} / {a.ask ?? '—'} · vol {fmtCompact(a.volume)} · OI {fmtCompact(a.oi)}
-              </Fact>
+            {a ? (
+              <>
+                <Fact label={`At-the-money ${kind}`} hint="Strike nearest the price: bid / ask, volume today, open interest">
+                  {a.strike !== null ? fmtStrike(a.strike) : '—'} · {a.bid ?? '—'} / {a.ask ?? '—'} · vol {fmtCompact(a.volume)} · OI {fmtCompact(a.oi)}
+                </Fact>
+                <Fact label={`Near-the-money ${kind}s`} hint={`${Kind}s with strikes within ±10% of the price`}>
+                  OI {fmtCompact(a.ntmOi)} · {fmtCompact(a.ntmVolume)} traded today
+                </Fact>
+                <Fact label="Spread" hint={`At-the-money ${kind} bid-ask spread in % of mid: what a round trip costs`}>
+                  {n1(a.spreadPct, '%')}
+                  {a.spreadUsd !== null ? ` · ≈ $${a.spreadUsd} per contract` : ''}
+                  {a.spreadMovePct !== null ? ` · stock must move ${a.spreadMovePct.toFixed(1)}% to cover it` : ''}
+                </Fact>
+                <Fact label="Time decay" hint={`Black-Scholes theta of one at-the-money ${kind} (100 shares), per calendar day, and as % of its price`}>
+                  {a.thetaDayUsd !== null ? `≈ $${Math.abs(a.thetaDayUsd).toFixed(0)}/day` : '—'}
+                  {a.thetaPct !== null ? ` (${a.thetaPct.toFixed(1)}% of the price)` : ''}
+                </Fact>
+                <Fact
+                  label="Break-even"
+                  hint={`Stock move needed by expiry for the at-the-money ${kind} bought at the ask to break even, against the 1σ move its IV implies`}
+                >
+                  {a.breakevenPct !== null && a.breakevenPct !== undefined ? `${a.breakevenPct > 0 ? '+' : ''}${a.breakevenPct.toFixed(1)}%` : '—'}
+                  {o.expected_move_pct !== null ? ` · implied ±${o.expected_move_pct.toFixed(1)}%` : ''}
+                </Fact>
+              </>
+            ) : (
+              <Fact label={`${Kind}s`}>data after the next scan</Fact>
             )}
-            <Fact label="Near-the-money calls" hint="Calls with strikes within ±10% of the price">
-              OI {fmtCompact(o.ntm_call_oi)} · {fmtCompact(o.ntm_call_volume)} traded today
-            </Fact>
-            <Fact label="Spread" hint="At-the-money call bid-ask spread in % of mid: what a round trip can cost">
-              {n1(a?.spread_pct, '%')}
-            </Fact>
-            <Fact
-              label="Break-even"
-              hint="Stock move needed by expiry for the at-the-money call bought at the ask to break even, against the 1σ move its IV implies"
-            >
-              {a?.breakeven_pct !== null && a?.breakeven_pct !== undefined ? `+${a.breakeven_pct.toFixed(1)}%` : '—'}
-              {o.expected_move_pct !== null ? ` · implied ±${o.expected_move_pct.toFixed(1)}%` : ''}
-            </Fact>
             <Fact label="Put/call volume" hint="Put volume over call volume today for this expiry">
               {o.put_call_volume !== null ? o.put_call_volume.toFixed(2) : '—'}
             </Fact>
