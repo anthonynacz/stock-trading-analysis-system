@@ -306,6 +306,21 @@ export default function Dashboard() {
           </section>
         )}
 
+        {/* Upcoming Catalysts — earnings in the next 14 days for the watchlist, near the top so it is seen
+            before the long lists; scrolls inside its box on busy earnings weeks */}
+        <section>
+          <h2 className="text-xl font-bold text-text-primary mb-4">Upcoming Catalysts</h2>
+          <div className="bg-card border border-border rounded-lg p-4 max-h-[26rem] overflow-y-auto">
+            {catalysts.loading && !catalysts.data ? (
+              <LoadingRow />
+            ) : catalysts.error ? (
+              <ErrorBox message={catalysts.error} />
+            ) : (
+              <CatalystCalendar events={catalysts.data ?? []} />
+            )}
+          </div>
+        </section>
+
         {/* Recommendations + Ticker Detail — two-column layout */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           <section className="lg:col-span-3">
@@ -453,9 +468,9 @@ export default function Dashboard() {
           <WatchlistStrikes selectedDate={selectedDate} />
         </section>
 
-        {/* News + Catalysts two-column */}
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          <section className="lg:col-span-3">
+        {/* News */}
+        <div>
+          <section>
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-bold text-text-primary">News</h2>
               <NewsModeSelector
@@ -483,18 +498,6 @@ export default function Dashboard() {
             </div>
           </section>
 
-          <section className="lg:col-span-2">
-            <h2 className="text-xl font-bold text-text-primary mb-4">Upcoming Catalysts</h2>
-            <div className="bg-card border border-border rounded-lg p-4">
-              {catalysts.loading && !catalysts.data ? (
-                <LoadingRow />
-              ) : catalysts.error ? (
-                <ErrorBox message={catalysts.error} />
-              ) : (
-                <CatalystCalendar events={catalysts.data ?? []} />
-              )}
-            </div>
-          </section>
         </div>
         {/* Watchlist — collapsed by default; recommendations are the primary view */}
         <section>
