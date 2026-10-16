@@ -105,6 +105,7 @@ OPTIONS: dict = {
     "fetch_timeout_s": 10,
     "timeout_s": 75,               # hard cap on the whole refresh (worker subprocess timeout)
     "keep_days": 7,                # rows older than this are pruned on write
+    "history_days": 21,            # radar_option_history: every reading, for radar/option_lag.py
     # Call liquidity grade: near-the-money call open interest and volume today (summed over strikes within
     # ntm_band: one strike's numbers are noisy) and the at-the-money call's bid-ask spread as % of mid
     # (Yahoo quotes are delayed, so the limits are loose). Good when all "good" limits hold, fair when the

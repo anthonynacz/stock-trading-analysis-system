@@ -958,6 +958,25 @@ class RadarOptionMetric(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class RadarOptionHistory(Base):
+    """Every option-metrics reading of a radar name (radar/options.py refresh), slimmed to the quote
+    fields (radar.options.history_doc). Kept OPTIONS.history_days, pruned on write. Measures the staleness
+    of the delayed option quotes (radar/option_lag.py); nothing else reads it.
+    """
+
+    __tablename__ = "radar_option_history"
+    __table_args__ = (
+        UniqueConstraint("ticker", "as_of", name="uq_radar_option_history_ticker_as_of"),
+        Index("ix_radar_option_history_as_of", "as_of"),
+    )
+
+    id: Mapped[int] = mapped_column(_RADAR_BIGINT_PK, primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(16), nullable=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    direction: Mapped[Optional[str]] = mapped_column(String(4))  # up, down (the radar's direction then)
+    metrics: Mapped[Optional[dict]] = mapped_column(JSON)
+
+
 class RadarBaseline(Base):
     """One gzip'd BaselinePack per (session_date, kind).
 

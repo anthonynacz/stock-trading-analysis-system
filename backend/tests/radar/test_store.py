@@ -30,7 +30,8 @@ from radar.store import RADAR_TABLES, RadarStore, sync_url
 BACKEND = Path(__file__).resolve().parents[2]
 # The radar migrations, in revision order: the tables, then the scan request column and option metrics.
 MIGRATIONS = tuple(BACKEND / "alembic" / "versions" / f for f in (
-    "d6e2a4c8b1f9_radar_tables.py", "f3a9c2d7e510_radar_scan_request_options.py", "a8d4e6f2c913_radar_settings.py"))
+    "d6e2a4c8b1f9_radar_tables.py", "f3a9c2d7e510_radar_scan_request_options.py", "a8d4e6f2c913_radar_settings.py",
+    "b2c7e9f4a816_radar_option_history.py"))
 
 SESSION = "2026-09-28"
 TICK = "2026-09-28T13:35:00Z"
@@ -752,6 +753,7 @@ def test_postgres_statements_render_with_on_conflict(radar_store: RadarStore) ->
 RADAR_REVISION, PRIOR_REVISION = "d6e2a4c8b1f9", "a1f7d4e92c60"
 OPTIONS_REVISION = "f3a9c2d7e510"
 SETTINGS_REVISION = "a8d4e6f2c913"
+HISTORY_REVISION = "b2c7e9f4a816"
 
 
 def _migration_sql(*, raw: bool = False, migrations: tuple[Path, ...] = MIGRATIONS) -> list[str]:
@@ -999,7 +1001,8 @@ def test_migration_is_the_single_head_after_recommendation_outcomes() -> None:
     assert rev.down_revision == PRIOR_REVISION
     assert scripts.get_revision(OPTIONS_REVISION).down_revision == RADAR_REVISION
     assert scripts.get_revision(SETTINGS_REVISION).down_revision == OPTIONS_REVISION
-    assert scripts.get_heads() == [SETTINGS_REVISION]
+    assert scripts.get_revision(HISTORY_REVISION).down_revision == SETTINGS_REVISION
+    assert scripts.get_heads() == [HISTORY_REVISION]
 
 
 def test_session_tickers_lists_every_name_with_rows_or_events_in_the_session(radar_store):

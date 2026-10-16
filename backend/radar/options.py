@@ -434,6 +434,29 @@ def baselines_for(store: Any, session_date: str | None) -> dict[str, dict]:
     return out
 
 
+# The fields of a metrics doc that the staleness check (radar/option_lag.py) compares; the rest (catalysts,
+# float, IV-risk reasons) stays in radar_option_metrics only.
+HISTORY_KEYS = ("as_of", "price", "has_options", "expiry", "dte", "iv_pct", "hv_pct", "iv_hv", "term_ratio",
+                "iv_change_pct", "earnings_before_expiry", "liquidity", "atm", "ntm_call_oi", "sides")
+
+
+def history_doc(doc: dict) -> dict:
+    out = {k: doc.get(k) for k in HISTORY_KEYS}
+    out["iv_risk"] = (doc.get("iv_risk") or {}).get("level")
+    return out
+
+
+def radar_directions(state: dict) -> dict[str, str]:
+    """{ticker: up/down} of the radar names now (members first, then heating, trending, today's exits)."""
+    out: dict[str, str] = {}
+    for key in ("members", "heating", "trending", "recent_exits"):
+        for row in state.get(key) or []:
+            t, d = row.get("ticker"), row.get("direction")
+            if isinstance(t, str) and d in ("up", "down"):
+                out.setdefault(t, d)
+    return out
+
+
 def radar_tickers(state: dict, limit: int) -> list[str]:
     """The members (highest intensity first), the warming-up names, then the names that left the radar this
     session (positions opened on them are often still open: their IV keeps being tracked)."""
@@ -476,7 +499,14 @@ def refresh(store: Any, tickers: list[str] | None = None, *, fetch: Fetch | None
         for sym, doc in got.items():
             carry_iv_first(doc, prev.get(sym), now)
             doc["iv_risk"] = iv_risk(doc, now)
-        store.put_option_metrics(got, datetime.fromtimestamp(now, timezone.utc), int(params["keep_days"]))
+        as_of = datetime.fromtimestamp(now, timezone.utc)
+        store.put_option_metrics(got, as_of, int(params["keep_days"]))
+        try:                                 # the staleness log is a bonus: never fails the refresh
+            dirs = radar_directions(state)
+            store.put_option_history([(s, dirs.get(s), history_doc(d)) for s, d in got.items()], as_of,
+                                     int(params.get("history_days", 21)))
+        except Exception:  # noqa: BLE001
+            logger.warning("options: history not written", exc_info=True)
     status = "ok" if not failed else "degraded" if got else "error"
     return {"status": status, "tickers": len(syms), "ok": len(got), "failed": failed, "kept_previous": stale,
             "duration_ms": int((time.monotonic() - t0) * 1000)}

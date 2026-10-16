@@ -38,6 +38,7 @@ from db.models import (
     RadarEvent,
     RadarHousekeepingRun,
     RadarMemberTick,
+    RadarOptionHistory,
     RadarOptionMetric,
     RadarRuntime,
     RadarScanLog,
@@ -62,11 +63,12 @@ _MEMBER_TICKS: Table = RadarMemberTick.__table__
 _EVENTS: Table = RadarEvent.__table__
 _SCAN_LOG: Table = RadarScanLog.__table__
 _OPTIONS: Table = RadarOptionMetric.__table__
+_OPTION_HISTORY: Table = RadarOptionHistory.__table__
 
 # Every radar table; the tests build their SQLite schema from this and schema_ready() checks it.
 RADAR_TABLES: tuple[Table, ...] = tuple(m.__table__ for m in (
     RadarSnapshot, RadarRuntime, RadarBaseline, RadarMemberTick, RadarEvent, RadarScanLog,
-    RadarBackupManifest, RadarHousekeepingRun, RadarTableMetric, RadarOptionMetric))
+    RadarBackupManifest, RadarHousekeepingRun, RadarTableMetric, RadarOptionMetric, RadarOptionHistory))
 
 
 # ---------------------------------------------------------------- URL and value conversion
@@ -424,6 +426,31 @@ class RadarStore:
                     index_elements=["ticker"],
                     set_={k: stmt.excluded[k] for k in ("as_of", "metrics", "updated_at")}))
             conn.execute(delete(_OPTIONS).where(_OPTIONS.c.as_of < now - timedelta(days=keep_days)))
+
+    def put_option_history(self, rows: list[tuple[str, str | None, dict]], as_of: datetime,
+                           keep_days: int = 21) -> None:
+        """Append one reading per (ticker, direction, doc) at `as_of` (a re-run adds nothing twice) and prune
+        readings older than keep_days."""
+        now = _now()
+        with self.engine.begin() as conn:
+            for ticker, direction, doc in rows:
+                stmt = self._insert(_OPTION_HISTORY).values(ticker=ticker, as_of=as_of, direction=direction,
+                                                            metrics=doc)
+                conn.execute(stmt.on_conflict_do_nothing(index_elements=["ticker", "as_of"]))
+            conn.execute(delete(_OPTION_HISTORY).where(_OPTION_HISTORY.c.as_of < now - timedelta(days=keep_days)))
+
+    def load_option_history(self, since: datetime | None = None) -> list[dict]:
+        """Readings oldest first: {ticker, as_of (aware datetime), direction, metrics}."""
+        q = select(_OPTION_HISTORY.c.ticker, _OPTION_HISTORY.c.as_of, _OPTION_HISTORY.c.direction,
+                   _OPTION_HISTORY.c.metrics).order_by(_OPTION_HISTORY.c.as_of, _OPTION_HISTORY.c.ticker)
+        if since is not None:
+            q = q.where(_OPTION_HISTORY.c.as_of >= since)
+        with self.engine.connect() as conn:
+            out = []
+            for r in conn.execute(q):
+                at = r.as_of if r.as_of.tzinfo else r.as_of.replace(tzinfo=timezone.utc)   # SQLite drops the zone
+                out.append({"ticker": r.ticker, "as_of": at, "direction": r.direction, "metrics": r.metrics})
+            return out
 
     def load_option_metrics(self, tickers: list[str] | None = None) -> dict[str, dict]:
         """{ticker: metrics} for `tickers` (all rows when None); tickers without a row are left out."""
