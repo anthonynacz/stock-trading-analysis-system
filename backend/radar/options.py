@@ -260,6 +260,16 @@ def ticker_metrics(fetch: Fetch, symbol: str, now: float, baseline: dict | None,
     return doc
 
 
+def empty_quotes(doc: dict) -> bool:
+    """A chain read with no live market: listed options but the ATM call has no bid and no ask and nothing
+    near the money has open interest (Yahoo outside market hours). Storing it would turn every name "thin"
+    with no IV; the previous row is kept instead."""
+    if not doc.get("has_options"):
+        return False
+    atm = doc.get("atm") or {}
+    return not atm.get("bid") and not atm.get("ask") and not doc.get("ntm_call_oi")
+
+
 def carry_iv_first(doc: dict, prev: dict | None, now: float) -> dict:
     """Keep the day's first IV reading (same ET day and same front expiry) and the change since then."""
     today = et_date(now).isoformat()
@@ -308,11 +318,14 @@ def iv_risk(doc: dict, now: float, params: dict = IV) -> dict:
     last_e = doc.get("last_earnings_date")
     if last_e:
         try:
-            days = (today - date.fromisoformat(last_e)).days
+            reported = date.fromisoformat(last_e)
         except ValueError:
-            days = None
-        if days is not None and 0 <= days <= 1:
-            reasons.append((2, f"Reported earnings {('today' if days == 0 else 'yesterday')}: IV has just reset"))
+            reported = None
+        # Today, or the previous trading session (a Friday after-close report still resets IV on Monday).
+        prev_session = cal.previous_sessions(today, 1)[0].day
+        if reported is not None and prev_session <= reported <= today:
+            when = "today" if reported == today else "in the last session"
+            reasons.append((2, f"Reported earnings {when}: IV has just reset"))
     if doc.get("earnings_before_expiry"):
         reasons.append((2, f"Earnings {doc.get('earnings_date')} before this expiry: IV usually collapses after the report"))
     if ratio is not None and ratio >= params["rich_ratio"]:
@@ -384,7 +397,8 @@ def refresh(store: Any, tickers: list[str] | None = None, *, fetch: Fetch | None
     now = clock()
     with ThreadPoolExecutor(max_workers=int(params["workers"])) as pool:
         docs = list(pool.map(lambda s: ticker_metrics(fetch, s, now, base.get(s), params), syms))
-    got = {s: d for s, d in zip(syms, docs) if d is not None}
+    got = {s: d for s, d in zip(syms, docs) if d is not None and not empty_quotes(d)}
+    stale = [s for s, d in zip(syms, docs) if d is not None and empty_quotes(d)]
     failed = [s for s, d in zip(syms, docs) if d is None]
     if got:
         try:
@@ -402,7 +416,7 @@ def refresh(store: Any, tickers: list[str] | None = None, *, fetch: Fetch | None
             doc["iv_risk"] = iv_risk(doc, now)
         store.put_option_metrics(got, datetime.fromtimestamp(now, timezone.utc), int(params["keep_days"]))
     status = "ok" if not failed else "degraded" if got else "error"
-    return {"status": status, "tickers": len(syms), "ok": len(got), "failed": failed,
+    return {"status": status, "tickers": len(syms), "ok": len(got), "failed": failed, "kept_previous": stale,
             "duration_ms": int((time.monotonic() - t0) * 1000)}
 
 

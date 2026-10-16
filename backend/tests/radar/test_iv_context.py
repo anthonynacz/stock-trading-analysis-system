@@ -79,7 +79,7 @@ def test_a_drop_shorter_than_the_minimum_window_is_not_a_crush():
 
 @pytest.mark.parametrize("kw, level, phrase", [
     ({"earnings_before_expiry": True}, "high", "before this expiry"),
-    ({"last_earnings_date": "2026-10-14"}, "high", "yesterday"),
+    ({"last_earnings_date": "2026-10-14"}, "high", "in the last session"),
     ({"last_earnings_date": "2026-10-15"}, "high", "today"),
     ({"iv_hv": 1.7, "iv_pct": 44.0}, "elevated", "1.7× the stock's normal"),
     ({"term_ratio": 1.3, "iv_pct": 60.0, "iv_30d_pct": 46.0}, "elevated", "priced into this week"),
@@ -218,3 +218,45 @@ def test_the_api_key_never_reaches_the_logs(monkeypatch, caplog):
         assert context.fmp_get("/api/v3/quote/X") is None
     assert "SECRET123" not in caplog.text and "***" in caplog.text
     assert logging.getLogger("httpx").level >= logging.WARNING
+
+
+def test_a_friday_after_close_report_is_still_just_reported_on_monday():
+    monday = datetime(2026, 10, 19, 15, 0, tzinfo=timezone.utc).timestamp()
+    d = options.carry_iv_first(doc(as_of="2026-10-19T15:00:00Z", last_earnings_date="2026-10-16"), None, monday)
+    assert options.iv_risk(d, monday)["level"] == "high"
+    d = options.carry_iv_first(doc(as_of="2026-10-19T15:00:00Z", last_earnings_date="2026-10-15"), None, monday)
+    assert options.iv_risk(d, monday)["level"] == "normal"          # two sessions ago: no longer "just"
+
+
+def test_empty_off_hours_quotes_never_replace_a_good_row():
+    empty = {"has_options": True, "atm": {"bid": 0.0, "ask": 0.0}, "ntm_call_oi": 0}
+    assert options.empty_quotes(empty) is True
+    assert options.empty_quotes({"has_options": True, "atm": {"bid": 1.2, "ask": 1.3}, "ntm_call_oi": 0}) is False
+    assert options.empty_quotes({"has_options": False, "atm": None}) is False     # truly no options: store it
+
+    class Store:
+        def __init__(self):
+            self.written = None
+
+        def load_state(self):
+            return {"members": [{"ticker": "GTX", "intensity": 50}], "session": {"date": "2026-10-15"}}
+
+        def load_pack(self, *_):
+            return None, None
+
+        def load_option_metrics(self, tickers):
+            return {}
+
+        def put_option_metrics(self, docs, as_of, keep_days):
+            self.written = docs
+
+    import radar.options as o
+    st = Store()
+    orig = o.ticker_metrics
+    try:
+        o.ticker_metrics = lambda fetch, s, now, base, params=o.OPTIONS: {"has_options": True, "atm": {"bid": 0, "ask": 0},
+                                                                          "ntm_call_oi": 0, "as_of": "x"}
+        res = o.refresh(st, fetch=lambda *a: (200, {}), clock=lambda: NOW)
+    finally:
+        o.ticker_metrics = orig
+    assert st.written is None and res["kept_previous"] == ["GTX"]
