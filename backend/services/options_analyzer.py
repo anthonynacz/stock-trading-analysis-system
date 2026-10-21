@@ -397,6 +397,19 @@ class OptionsAnalyzer:
     # Strike recommender
     # ------------------------------------------------------------------
 
+    async def _fetch_strike_chain(self, ticker: str) -> dict:
+        """Fetch the chain the strike recommender scans.
+
+        The risk profiles need DTE 7-30 / 14-50 / 21-75, which the default
+        next-4-expirations chain often misses, so use the DTE-spread chain
+        (one expiration per 0-7/7-21/21-45/45-90/90-180/180+ bucket, padded
+        to 8). Shares its cache with the deep options analyzer.
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self._data_client.get_options_chain(ticker, mode="spread")
+        )
+
     async def recommend_strikes(
         self,
         ticker: str,
@@ -408,10 +421,7 @@ class OptionsAnalyzer:
         if not profile:
             raise ValueError(f"Invalid risk level: {risk_level}")
 
-        loop = asyncio.get_event_loop()
-        chain_data = await loop.run_in_executor(
-            None, self._data_client.get_options_chain, ticker
-        )
+        chain_data = await self._fetch_strike_chain(ticker)
         chains = chain_data.get("chains", {})
         current_price = chain_data.get("current_price")
         if not chains or not current_price:
@@ -547,10 +557,7 @@ class OptionsAnalyzer:
         max_budget: float | None = None,
     ) -> dict:
         """Recommend strikes for all three risk levels in a single chain fetch."""
-        loop = asyncio.get_event_loop()
-        chain_data = await loop.run_in_executor(
-            None, self._data_client.get_options_chain, ticker
-        )
+        chain_data = await self._fetch_strike_chain(ticker)
         chains = chain_data.get("chains", {})
         current_price = chain_data.get("current_price")
         if not chains or not current_price:
