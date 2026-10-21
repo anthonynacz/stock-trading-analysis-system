@@ -24,6 +24,7 @@ import { DEFAULT_EXIT_RULES, exitWatch, type ExitRules } from './exitRules';
 import { CatalystLine, OptionChip, OptionDetails } from './OptionInfo';
 import VerdictBadge from './VerdictBadge';
 import type { VerdictContext } from './verdict';
+import { isExtended } from './extended';
 
 // Literal class maps (Tailwind purge).
 const STATE_CHIP = {
@@ -55,6 +56,7 @@ const verdictCtx = (m: RadarMember, rules: ExitRules, now: number): VerdictConte
   role: 'member',
   state: m.state,
   exitLevel: exitWatch(m, rules).level,
+  extended: isExtended(m.direction, m.dvwap_sigma, m.accel),
   nowMs: now,
 });
 

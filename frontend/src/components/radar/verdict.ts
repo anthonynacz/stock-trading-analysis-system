@@ -11,6 +11,7 @@ import type { RadarDirection, RadarMemberState, RadarOptionMetrics } from '../..
 import { etParts } from './clock';
 import { fmtShortDate } from './optionFilters';
 import { ivPrice } from './ivPrice';
+import { EXTENDED_TEXT } from './extended';
 import { sideOf, type SideView } from './optionSide';
 import type { WatchLevel } from './exitRules';
 
@@ -42,6 +43,8 @@ export interface VerdictContext {
   exitLevel?: WatchLevel;
   /** Trending list: still listed. */
   active?: boolean;
+  /** Far above VWAP and still accelerating on an up move (extended.ts): don't chase. */
+  extended?: boolean;
   nowMs: number;
 }
 
@@ -98,7 +101,8 @@ export function verdictFor(o: RadarOptionMetrics | undefined, ctx: VerdictContex
   else if (price.level === 'cheap') add('good', "Options are cheap: IV is close to the stock's normal swings.");
   if (o.iv_risk?.reasons?.some((r) => r.startsWith('Reported earnings'))) add('caution', 'Earnings were just reported: moves can reverse sharply.');
 
-  // 3. Momentum and timing.
+  // 3. Momentum and timing. A blow-off shape comes first: it is the reason not to enter right now.
+  if (ctx.extended) add('avoid', EXTENDED_TEXT);
   if (ctx.role === 'member') {
     if (ctx.state === 'halted') add('avoid', 'Trading looks halted: you may not be able to get out.');
     else if (ctx.state === 'cooling' || ctx.exitLevel === 'near') add('avoid', 'The move is stalling and may drop off the radar soon.');
@@ -115,7 +119,7 @@ export function verdictFor(o: RadarOptionMetrics | undefined, ctx: VerdictContex
   if (o.dte !== null && o.dte !== undefined && o.dte <= 3) add('caution', `This expiry is ${o.dte} day${o.dte === 1 ? '' : 's'} out: time decay is fast.`);
 
   const RANK = { avoid: 0, caution: 1, good: 2 } as const;
-  pts.sort((a, b) => RANK[a.level] - RANK[b.level]);
+  pts.sort((a, b) => RANK[a.level] - RANK[b.level] || Number(b.text === EXTENDED_TEXT) - Number(a.text === EXTENDED_TEXT));
   const verdict: Verdict = pts.some((p) => p.level === 'avoid')
     ? 'avoid'
     : pts.some((p) => p.level === 'caution')

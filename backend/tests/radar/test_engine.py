@@ -28,8 +28,9 @@ MEMBER_KEYS = {"ticker", "name", "sector", "direction", "state", "late", "entere
                "last_bar_at", "minutes_on_radar", "move_since_entry_pct", "peak_since_entry_pct", "chg_5m_pct",
                "chg_15m_pct", "chg_30m_pct", "chg_day_pct", "rvol", "rvol_day", "vwap_dist_pct", "z15", "z30", "zday",
                "intensity", "reasons", "soft_fails", "episode", "spark", "giveback_pct", "mins_since_extreme",
-               "vol_ratio"}
-HEATING_KEYS = {"ticker", "name", "direction", "since", "price", "chg_day_pct", "intensity", "reasons"}
+               "vol_ratio", "dvwap_sigma", "accel"}
+HEATING_KEYS = {"ticker", "name", "direction", "since", "price", "chg_day_pct", "intensity", "reasons", "zday",
+                "vwap_dist_pct", "dvwap_sigma", "accel"}
 EXIT_KEYS = {"ticker", "name", "direction", "entered_at", "exited_at", "minutes_on_radar", "move_since_entry_pct",
              "exit_reason", "exit_detail"}
 EXIT_REASONS = {"FADE", "DRY", "STALL", "REVERSAL", "GIVEBACK", "VWAP_CROSS", "SESSION_END", "HALT_LONG", "DATA_STALE",

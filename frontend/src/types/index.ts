@@ -947,6 +947,9 @@ export interface RadarMember {
   soft_fails: number;
   /** 1 for the first time on the radar today, 2+ when it came back. */
   episode: number;
+  /** Display only: VWAP distance in daily sigmas and acceleration (signed), for the "Extended" tag. */
+  dvwap_sigma?: number | null;
+  accel?: number | null;
   spark: RadarSpark | null;
   /** Share of the move (from its base) given back; the GIVEBACK exit fires at 70. Display only. */
   giveback_pct?: number | null;
@@ -966,6 +969,10 @@ export interface RadarHeating {
   chg_day_pct: number | null;
   intensity: number | null;
   reasons: string[];
+  zday?: number | null;
+  vwap_dist_pct?: number | null;
+  dvwap_sigma?: number | null;
+  accel?: number | null;
 }
 
 export interface RadarExit {

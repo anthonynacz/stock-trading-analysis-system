@@ -703,13 +703,18 @@ class Engine:
                 # Today's volatility vs normal used by the adaptive REVERSAL rule (1.0 when it is off).
                 "vol_ratio": round(float(m.get("vol_ratio", 1.0)), 2),
                 "mins_since_extreme": 5 * (last - m["last_ext"]),
+                # Display only (the page's "Extended — don't chase" tag): distance above/below VWAP in daily
+                # sigmas and the bar-on-bar acceleration, both signed like the signals.
+                "dvwap_sigma": v["signals"].get("dvwap"), "accel": v["signals"].get("acc"),
                 "spark": {"t0": iso(ss.slot_start(sp["t0_slot"]) + 300), "step_s": 300, "entry_i": sp["entry_i"],
                           "p": [round(x, 4) for x in sp["p"]]}})
         members.sort(key=lambda x: (-x["intensity"], x["ticker"]))
         heating = [{"ticker": sym, "name": self._label(sym, h)[0], "direction": _dir_word(h["dir"]),
                     "since": iso(ss.slot_start(h["heat_slot"]) + 300), "price": round(h["view"]["price"], 4),
                     "chg_day_pct": h["view"]["chg_day"], "intensity": round(h["view"]["intensity"]),
-                    "reasons": h["view"]["reasons"]} for sym, h in sorted(st["heating"].items())]
+                    "reasons": h["view"]["reasons"], "zday": h["view"]["zday"],
+                    "vwap_dist_pct": h["view"]["vwap_dist"], "dvwap_sigma": h["view"]["signals"].get("dvwap"),
+                    "accel": h["view"]["signals"].get("acc")} for sym, h in sorted(st["heating"].items())]
         banners = [{"sector": b["sector"], "direction": _dir_word(b["dir"]), "count": len(b["tickers"]),
                     "tickers": sorted(b["tickers"])} for _, b in sorted(st["banners"].items())]
         mk = st["market"]

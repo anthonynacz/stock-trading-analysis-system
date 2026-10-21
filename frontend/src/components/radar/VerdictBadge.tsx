@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { RadarOptionMetrics } from '../../types';
 import { VERDICT_HINT, VERDICT_TEXT, verdictFor, type Verdict, type VerdictContext } from './verdict';
+import { EXTENDED_HINT, EXTENDED_LABEL } from './extended';
 
 // Literal class maps (Tailwind purge).
 const PILL: Record<Verdict, string> = {
@@ -32,6 +33,17 @@ export default function VerdictBadge({
   const showCosts = v.costs !== null && (showAll || v.verdict === 'favorable');
   return (
     <div className="text-[11px] leading-snug">
+      {ctx.extended && (
+        <div className="mb-1">
+          <span
+            className="inline-block px-1.5 py-px rounded border font-bold cursor-help whitespace-nowrap bg-orange-500/25 text-orange-100 border-orange-400/70"
+            title={EXTENDED_HINT}
+          >
+            <span aria-hidden="true">⚠ </span>
+            {EXTENDED_LABEL}
+          </span>
+        </div>
+      )}
       <div className="flex items-start gap-2">
         <span
           className={`shrink-0 px-1.5 py-px rounded border font-bold uppercase tracking-wider cursor-help whitespace-nowrap ${PILL[v.verdict]}`}
