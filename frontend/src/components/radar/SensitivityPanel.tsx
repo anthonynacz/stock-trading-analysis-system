@@ -24,10 +24,11 @@ const LEVEL_TONE: { pill: string; text: string; hex: string }[] = [
 ];
 
 /**
- * Scan sensitivity: four 7-notch sliders (notch 3 = the replay-calibrated
- * setting). Apply saves them and queues a recompute of the session from the
- * open, so the lists refresh with the new settings within seconds; the
- * Scan now status line follows the recompute.
+ * Scan sensitivity: five 7-notch sliders (move strength, volume surge, day
+ * move, late-day entries, exit patience; notch 3 = the replay-calibrated
+ * setting, backend/radar/config.py SENSITIVITY). Apply saves them and queues
+ * a recompute of the session from the open, so the lists refresh with the new
+ * settings within seconds; the Scan now status line follows the recompute.
  */
 export default function SensitivityPanel({
   applied,

@@ -633,8 +633,9 @@ class DataSourceClient:
         Modes:
         - "default": next 4 expirations (cached short-dated view)
         - "spread": up to 8 expirations sampled across DTE buckets (0-7, 7-21,
-          21-60, 60-180) — used by the deep-options analyzer for term structure
-          and LEAPS-aware strategy selection.
+          21-45, 45-90, 90-180, 180+) — used by the deep-options analyzer for
+          term structure and LEAPS-aware strategy selection, and by the strike
+          recommender to cover each risk tier's DTE window.
         """
         cache_key = f"options_chain:{ticker}:{mode}"
         cached = self._get_cached(cache_key)
