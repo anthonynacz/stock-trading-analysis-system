@@ -244,14 +244,14 @@ export default function RadarPage() {
           id="radar-trending"
           title="Trending today"
           count={st ? trending.filter((t) => t.active).length : null}
-          note="Stocks grinding one way since the open on heavy volume, flagged from 10:00 to 13:30 ET; a name drops off after four closes on the wrong side of VWAP. Informational, not a signal: in backtests about half kept going to the close (+0.2% on average). Often listed long before the radar enters, or for names the radar never takes."
+          note="Stocks grinding one way since the open on heavy volume, flagged from 09:50 to 13:30 ET; a name drops off after four closes on the wrong side of VWAP. A watchlist, not a signal: in backtests about half kept going to the close, and since late September they lost on average. Often listed long before the radar enters, or for names the radar never takes."
         >
           {loading ? (
             <LoadingRow py="py-4" />
           ) : !st ? (
             <RadarEmpty>{nothingYet ?? 'Nothing trending yet.'}</RadarEmpty>
           ) : trending.length === 0 ? (
-            <RadarEmpty>{c.scanning ? 'Nothing trending yet today. Names can appear from 10:00 ET.' : 'Nothing trended this session.'}</RadarEmpty>
+            <RadarEmpty>{c.scanning ? 'Nothing trending yet today. Names can appear from 09:50 ET.' : 'Nothing trended this session.'}</RadarEmpty>
           ) : (
             <>
               <RadarTrendingList items={allTrending ? trendingVisible : trendingVisible.slice(0, TRENDING_SHOWN)} options={options} now={now} />

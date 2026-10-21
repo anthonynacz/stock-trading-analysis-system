@@ -20,7 +20,7 @@ the stock's own daily volatility. Plain-words meaning of each condition (directi
                the session high (low) was set within the last `ext_bars` bars
   volume       session volume >= `rvolc` x normal for this time of day
 
-New flags from 10:00 to 13:30 ET (slots 5..47). Exit (the stock leaves the list and does not re-enter that day):
+New flags from 09:50 to 13:30 ET with the live "earlier" set (slots 3..47; 10:00 for the other sets). Exit (the stock leaves the list and does not re-enter that day):
 four consecutive 5-minute closes on the wrong side of the session VWAP. An optional giveback exit (the
 market-relative move since the open falls below (1 - giveback) of its best) is off by default.
 """
@@ -33,14 +33,19 @@ import numpy as np
 
 EPS = 1e-12
 
-# Threshold sets compared in the backtest (backtest 2026-10-15, 40 sessions 2026-07-31..09-25: see radar/docs/trend-day.md); RECOMMENDED is the live set.
+# Threshold sets compared in the backtests (2026-10-15: 40 sessions 2026-07-31..09-25; 2026-10-21: 54 sessions
+# 2026-07-31..10-15; see radar/docs/trend-day.md); RECOMMENDED is the live set.
 _COMMON = {"first_slot": 5, "last_slot": 47, "slope_bars": 9, "slope_z": 0.0, "ext_bars": 6}
 THRESHOLDS: dict[str, dict] = {
+    # Lists grinders ~15 minutes sooner (median 10:20 vs 10:25; 29% vs 24% of big grinders by 10:30) at the same
+    # quality per flag, with ~15 names a day instead of ~10. The prior-close condition (zday) was what held
+    # names back: CRL 2026-10-21 is listed at 10:15 instead of 11:15. Display only, like every set.
+    "earlier":  {**_COMMON, "first_slot": 3, "zopen": 1.5, "zday": 1.5, "vwap_share": 0.90, "eff": 0.45, "rvolc": 1.5},
     "early":    {**_COMMON, "zopen": 1.5, "zday": 2.0, "vwap_share": 0.90, "eff": 0.45, "rvolc": 1.5},
     "balanced": {**_COMMON, "zopen": 2.0, "zday": 2.0, "vwap_share": 0.90, "eff": 0.35, "rvolc": 1.5},
     "strict":   {**_COMMON, "zopen": 2.5, "zday": 2.5, "vwap_share": 0.90, "eff": 0.45, "rvolc": 1.5},
 }
-RECOMMENDED = "early"
+RECOMMENDED = "earlier"
 # Exit: 4 consecutive closes (20 min) on the wrong side of VWAP. A giveback rule (fraction of the best move since
 # the open) is supported but off: in the backtest every giveback level exited names that then kept trending.
 EXIT = {"vwap_bars": 4, "giveback": None}

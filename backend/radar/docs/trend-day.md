@@ -5,6 +5,27 @@ bursts the radar's entry engine waits for (EBAY 2026-10-15: about $5 of a $7 tak
 any burst signal). It never adds radar members or changes entries and exits: the replay scorecard is identical
 with and without it (204 entries, prec30 0.549, flap 4.4%).
 
+## Live set "earlier" (2026-10-21)
+
+Same rule as "early" below, with new flags from 09:50 (first_slot 3) and the move since the prior close at
+>= 1.5 sigma_d instead of 2.0 (that condition held grinders back: CRL 2026-10-21 listed at 10:15 @328.72 instead
+of 11:15 @335.08). Re-test on 54 sessions (2026-07-31..10-15; Yahoo 5-minute bars to 09-25, FMP 1-minute sums
+after):
+
+| | early | earlier (live) |
+|---|---|---|
+| Names / day | 10.3 | 15.4 |
+| Median flag time | 10:25 | 10:20 |
+| Big grinders listed (by 10:30) | 38% (24%) | 41% (29%) |
+| Same direction at +30 / +60 min / close | .49 / .47 / .47 | .48 / .47 / .47 |
+| Mean move to the close (SPY-relative) | -4.1 bp | -0.4 bp |
+| Calibration / validation half, to the close | +16.4 / -18.4 bp | +23.3 / -17.2 bp |
+
+Quality per flag is unchanged; the list is a watchlist, not an entry signal. Both sets made money in
+2026-07-31..09-25 (+19.8 / +20.2 bp to the close) and lost after (-58.7 / -47.8 bp, 09-28..10-15): momentum
+follow-through broke down in both directions in October. A trend-entry path into the radar and a lower
+`entry.inplay_zday` were also tested and rejected (the added entries were 34-44% right at 30 minutes).
+
 ## Rule (set "early", radar/trend.py `THRESHOLDS`)
 
 At 5-minute slot k, using bars 0..k only, market-relative (log move minus beta x SPY), in the stock's daily
