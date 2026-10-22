@@ -25,6 +25,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from typing import Any, Callable
 
+from utils.greeks import RISK_FREE_RATE
+
 from . import calendar_nyse as cal
 from .config import OPTIONS
 
@@ -46,7 +48,6 @@ IV = {
     "term_inverted": 1.2,        # front IV / 30-day IV above this: the front week prices an event
     "crush_drop": 0.10,          # IV down this share since the day's first reading: crushing
     "crush_min_minutes": 30,     # ... measured over at least this long
-    "rate": 0.04,
 }
 
 
@@ -111,7 +112,7 @@ def _npdf(x: float) -> float:
 
 
 def vega_per_point(spot: float | None, strike: float | None, iv_pct: float | None, dte: int | None,
-                   rate: float = IV["rate"]) -> float | None:
+                   rate: float = RISK_FREE_RATE) -> float | None:
     """Dollar change of ONE contract (100 shares) for a 1-point IV move: S * phi(d1) * sqrt(T)
     (Black-Scholes vega per 1.00 of volatility, x100 shares / 100 points)."""
     if not spot or not strike or not iv_pct or iv_pct <= 0 or dte is None:
@@ -127,7 +128,7 @@ def _ncdf(x: float) -> float:
 
 
 def greeks(spot: float | None, strike: float | None, iv_pct: float | None, dte: int | None, kind: str,
-           rate: float = IV["rate"]) -> dict:
+           rate: float = RISK_FREE_RATE) -> dict:
     """Black-Scholes delta and time decay of ONE contract (100 shares): theta in dollars per calendar day."""
     if not spot or not strike or not iv_pct or iv_pct <= 0 or dte is None:
         return {"delta": None, "theta_day_usd": None}

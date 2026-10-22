@@ -11,6 +11,8 @@ import math
 
 # Risk-free rate — hardcoded, minimal impact on short-dated options greeks.
 # The difference between 4% and 5% changes delta by < 0.01 for DTE < 60.
+# Single source for every pricer: the strike recommender, the deep options
+# analyzer and the Momentum Radar option metrics (radar/options.py).
 RISK_FREE_RATE = 0.045
 
 
