@@ -59,6 +59,39 @@ function readView(): RadarView {
   return view;
 }
 
+/** "N hidden by the option filters: A (why), B (why)… and 12 more" with a show-faded toggle; long lists fold. */
+function HiddenLine({
+  hidden,
+  shown,
+  onToggle,
+}: {
+  hidden: Map<string, { ticker: string; why: string }>;
+  shown: boolean;
+  onToggle: () => void;
+}) {
+  const [all, setAll] = useState(false);
+  const MAX = 8;
+  const items = [...hidden.values()];
+  const listed = all ? items : items.slice(0, MAX);
+  return (
+    <p className="text-xs text-sky-200/90 leading-snug mb-2 rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1">
+      {hidden.size} hidden by the option filters: {listed.map((h) => `${h.ticker} (${h.why})`).join(', ')}
+      {items.length > MAX && (
+        <>
+          {all ? '' : '…'}{' '}
+          <button type="button" onClick={() => setAll((x) => !x)} className="text-sky-300 hover:text-sky-100 underline-offset-2 hover:underline">
+            {all ? 'fewer' : `and ${items.length - MAX} more`}
+          </button>
+        </>
+      )}
+      .{' '}
+      <button type="button" onClick={onToggle} className="font-semibold text-sky-300 hover:text-sky-100 underline-offset-2 hover:underline">
+        {shown ? 'Hide them' : 'Show them faded'}
+      </button>
+    </p>
+  );
+}
+
 /**
  * Momentum Radar: US stocks racing up or down right now, from the 5-minute
  * scanner (backend/radar). The snapshot only describes the session it was
@@ -213,15 +246,7 @@ export default function RadarPage() {
               onCallPreset={() => setView((v) => ({ ...v, f: 'up' }))}
             />
           </div>
-          {hidden.size > 0 && (
-            <p className="text-xs text-sky-200/90 leading-snug mb-2 rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1">
-              {hidden.size} hidden by the option filters:{' '}
-              {[...hidden.values()].map((h) => `${h.ticker} (${h.why})`).join(', ')}.{' '}
-              <button type="button" onClick={() => setShowHidden((x) => !x)} className="font-semibold text-sky-300 hover:text-sky-100 underline-offset-2 hover:underline">
-                {showHidden ? 'Hide them' : 'Show them faded'}
-              </button>
-            </p>
-          )}
+          {hidden.size > 0 && <HiddenLine hidden={hidden} shown={showHidden} onToggle={() => setShowHidden((x) => !x)} />}
           {loading ? (
             <LoadingRow />
           ) : !st ? (
@@ -262,17 +287,7 @@ export default function RadarPage() {
             <OptionFilterBar value={view.optTrend} onChange={(optTrend) => setView((v) => ({ ...v, optTrend }))} />
           </div>
           {trendingHidden.size > 0 && (
-            <p className="text-xs text-sky-200/90 leading-snug mb-2 rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1">
-              {trendingHidden.size} hidden by the option filters:{' '}
-              {[...trendingHidden.values()].map((h) => `${h.ticker} (${h.why})`).join(', ')}.{' '}
-              <button
-                type="button"
-                onClick={() => setShowHiddenTrending((x) => !x)}
-                className="font-semibold text-sky-300 hover:text-sky-100 underline-offset-2 hover:underline"
-              >
-                {showHiddenTrending ? 'Hide them' : 'Show them faded'}
-              </button>
-            </p>
+            <HiddenLine hidden={trendingHidden} shown={showHiddenTrending} onToggle={() => setShowHiddenTrending((x) => !x)} />
           )}
           {loading ? (
             <LoadingRow py="py-4" />
