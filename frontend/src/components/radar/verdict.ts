@@ -43,7 +43,7 @@ export interface VerdictContext {
   exitLevel?: WatchLevel;
   /** Trending list: still listed. */
   active?: boolean;
-  /** Far beyond VWAP and still accelerating in the move's direction (extended.ts): don't chase. */
+  /** Up move entered on a sharp acceleration (extended.ts): don't chase. */
   extended?: boolean;
   nowMs: number;
 }
@@ -102,7 +102,7 @@ export function verdictFor(o: RadarOptionMetrics | undefined, ctx: VerdictContex
   if (o.iv_risk?.reasons?.some((r) => r.startsWith('Reported earnings'))) add('caution', 'Earnings were just reported: moves can reverse sharply.');
 
   // 3. Momentum and timing. A blow-off shape comes first: it is the reason not to enter right now.
-  const extText = extendedText(ctx.direction);
+  const extText = extendedText();
   if (ctx.extended) add('avoid', extText);
   if (ctx.role === 'member') {
     if (ctx.state === 'halted') add('avoid', 'Trading looks halted: you may not be able to get out.');

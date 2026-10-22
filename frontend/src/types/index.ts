@@ -950,6 +950,9 @@ export interface RadarMember {
   /** Display only: VWAP distance in daily sigmas and acceleration (signed), for the "Extended" tag. */
   dvwap_sigma?: number | null;
   accel?: number | null;
+  /** Acceleration on the entry bar and on the heating bar before it (signed), for the "Extended" tag. */
+  entry_accel?: number | null;
+  heat_accel?: number | null;
   spark: RadarSpark | null;
   /** Share of the move (from its base) given back; the GIVEBACK exit fires at 70. Display only. */
   giveback_pct?: number | null;

@@ -88,7 +88,7 @@ export function RadarHeatingList({
               {h.reasons?.length > 0 && <div className="text-xs leading-snug mt-0.5">{h.reasons.join(' · ')}</div>}
               {options && (
                 <div className="mt-1 space-y-1">
-                  <VerdictBadge o={options[h.ticker]} ctx={{ direction: h.direction, role: 'heating', extended: isExtended(h.direction, h.dvwap_sigma, h.accel), nowMs: now }} />
+                  <VerdictBadge o={options[h.ticker]} ctx={{ direction: h.direction, role: 'heating', extended: isExtended(h.direction, h.accel), nowMs: now }} />
                   <CatalystLine o={options[h.ticker]} />
                   <OptionChip o={options[h.ticker]} direction={h.direction} />
                 </div>

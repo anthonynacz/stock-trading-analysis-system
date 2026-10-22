@@ -312,11 +312,14 @@ class Engine:
                 self._member_step(sym, i, k, k_now, f, sc, ctx, out)
 
         cands = []
+        # Display only: the heating bar's acceleration of each confirming name, kept on the member at entry.
+        self._heat_acc: dict[str, float | None] = {}
         for sym in sorted(st["heating"]):
             h = st["heating"].pop(sym)
             i = ctx.row.get(sym)
             if i is not None and k <= self.last_confirm and ok[i] and self._confirms(h, i, f):
                 cands.append((float(sc[h["dir"]][i]), sym, h["dir"], i))
+                self._heat_acc[sym] = h["view"]["signals"].get("acc")
 
         if self.first_entry <= k <= self.last_entry:
             self._new_heating(k, f, sc, ok, ctx, cands)
@@ -616,6 +619,10 @@ class Engine:
              "dwell": 0, "soft": 0, "stale": 0, "episode": mem["episodes"], "late": self.mark_late and k_now - k > 2,
              "state": "racing", "view": self._view(i, d, f, sc), "last_bar_slot": self._last_bar(ctx, i, k),
              "spark": {"t0_slot": a, "entry_i": k - a, "p": [float(x) for x in window]}}
+        # Display only (the page's "Extended — don't chase" tag): acceleration on the entry bar and on the
+        # heating bar before it (None on the fast path), signed like the signals.
+        m["entry_acc"] = m["view"]["signals"].get("acc")
+        m["heat_acc"] = getattr(self, "_heat_acc", {}).get(sym)
         st["members"][sym] = m
         st["counts"]["entered"] += 1
         out.events.append(self._event(sym, k, k_now, "ENTER", m, px, s, "ENTRY", "; ".join(m["view"]["reasons"]),
@@ -706,6 +713,7 @@ class Engine:
                 # Display only (the page's "Extended — don't chase" tag): distance above/below VWAP in daily
                 # sigmas and the bar-on-bar acceleration, both signed like the signals.
                 "dvwap_sigma": v["signals"].get("dvwap"), "accel": v["signals"].get("acc"),
+                "entry_accel": m.get("entry_acc"), "heat_accel": m.get("heat_acc"),
                 "spark": {"t0": iso(ss.slot_start(sp["t0_slot"]) + 300), "step_s": 300, "entry_i": sp["entry_i"],
                           "p": [round(x, 4) for x in sp["p"]]}})
         members.sort(key=lambda x: (-x["intensity"], x["ticker"]))

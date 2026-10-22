@@ -56,7 +56,7 @@ const verdictCtx = (m: RadarMember, rules: ExitRules, now: number): VerdictConte
   role: 'member',
   state: m.state,
   exitLevel: exitWatch(m, rules).level,
-  extended: isExtended(m.direction, m.dvwap_sigma, m.accel),
+  extended: isExtended(m.direction, m.entry_accel, m.heat_accel),
   nowMs: now,
 });
 

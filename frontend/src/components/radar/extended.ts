@@ -1,38 +1,33 @@
-// "Extended — don't chase": a move far beyond VWAP that is still accelerating, the shape of a blow-off.
-// Provisional rule (2026-10-21, after CRL entered within a minute of its high): in the last 30 days of live
-// entries, those far beyond VWAP (>= 1.5 daily sigmas, in the move's direction) and still accelerating
-// (acceleration >= 1, in the move's direction) won 20% of the time with a mean of -0.40% at exit (25 entries,
-// up and down), against 25% and -0.15% for the rest. Small sample: the thresholds are being re-tested on the
-// replay corpus. Note: the engine's dvwap and acc signals are signed; the move's direction is applied here.
+// "Extended — don't chase": an up move entered on a sharp acceleration, the shape of a blow-off.
+// Rule from the top-entry study (2026-10-21, 58 sessions 2026-07-31..10-21 through the real engine): up entries
+// whose entry bar or heating bar had acceleration >= 1.5 topped out within 30 minutes 33% of the time against
+// 14% for the other up entries, with -19 bp vs +8 bp at 30 minutes (both date halves and the newest sessions
+// agree). How far the stock already ran (day move, distance from VWAP) did not predict tops, and acceleration
+// says nothing on down entries, so the tag is up-only. Display only: entries are unchanged.
 
 import type { RadarDirection } from '../../types';
 
-export const EXT_VWAP_SIGMA = 1.5;   // distance beyond VWAP in the stock's daily sigmas (engine signal dvwap)
-export const EXT_ACCEL = 1.0;        // bar-on-bar acceleration (engine signal acc)
+export const EXT_ACCEL = 1.5;        // engine signal acc, on the entry bar or the heating bar
 
-export function isExtended(
-  direction: RadarDirection | undefined,
-  dvwapSigma: number | null | undefined,
-  accel: number | null | undefined,
-): boolean {
-  if (!direction || dvwapSigma === null || dvwapSigma === undefined || accel === null || accel === undefined) {
-    return false;
-  }
-  const d = direction === 'down' ? -1 : 1;
-  return d * dvwapSigma >= EXT_VWAP_SIGMA && d * accel >= EXT_ACCEL;
+const num = (v: number | null | undefined): number | null =>
+  v === null || v === undefined || Number.isNaN(v) ? null : v;
+
+/** Up entries (or heating names) accelerating sharply: the higher of the bars' accelerations >= EXT_ACCEL. */
+export function isExtended(direction: RadarDirection | undefined, ...accels: (number | null | undefined)[]): boolean {
+  if (direction !== 'up') return false;
+  const xs = accels.map(num).filter((x): x is number => x !== null);
+  return xs.length > 0 && Math.max(...xs) >= EXT_ACCEL;
 }
 
 export const EXTENDED_LABEL = "Extended — don't chase";
 
-export function extendedText(direction: RadarDirection | undefined): string {
-  const where = direction === 'down' ? 'far below VWAP and still falling faster' : 'far above VWAP and still accelerating';
-  const back = direction === 'down' ? 'a bounce back toward VWAP' : 'a pullback toward VWAP';
+export function extendedText(): string {
   return (
-    `Extended — don't chase: the stock is ${where}, the shape of a blow-off. ` +
-    `Recently most radar entries like this reversed within minutes. Wait for ${back}.`
+    "Extended — don't chase: the move jumped on a sharp acceleration, the shape of a blow-off top. " +
+    'In backtests a third of up entries like this topped out within 30 minutes. Wait for a pullback (0.15-0.3%) before entering.'
   );
 }
 
 export const EXTENDED_HINT =
-  `At least ${EXT_VWAP_SIGMA}× its normal daily move beyond VWAP and still accelerating in the same direction. ` +
-  'In the last 30 days of radar entries, 1 in 5 like this won (mean -0.4% at exit). Provisional rule, being re-tested.';
+  `Up move whose entry or heating bar accelerated sharply (acceleration >= ${EXT_ACCEL}). In backtests (58 sessions) ` +
+  '33% of these topped out within 30 minutes vs 14% of other up entries (-0.19% vs +0.08% at 30 min).';
