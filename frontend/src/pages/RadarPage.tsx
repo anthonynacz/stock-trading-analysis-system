@@ -69,6 +69,7 @@ export default function RadarPage() {
   const [view, setView] = useState<RadarView>(readView);
   const [showHidden, setShowHidden] = useState(false);
   const [allTrending, setAllTrending] = useState(false);
+  const [showHiddenTrending, setShowHiddenTrending] = useState(false);
   useEffect(() => {
     try {
       localStorage.setItem(VIEW_KEY, JSON.stringify(view));
@@ -111,9 +112,17 @@ export default function RadarPage() {
   // strongest active names first (largest day move for the stock, in its own daily volatility), then the rest.
   const trending = st?.trending ?? [];
   const TRENDING_SHOWN = 12;
-  const trendingVisible = trending
-    .filter((t) => (view.f === 'all' || t.direction === view.f) && !failReason(view.opt, options?.[t.ticker], t.price, t.direction))
+  // The option filters apply here as on the radar: hidden names are listed by reason and can be shown faded.
+  const trendingHidden = new Map<string, { ticker: string; why: string }>();
+  const trendingInDir = trending.filter((t) => view.f === 'all' || t.direction === view.f);
+  for (const t of trendingInDir) {
+    const why = failReason(view.opt, options?.[t.ticker], t.price, t.direction);
+    if (why) trendingHidden.set(`${t.ticker}|${t.flagged_at}`, { ticker: t.ticker, why });
+  }
+  const trendingVisible = trendingInDir
+    .filter((t) => showHiddenTrending || !trendingHidden.has(`${t.ticker}|${t.flagged_at}`))
     .sort((a, b) => Number(b.active) - Number(a.active) || Math.abs(b.zday ?? 0) - Math.abs(a.zday ?? 0));
+  const trendingDimmed = showHiddenTrending ? new Set(trendingHidden.keys()) : undefined;
 
   const summary: string[] = [];
   const day = st ? listsDay(st) : null;
@@ -244,17 +253,39 @@ export default function RadarPage() {
           id="radar-trending"
           title="Trending today"
           count={st ? trending.filter((t) => t.active).length : null}
-          note="Stocks grinding one way since the open on heavy volume, flagged from 09:50 to 13:30 ET; a name drops off after four closes on the wrong side of VWAP. A watchlist, not a signal: in backtests about half kept going to the close, and since late September they lost on average. Often listed long before the radar enters, or for names the radar never takes."
+          note="Stocks grinding one way since the open on heavy volume, flagged from 09:50 to 13:30 ET; a name drops off after four closes on the wrong side of VWAP. A watchlist, not a signal: in backtests about half kept going to the close, and since late September they lost on average. Often listed long before the radar enters, or for names the radar never takes. The option filters above apply here too."
         >
+          {trendingHidden.size > 0 && (
+            <p className="text-xs text-sky-200/90 leading-snug mb-2 rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1">
+              {trendingHidden.size} hidden by the option filters:{' '}
+              {[...trendingHidden.values()].map((h) => `${h.ticker} (${h.why})`).join(', ')}.{' '}
+              <button
+                type="button"
+                onClick={() => setShowHiddenTrending((x) => !x)}
+                className="font-semibold text-sky-300 hover:text-sky-100 underline-offset-2 hover:underline"
+              >
+                {showHiddenTrending ? 'Hide them' : 'Show them faded'}
+              </button>
+            </p>
+          )}
           {loading ? (
             <LoadingRow py="py-4" />
           ) : !st ? (
             <RadarEmpty>{nothingYet ?? 'Nothing trending yet.'}</RadarEmpty>
           ) : trending.length === 0 ? (
             <RadarEmpty>{c.scanning ? 'Nothing trending yet today. Names can appear from 09:50 ET.' : 'Nothing trended this session.'}</RadarEmpty>
+          ) : trendingVisible.length === 0 ? (
+            <RadarEmpty>
+              {trendingHidden.size ? 'Every trending stock is hidden by the option filters.' : 'No trending stocks in this direction.'}
+            </RadarEmpty>
           ) : (
             <>
-              <RadarTrendingList items={allTrending ? trendingVisible : trendingVisible.slice(0, TRENDING_SHOWN)} options={options} now={now} />
+              <RadarTrendingList
+                items={allTrending ? trendingVisible : trendingVisible.slice(0, TRENDING_SHOWN)}
+                options={options}
+                now={now}
+                dimmed={trendingDimmed}
+              />
               {trendingVisible.length > TRENDING_SHOWN && (
                 <button
                   type="button"

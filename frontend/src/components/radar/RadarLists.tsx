@@ -162,11 +162,14 @@ export function RadarTrendingList({
   items,
   options,
   now,
+  dimmed,
 }: {
   items: RadarTrend[];
   options?: Record<string, RadarOptionMetrics>;
   /** Client clock (ms), for the entry verdict. */
   now: number;
+  /** Keys (`ticker|flagged_at`) shown faded: filtered out by the option filters but revealed on request. */
+  dimmed?: Set<string>;
 }) {
   return (
     <ul className="divide-y divide-border">
@@ -174,7 +177,12 @@ export function RadarTrendingList({
         const since = toMs(t.flagged_at);
         const left = toMs(t.exited_at);
         return (
-          <li key={`${t.ticker}|${t.flagged_at}`} className={`flex justify-between gap-3 py-2.5 text-sm ${t.active ? '' : 'opacity-50'}`}>
+          <li
+            key={`${t.ticker}|${t.flagged_at}`}
+            className={`flex justify-between gap-3 py-2.5 text-sm ${
+              dimmed?.has(`${t.ticker}|${t.flagged_at}`) ? 'opacity-40' : t.active ? '' : 'opacity-50'
+            }`}
+          >
             <div className="min-w-0">
               <div className="leading-snug">
                 <DirArrow dir={t.direction} /> <TickerLink ticker={t.ticker} />
@@ -194,10 +202,8 @@ export function RadarTrendingList({
                   {t.active && (
                     <VerdictBadge o={options[t.ticker]} ctx={{ direction: t.direction, role: 'trending', active: t.active, nowMs: now }} />
                   )}
-                  <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                    <IvBadge o={options[t.ticker]} direction={t.direction} />
-                    <CatalystLine o={options[t.ticker]} />
-                  </div>
+                  <CatalystLine o={options[t.ticker]} />
+                  <OptionChip o={options[t.ticker]} direction={t.direction} />
                 </div>
               )}
             </div>

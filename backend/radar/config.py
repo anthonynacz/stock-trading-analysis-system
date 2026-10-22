@@ -100,7 +100,7 @@ OPTIONS: dict = {
     "min_dte": 7,                  # the first expiry at least this many calendar days out (skips 0-6 DTE)
     "ntm_band": 0.10,              # "near the money": strikes within ±10% of the stock price
     "weekly_window_days": 35,      # >= 4 expiries inside this window counts as weekly options
-    "max_tickers": 30,
+    "max_tickers": 45,
     "workers": 4,
     "fetch_timeout_s": 10,
     "timeout_s": 75,               # hard cap on the whole refresh (worker subprocess timeout)
