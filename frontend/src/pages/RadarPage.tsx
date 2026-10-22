@@ -40,14 +40,17 @@ interface RadarView {
   f: RadarFilter;
   sort: RadarSort;
   opt: OptionFilters;
+  /** The Trending today list's own option filters (they start as a copy of the radar's). */
+  optTrend: OptionFilters;
 }
 
-/** Direction filter, sort and call filters, remembered per browser (`localStorage["vela.radar_view"]`). */
+/** Direction filter, sort and option filters, remembered per browser (`localStorage["vela.radar_view"]`). */
 function readView(): RadarView {
-  const view: RadarView = { f: 'all', sort: 'intensity', opt: readFilters(null) };
+  const view: RadarView = { f: 'all', sort: 'intensity', opt: readFilters(null), optTrend: readFilters(null) };
   try {
     const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? 'null') as Partial<RadarView> | null;
     view.opt = readFilters(v?.opt);
+    view.optTrend = readFilters(v?.optTrend ?? v?.opt);
     if (v && FILTER_OPTIONS.some((o) => o.key === v.f)) view.f = v.f as RadarFilter;
     if (v && RADAR_SORTS.some((o) => o.key === v.sort)) view.sort = v.sort as RadarSort;
   } catch {
@@ -94,7 +97,7 @@ export default function RadarPage() {
     all.filter((m) => view.f === 'all' || m.direction === view.f),
     view.sort,
   );
-  // Call filters: hidden names are listed by reason and can be shown faded.
+  // Option filters: hidden names are listed by reason and can be shown faded.
   const hidden = new Map<string, { ticker: string; why: string }>();
   for (const m of inDir) {
     const why = failReason(view.opt, options?.[m.ticker], m.last_price, m.direction);
@@ -112,11 +115,11 @@ export default function RadarPage() {
   // strongest active names first (largest day move for the stock, in its own daily volatility), then the rest.
   const trending = st?.trending ?? [];
   const TRENDING_SHOWN = 12;
-  // The option filters apply here as on the radar: hidden names are listed by reason and can be shown faded.
+  // The list's own option filters (its filter bar): hidden names are listed by reason and can be shown faded.
   const trendingHidden = new Map<string, { ticker: string; why: string }>();
   const trendingInDir = trending.filter((t) => view.f === 'all' || t.direction === view.f);
   for (const t of trendingInDir) {
-    const why = failReason(view.opt, options?.[t.ticker], t.price, t.direction);
+    const why = failReason(view.optTrend, options?.[t.ticker], t.price, t.direction);
     if (why) trendingHidden.set(`${t.ticker}|${t.flagged_at}`, { ticker: t.ticker, why });
   }
   const trendingVisible = trendingInDir
@@ -212,7 +215,7 @@ export default function RadarPage() {
           </div>
           {hidden.size > 0 && (
             <p className="text-xs text-sky-200/90 leading-snug mb-2 rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1">
-              {hidden.size} hidden by the call filters:{' '}
+              {hidden.size} hidden by the option filters:{' '}
               {[...hidden.values()].map((h) => `${h.ticker} (${h.why})`).join(', ')}.{' '}
               <button type="button" onClick={() => setShowHidden((x) => !x)} className="font-semibold text-sky-300 hover:text-sky-100 underline-offset-2 hover:underline">
                 {showHidden ? 'Hide them' : 'Show them faded'}
@@ -224,7 +227,7 @@ export default function RadarPage() {
           ) : !st ? (
             <RadarEmpty>{nothingYet ?? membersEmpty}</RadarEmpty>
           ) : members.length === 0 ? (
-            <RadarEmpty>{hidden.size ? 'Every stock on the radar is hidden by the call filters.' : membersEmpty}</RadarEmpty>
+            <RadarEmpty>{hidden.size ? 'Every stock on the radar is hidden by the option filters.' : membersEmpty}</RadarEmpty>
           ) : (
             <RadarMemberList members={members} tickId={st.tick_id} options={options} dimmed={dimmed} rules={rules} now={now} />
           )}
@@ -235,7 +238,7 @@ export default function RadarPage() {
           title="Warming up"
           count={st ? heating.length : null}
           note={`Passed the entry checks on the last 5-minute bar and wait for one more bar to confirm. Not on the radar yet.${
-            heatingHidden ? ` ${heatingHidden} hidden by the direction or call filters.` : ''
+            heatingHidden ? ` ${heatingHidden} hidden by the direction or option filters.` : ''
           }`}
         >
           {loading ? (
@@ -253,8 +256,11 @@ export default function RadarPage() {
           id="radar-trending"
           title="Trending today"
           count={st ? trending.filter((t) => t.active).length : null}
-          note="Stocks grinding one way since the open on heavy volume, flagged from 09:50 to 13:30 ET; a name drops off after four closes on the wrong side of VWAP. A watchlist, not a signal: in backtests about half kept going to the close, and since late September they lost on average. Often listed long before the radar enters, or for names the radar never takes. The option filters above apply here too."
+          note="Stocks grinding one way since the open on heavy volume, flagged from 09:50 to 13:30 ET; a name drops off after four closes on the wrong side of VWAP. A watchlist, not a signal: in backtests about half kept going to the close, and since late September they lost on average. Often listed long before the radar enters, or for names the radar never takes."
         >
+          <div className="mb-2">
+            <OptionFilterBar value={view.optTrend} onChange={(optTrend) => setView((v) => ({ ...v, optTrend }))} />
+          </div>
           {trendingHidden.size > 0 && (
             <p className="text-xs text-sky-200/90 leading-snug mb-2 rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1">
               {trendingHidden.size} hidden by the option filters:{' '}

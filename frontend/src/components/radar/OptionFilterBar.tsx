@@ -55,8 +55,9 @@ function NumSelect({
 }
 
 /**
- * "Call filters" toggle and panel: stock liquidity, option liquidity, option
- * cost and event risk. `onCallPreset` also switches the direction to Up.
+ * "Option filters" toggle and panel: stock liquidity, option liquidity, option
+ * cost and event risk. `onCallPreset` (optional) runs when the Call-friendly
+ * preset is switched on; the radar list uses it to switch the direction to Up.
  */
 export default function OptionFilterBar({
   value,
@@ -65,7 +66,7 @@ export default function OptionFilterBar({
 }: {
   value: OptionFilters;
   onChange: (f: OptionFilters) => void;
-  onCallPreset: () => void;
+  onCallPreset?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const n = activeCount(value);
@@ -85,7 +86,7 @@ export default function OptionFilterBar({
               : 'border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20'
           }`}
         >
-          <span aria-hidden="true">⚙</span> Call filters
+          <span aria-hidden="true">⚙</span> Option filters
           {n > 0 && <span className="rounded-full bg-sky-400 px-1.5 text-[10px] font-bold text-gray-900">{n}</span>}
           <span aria-hidden="true" className={`text-[9px] transition-transform ${open ? 'rotate-180' : ''}`}>▼</span>
         </button>
@@ -95,7 +96,7 @@ export default function OptionFilterBar({
             if (isCallPreset(value)) onChange(NO_FILTERS);
             else {
               onChange(CALL_PRESET);
-              onCallPreset();
+              onCallPreset?.();
             }
           }}
           aria-pressed={isCallPreset(value)}
