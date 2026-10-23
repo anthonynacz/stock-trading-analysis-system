@@ -1259,9 +1259,14 @@ async def get_catalysts(db: AsyncSession = Depends(get_db)):
     today = date.today()
     horizon = today + timedelta(days=14)
 
+    # Only names the user follows: on the watchlist now or before, or held. Since 2026-10-23 the rotation also
+    # stores earnings dates of non-watchlist candidates it scores (services/watchlist_manager.py), which must
+    # not reach this list.
+    followed = select(Watchlist.ticker).union(select(Position.ticker).where(Position.status == "OPEN"))
     stmt = (
         select(EarningsCalendar)
         .where(EarningsCalendar.earnings_date.between(today, horizon))
+        .where(EarningsCalendar.ticker.in_(followed))
         .order_by(EarningsCalendar.earnings_date.asc())
     )
     result = await db.execute(stmt)

@@ -639,3 +639,24 @@ async def test_stale_inputs_are_fetched_once_after_the_cheap_filter_and_recorded
     client2 = FakeClient({"SMALL": {"ticker": "SMALL", "market_cap": 1e9, "avg_volume": 5e6}})
     await rotate(db, client2)
     assert client2.get_analyst_ratings.call_count == 0 and client2.get_earnings_calendar.call_count == 0
+
+
+# ── Upcoming catalysts only list followed names ─────────────────────────────
+
+def test_catalysts_skip_earnings_stored_only_for_rotation_candidates(db):
+    """Rotation scoring stores earnings dates of non-watchlist candidates; the Dashboard's catalysts must not
+    show them. Names on the watchlist (now or in an earlier stint) and held names stay."""
+    from api.routes import get_catalysts
+
+    soon = date.today() + timedelta(days=3)
+    add_member(db, "WATCH", SEC_A)
+    old = add_member(db, "PAST", SEC_A)
+    old.is_active = False
+    db.add(Position(ticker="HELD", position_type="CALL", quantity=1, entry_price=Decimal("2"), status="OPEN"))
+    db.add(Position(ticker="SOLD", position_type="CALL", quantity=1, entry_price=Decimal("2"), status="CLOSED"))
+    for t in ("WATCH", "PAST", "HELD", "SOLD", "CAND"):
+        db.add(EarningsCalendar(ticker=t, earnings_date=soon))
+    db.commit()
+    import asyncio
+    events = asyncio.run(get_catalysts(db=AsyncOverSync(db)))
+    assert sorted(e["ticker"] if isinstance(e, dict) else e.ticker for e in events) == ["HELD", "PAST", "WATCH"]
