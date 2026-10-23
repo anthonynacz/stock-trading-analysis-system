@@ -136,3 +136,29 @@ def test_event_floors_the_label_at_pricey():
     assert t["event"]["kind"] == "term" and t["label"] == "pricey"
     hot = iv_score(0.60, 0.25, [], earnings_date=date(2026, 10, 29))
     assert hot["label"] == "expensive" and not hot["floored"]      # never lowered by the floor
+
+
+# ---------------------------------------------------------------- rules that read the score
+
+def test_rules_read_the_score():
+    from types import SimpleNamespace
+
+    from services.deep_options_analyzer import iv_bucket_for
+    from services.options_analyzer import OptionsAnalyzer
+    from services.recommendation_engine import RecommendationEngine, _iv_cost
+
+    assert _iv_cost(SimpleNamespace(iv_score={"score": 72})) == 72
+    assert _iv_cost(SimpleNamespace(iv_score=None)) is None and _iv_cost(None) is None
+
+    eng = RecommendationEngine.__new__(RecommendationEngine)
+    assert eng._determine_risk_level(65, 40) == "LOW"
+    assert eng._determine_risk_level(65, 60) == "MEDIUM"
+    assert eng._determine_risk_level(65, None) == "MEDIUM"          # no clean IV: never LOW
+    assert eng._determine_risk_level(10, 20) == "HIGH"
+
+    assert [iv_bucket_for({"label": l}) for l in ("cheap", "fair", "pricey", "expensive")] == [
+        "LOW", "MID", "HIGH", "HIGH"]
+    assert iv_bucket_for(None) == "MID"
+
+    assert "debit spread" in OptionsAnalyzer._build_rationale("CALL_DEBIT_SPREAD", 65, None, 30, "BULLISH")
+    assert "unknown" in OptionsAnalyzer._build_rationale("NAKED_CALL", None, None, 30, "BULLISH")

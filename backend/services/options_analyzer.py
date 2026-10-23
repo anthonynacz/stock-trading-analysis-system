@@ -254,7 +254,7 @@ class OptionsAnalyzer:
         self,
         ticker: str,
         direction: str,
-        iv_rank: float,
+        iv_cost: int | None,
         current_price: float,
         catalyst_type: str | None = None,
         earnings_date: date | str | None = None,
@@ -277,8 +277,8 @@ class OptionsAnalyzer:
             # DTE target range based on catalyst
             dte_min, dte_max = self._dte_range(catalyst_type, earnings_date)
 
-            # Use spread strategy when IV is elevated
-            if iv_rank > 70:
+            # Use a debit spread when the IV cost score says options are pricey or expensive
+            if iv_cost is not None and iv_cost >= 60:
                 strategy = "CALL_DEBIT_SPREAD" if is_call else "PUT_DEBIT_SPREAD"
             else:
                 strategy = "NAKED_CALL" if is_call else "NAKED_PUT"
@@ -340,7 +340,7 @@ class OptionsAnalyzer:
                         breakeven = strike - premium
 
                     strategy_rationale = self._build_rationale(
-                        strategy, iv_rank, catalyst_type, dte, direction
+                        strategy, iv_cost, catalyst_type, dte, direction
                     )
 
                     candidates.append({
@@ -363,8 +363,8 @@ class OptionsAnalyzer:
             selected = candidates[:3]
 
             logger.info(
-                "Selected %d optimal contracts for %s (%s, IV rank %.1f)",
-                len(selected), ticker, direction, iv_rank,
+                "Selected %d optimal contracts for %s (%s, IV cost %s)",
+                len(selected), ticker, direction, iv_cost,
             )
             return selected
 
@@ -823,7 +823,7 @@ class OptionsAnalyzer:
     @staticmethod
     def _build_rationale(
         strategy: str,
-        iv_rank: float,
+        iv_cost: int | None,
         catalyst_type: str | None,
         dte: int,
         direction: str,
@@ -832,9 +832,11 @@ class OptionsAnalyzer:
         parts: list[str] = []
 
         if "SPREAD" in strategy:
-            parts.append(f"IV rank {iv_rank:.0f} is elevated (>70); using debit spread to reduce vega risk")
+            parts.append(f"IV cost score {iv_cost} is pricey (>= 60); using debit spread to reduce vega risk")
+        elif iv_cost is None:
+            parts.append("IV cost unknown (no clean IV reading); naked option provides full delta exposure")
         else:
-            parts.append(f"IV rank {iv_rank:.0f} is moderate; naked option provides full delta exposure")
+            parts.append(f"IV cost score {iv_cost} is moderate; naked option provides full delta exposure")
 
         if catalyst_type:
             parts.append(f"catalyst: {catalyst_type}")
