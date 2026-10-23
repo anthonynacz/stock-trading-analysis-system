@@ -6,7 +6,6 @@ import { PHASE_COLORS } from '../utils/theme';
 import { LockedBadge } from './ui/LockedBadge';
 
 const ALL_PHASES = [
-  { key: 'discovery', label: 'Discovery' },
   { key: 'watchlist', label: 'Watchlist' },
   { key: 'ratings', label: 'Ratings' },
   { key: 'earnings', label: 'Earnings' },
@@ -19,7 +18,7 @@ const ALL_PHASES = [
 // Curated quick-run presets — selective phase sets for common workflows.
 // Full Pipeline is the morning-run preset: every phase, fresh universe
 // rotation, full data refresh. Intraday Update is the same-day re-run
-// preset: skips slow / once-a-day phases (discovery, watchlist rotation,
+// preset: skips slow / once-a-day phases (watchlist rotation,
 // earnings calendar, analyst ratings) and re-runs only price-sensitive
 // ones — uses ~half the API quota and populates the REV badge / prior
 // values on each existing same-day row.
@@ -34,9 +33,9 @@ const PRESETS: {
   {
     key: 'full',
     label: 'Full Pipeline',
-    description: 'All 8 phases — fresh universe + full refresh',
+    description: 'All 7 phases — watchlist rotation (once a day) + full refresh',
     phases: [
-      'discovery', 'watchlist', 'ratings', 'earnings',
+      'watchlist', 'ratings', 'earnings',
       'news', 'options', 'recommendations', 'industries',
     ],
     iconPath: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
@@ -68,7 +67,7 @@ export default function PipelineRunner({ onComplete }: Props) {
   // Tier gate. Three render paths:
   //   - Empty allowlist → locked variant (FREE/STARTER)
   //   - Subset (e.g. PRO's intraday-only) → simplified single-button refresh
-  //   - Full 8 phases → full UI with presets + custom phase picker (PREMIUM/ADMIN)
+  //   - Full 7 phases → full UI with presets + custom phase picker (PREMIUM/ADMIN)
   const { data: ent } = useEntitlements();
   const canTrigger = ent?.entitlements.manual_pipeline_trigger ?? false;
   const allowedPhases = ent?.entitlements.allowed_pipeline_phases ?? [];
@@ -302,7 +301,7 @@ export default function PipelineRunner({ onComplete }: Props) {
       <button
         onClick={() => handleStart(allowedPhases)}
         className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-border text-text-primary text-xs font-medium hover:bg-text-secondary/20 transition-colors"
-        title={`Refresh runs the intraday subset for your tier: ${phaseLabels}. Once-a-day phases (discovery, watchlist, ratings, earnings) are handled by the daily cron.`}
+        title={`Refresh runs the intraday subset for your tier: ${phaseLabels}. Once-a-day phases (watchlist, ratings, earnings) are handled by the daily cron.`}
       >
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path

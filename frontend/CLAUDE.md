@@ -51,7 +51,7 @@ cd frontend && npm run build                # tsc + vite build (what the Dockerf
 
 ## Dashboard Layout
 
-The app uses react-router-dom with routes: `/` (Dashboard), `/universe` (Universe), `/research` (Research), `/options-lab` (Options Lab), `/scanner` (Scanner), `/industries` (Industries), `/charts` (Charts), `/positions` (Positions), `/performance` (Performance), `/schedule` (Schedule), `/settings` (Settings), `/knowledge` (Knowledge), `/login` (public). A top nav bar (`AppNav`) links all protected pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
+The app uses react-router-dom with routes: `/` (Dashboard), `/research` (Research), `/options-lab` (Options Lab), `/scanner` (Scanner), `/industries` (Industries), `/charts` (Charts), `/positions` (Positions), `/performance` (Performance), `/schedule` (Schedule), `/settings` (Settings), `/knowledge` (Knowledge), `/login` (public). A top nav bar (`AppNav`) links all protected pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
 
 The Dashboard has the following sections (recommendations are the primary view; the watchlist is a secondary, collapsed section):
 1. **StatusBar** — Date stepper (left/right arrows to navigate pipeline days), refresh button, system status
@@ -72,10 +72,6 @@ The Dashboard has the following sections (recommendations are the primary view; 
 - **Sentiment indicators**: Options flow metrics (IV Rank, Put/Call Ratio, volumes) show color-coded sentiment tags (Bullish/Bearish/Neutral/Elevated).
 - **Date navigation**: Historical dates poll-disabled, driven from `watchlist_daily_snapshot`. Today drives from active watchlist + snapshot overlay.
 
-## Universe Page
-
-Universe management at `/universe`. Two-tab layout: **Universe** tab shows all stocks grouped by sector with source badges (SEED/MANUAL/DISCOVERED), add-ticker input with sector dropdown, and remove buttons. **Candidates** tab shows pending discovery candidates with price, change %, market cap, rationale, sector dropdown defaulting to suggested sector, and approve/dismiss buttons. "Run Discovery" button triggers manual discovery scan. Pending count badge on the Candidates tab.
-
 ## Research Page
 
 On-demand single-ticker analysis at `/research`. Enter any ticker (not just watchlist members) to run a full pipeline assessment: analyst ratings, news/sentiment, earnings, options flow, signal stacking, and recommendation. Results are persisted to `research_results` table with JSON-embedded options data and suggested contracts.
@@ -92,7 +88,7 @@ Recommendation outcome analytics at `/performance` (backed by `GET /api/outcomes
 
 ## Knowledge Page
 
-Documentation page at `/knowledge`. Tabs (`?tab=` keys, deep-linkable): guide, signals, classification, watchlist, strikes, optionslab, strategies, pipeline — one lazy file each under `pages/knowledge/`, rendered by `KnowledgePage.tsx` via a `TAB_COMPONENTS` map. Strategies hosts the interactive expiration-payoff SVG. Content constants (`WATCHLIST_LIMITS`, `IV_BUCKETS`, `DTE_BUCKETS` in `pages/knowledge/shared.tsx`, signal points in `SignalsTab.tsx`) mirror `backend/services/CLAUDE.md` — update both when limits, thresholds, or signal points change. Trading Guide includes daily workflow, signal quality for weeklies, 8 scenario playbooks, risk management rules, feature usage tips, and quick decision matrix.
+Documentation page at `/knowledge`. Tabs (`?tab=` keys, deep-linkable): guide, signals, classification, watchlist, strikes, optionslab, strategies, pipeline — one lazy file each under `pages/knowledge/`, rendered by `KnowledgePage.tsx` via a `TAB_COMPONENTS` map. Strategies hosts the interactive expiration-payoff SVG. Content constants (`WATCHLIST_LIMITS` = the rotation rules of `backend/config.py`, `IV_BUCKETS`, `DTE_BUCKETS` in `pages/knowledge/shared.tsx`, signal points in `SignalsTab.tsx`) mirror `backend/services/CLAUDE.md` — update both when limits, thresholds, or signal points change. Trading Guide includes daily workflow, signal quality for weeklies, 8 scenario playbooks, risk management rules, feature usage tips, and quick decision matrix.
 
 ## Settings Page
 

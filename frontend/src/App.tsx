@@ -11,7 +11,6 @@ import Dashboard from './pages/Dashboard';
 import LoginPage from './pages/LoginPage';
 
 // Landing page (Dashboard) and LoginPage stay eager; everything else is its own chunk.
-const UniversePage = lazy(() => import('./pages/UniversePage'));
 const ResearchPage = lazy(() => import('./pages/ResearchPage'));
 const KnowledgePage = lazy(() => import('./pages/KnowledgePage'));
 const PositionsPage = lazy(() => import('./pages/PositionsPage'));
@@ -48,7 +47,6 @@ function App() {
               <Route path="/login" element={<LoginPage />} />
               <Route element={<ProtectedLayout />}>
                 <Route path="/" element={<Dashboard />} />
-                <Route path="/universe" element={<UniversePage />} />
                 <Route path="/research" element={<ResearchPage />} />
                 <Route path="/options-lab" element={<OptionsLabPage />} />
                 <Route path="/scanner" element={<ScannerPage />} />

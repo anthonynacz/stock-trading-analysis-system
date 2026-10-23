@@ -369,6 +369,10 @@ class Watchlist(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Consecutive automatic rotation runs on which this member ranked worse
+    # than config.EXIT_RANK in its sector (or failed the filters); reset to 0
+    # on a strong run. The member exits at config.EXIT_DAYS.
+    weak_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     sector: Mapped[Optional["Sector"]] = relationship(back_populates="watchlist_items")
 

@@ -15,14 +15,9 @@ const PHASES: { name: string; time: string; desc: string }[] = [
     desc: 'Prunes expired per-user data and old run history according to retention windows.',
   },
   {
-    name: 'Universe Discovery',
-    time: '05:00',
-    desc: 'Scans FMP market lists (most active, gainers, losers) and news-trending tickers. Surfaces candidates for user approval.',
-  },
-  {
     name: 'Watchlist Rotation',
     time: '05:30',
-    desc: `Scores universe stocks by composite score, rotates the active watchlist (max ${WATCHLIST_LIMITS.maxDailyChanges} changes). Snapshot saved for historical viewing.`,
+    desc: `Scores the candidate universe by composite score and rotates the active watchlist once per day (max ${WATCHLIST_LIMITS.max} names, ${WATCHLIST_LIMITS.maxDailyChanges} changes per day). Later runs the same day are skipped. Snapshot saved for historical viewing.`,
   },
   {
     name: 'Analyst Ratings',
@@ -87,7 +82,7 @@ const PHASES: { name: string; time: string; desc: string }[] = [
 ];
 
 const DATA_SOURCES: DataSource[] = [
-  { source: 'FMP (Financial Modeling Prep)', usage: 'Analyst ratings (primary), earnings with EPS, insider trades, news, discovery lists', limit: '300 req/min' },
+  { source: 'FMP (Financial Modeling Prep)', usage: 'Analyst ratings (primary), earnings with EPS, insider trades, news', limit: '300 req/min' },
   { source: 'Finnhub', usage: 'News (primary), analyst ratings (fallback)', limit: '60 calls/min (free)' },
   { source: 'yfinance', usage: 'Prices, fundamentals, options chains, technicals', limit: '~2 req/sec (rate limited)' },
   { source: 'NewsAPI', usage: 'News (last fallback)', limit: '100 calls/day (free)' },

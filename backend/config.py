@@ -124,15 +124,59 @@ SECTOR_ETFS: dict[str, str] = {
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-MAX_WATCHLIST = 60
-MAX_PER_SECTOR = 12
-MAX_CHANGES_PER_DAY = 10
+# ── Watchlist rotation rules (services/watchlist_manager.py) ────────────────
+# Size caps, enforced by the daily rotation. Above a cap the rotation shrinks
+# gradually: it drops the lowest-scoring removable names, at most
+# MAX_CHANGES_PER_DAY per run, and exits get the budget before additions.
+MAX_WATCHLIST = 60                  # total active names
+MAX_PER_SECTOR = 12                 # active names per sector
+MAX_CHANGES_PER_DAY = 10            # additions + removals per automatic rotation
+
+# Hysteresis: a candidate enters only if it ranks in the top ENTER_RANK of its
+# sector, or beats the weakest removable member of that sector by ENTER_MARGIN
+# composite points. At a cap, an entrant needs a free slot or must beat the
+# weakest removable member of its sector by ENTER_MARGIN (one in, one out).
+ENTER_RANK = 10
+ENTER_MARGIN = 5.0
+# A member exits only after ranking worse than EXIT_RANK in its sector (or
+# failing the liquidity filters) on EXIT_DAYS consecutive rotation runs.
+# The count is stored in watchlist.weak_days and resets on a strong run.
+EXIT_RANK = 15
+EXIT_DAYS = 2
+# No automatic exit (weak, toxic or shrink) before this many NYSE trading days
+# since the stint's added_date.
+MIN_STAY_TRADING_DAYS = 5
+# The grace lock set by a manual rotate-in expires after LOCK_DAYS trading days
+# since added_date. Locks set by the user (lock toggle) and manual entries
+# (is_manual) do not expire.
+LOCK_DAYS = 10
+# Toxic exit (TOXIC_CONVICTION_DAYS consecutive SELL/STRONG_SELL recs). Off by
+# default: bearish names are put candidates, not dead weight. When True, toxic
+# names exit like before (overriding unusual-options protection), still
+# subject to the minimum stay.
+DROP_TOXIC = False
+# Never rotated in, never offered as a rotate-out replacement: ETFs / index
+# products in universe_stocks that are not single equities (they also fail
+# the market-cap filter). The universe table itself is left untouched.
+ROTATION_EXCLUDE = frozenset({"SPY", "QQQ", "XLE", "XLF", "HYG", "EWZ"})
+# Scoring inputs (analyst grades, earnings dates) come from the analyst_ratings
+# and earnings_calendar tables; a ticker's inputs are re-fetched from the API
+# only when they are older than this many days (or missing).
+ROTATION_INPUTS_MAX_AGE_DAYS = 3
+# Unusual-options protection: the last end-of-session options snapshot of the
+# last completed session has call volume >= UNUSUAL_OPTIONS_MULTIPLE x the
+# average end-of-session call volume of the UNUSUAL_OPTIONS_LOOKBACK_SESSIONS
+# sessions before it (at least UNUSUAL_OPTIONS_MIN_BASELINE of them).
+UNUSUAL_OPTIONS_MULTIPLE = 3.0
+UNUSUAL_OPTIONS_LOOKBACK_SESSIONS = 20
+UNUSUAL_OPTIONS_MIN_BASELINE = 5
 
 # Watchlist filters
 MIN_MARKET_CAP = 5_000_000_000      # $5B
 MIN_AVG_VOLUME = 2_000_000          # 2M shares/day
-MIN_OPTIONS_VOLUME = 1_000          # daily contracts
-MIN_ANALYST_COVERAGE = 5
+# Not a filter: scale of the options_liquidity sub-score (avg share volume of
+# MIN_OPTIONS_VOLUME * 5000 scores 100).
+MIN_OPTIONS_VOLUME = 1_000
 
 # Scoring weights (must sum to 1.0)
 WATCHLIST_WEIGHTS = {

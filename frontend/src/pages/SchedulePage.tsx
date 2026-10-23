@@ -12,6 +12,7 @@ import { usePolling } from '../hooks/usePolling';
 const PHASE_LABEL: Record<string, string> = {
   discovery: 'Universe Discovery',
   watchlist: 'Watchlist Rotation',
+  watchlist_rotation: 'Rotation Applied',
   ratings: 'Analyst Ratings',
   earnings: 'Earnings Calendar',
   news: 'News + Sentiment',

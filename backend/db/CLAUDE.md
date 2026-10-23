@@ -37,6 +37,8 @@ All `DateTime` columns use `DateTime(timezone=True)` (maps to PostgreSQL `TIMEST
 
 These columns were added via `ALTER TABLE` and may need to be re-added if the database is recreated from models alone:
 - `watchlist.is_manual`, `watchlist.is_locked` — `BOOLEAN NOT NULL DEFAULT FALSE`
+- `watchlist.weak_days` — `INTEGER NOT NULL DEFAULT 0`, rotation hysteresis counter (migration `c9e4b7a2d5f1`)
+- `pipeline_run_log` rows with phase `watchlist_rotation` are the once-per-day rotation marker (meta `et_date`, added, removed, refreshed); written by `watchlist_manager`, not by `run_log`
 - `watchlist_daily_snapshot` — `UNIQUE(snapshot_date, ticker)` (`uq_snapshot_date_ticker`)
 - `options_snapshots.atm_iv` — `NUMERIC(6,4)` — persisted near-ATM IV for historical IV rank (`utils/iv_history.py`)
 - `recommendations.prior_action / prior_conviction_score / revision_number / revised_at / revision_reason` — same-day revision tracking. `revision_reason` is populated by the intraday news rescore path with the headline that triggered the revision; daily pipeline revisions leave it NULL.

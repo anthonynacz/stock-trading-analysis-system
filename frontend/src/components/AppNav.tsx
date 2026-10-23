@@ -5,7 +5,6 @@ import { fmtCount, useEntitlements } from '../contexts/EntitlementsContext';
 
 const primaryLinks = [
   { to: '/', label: 'Dashboard' },
-  { to: '/universe', label: 'Universe' },
   { to: '/industries', label: 'Industries' },
   { to: '/research', label: 'Research' },
   { to: '/options-lab', label: 'Options Lab' },

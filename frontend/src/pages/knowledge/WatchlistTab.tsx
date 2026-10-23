@@ -15,9 +15,39 @@ type Weight = (typeof WEIGHTS)[number];
 const FILTERS = [
   { filter: 'Market Cap', threshold: '≥ $5B' },
   { filter: 'Avg Daily Volume', threshold: '≥ 2M shares' },
-  { filter: 'Options Volume', threshold: '≥ 1,000 contracts/day' },
-  { filter: 'Analyst Coverage', threshold: '≥ 5 analysts' },
 ];
+
+const ROTATION_RULES = [
+  {
+    rule: 'Entry',
+    desc: `Ranks in the top ${WATCHLIST_LIMITS.enterRank} of its sector, or beats the weakest replaceable member of the sector by ${WATCHLIST_LIMITS.enterMargin} points. Catalyst (earnings ≤ 14d) and rating-change names go first.`,
+  },
+  {
+    rule: 'Exit',
+    desc: `Ranks worse than ${WATCHLIST_LIMITS.exitRank} in its sector (or fails the filters) on ${WATCHLIST_LIMITS.exitDays} consecutive rotations.`,
+  },
+  {
+    rule: 'Minimum stay',
+    desc: `No automatic exit before ${WATCHLIST_LIMITS.minStayDays} trading days on the list.`,
+  },
+  {
+    rule: 'Caps',
+    desc: `${WATCHLIST_LIMITS.max} names in total, ${WATCHLIST_LIMITS.perSector} per sector. At a cap an entrant needs a free slot or must beat the weakest replaceable member of its sector by ${WATCHLIST_LIMITS.enterMargin} points (one in, one out). Over a cap the list shrinks by its lowest scores, ${WATCHLIST_LIMITS.maxDailyChanges} changes a day at most.`,
+  },
+  {
+    rule: 'Once a day',
+    desc: 'The rotation runs once per day (05:30 ET). A second run the same day, including the Full pipeline preset, is skipped.',
+  },
+  {
+    rule: 'Protected',
+    desc: `Manual names, locked names, tickers with an open position, and unusual options activity (last session's call volume ≥ 3x its 20-session average). A grace lock from a manual rotate-in expires after ${WATCHLIST_LIMITS.lockDays} trading days.`,
+  },
+  {
+    rule: 'Not candidates',
+    desc: 'ETFs and index products (SPY, QQQ, XLE, XLF, HYG, EWZ) are never rotated in or proposed as replacements.',
+  },
+];
+type RotationRule = (typeof ROTATION_RULES)[number];
 
 export default function WatchlistTab() {
   return (
@@ -43,7 +73,7 @@ export default function WatchlistTab() {
           title="Liquidity Filters"
           blurb="Stocks must pass all filters before scoring. This ensures tradable, liquid names only."
         />
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           {FILTERS.map((f) => (
             <StatTile key={f.filter} label={f.filter} value={f.threshold} />
           ))}
@@ -61,14 +91,29 @@ export default function WatchlistTab() {
           size="lg"
           label="Max Daily Changes"
           value={WATCHLIST_LIMITS.maxDailyChanges}
-          sub="Limits turnover per rotation"
+          sub="Additions + removals per rotation; exits first while over a cap"
         />
         <StatTile
           size="lg"
-          label="Toxic Removal Threshold"
-          value={`${WATCHLIST_LIMITS.toxicDays} days`}
-          valueClass="text-red-400"
-          sub="Consecutive SELL/STRONG_SELL recs — removed at the next rotation regardless of composite score; recommendation history is preserved"
+          label="Toxic Removal"
+          value={WATCHLIST_LIMITS.dropToxic ? `${WATCHLIST_LIMITS.toxicDays} days` : 'Off'}
+          valueClass={WATCHLIST_LIMITS.dropToxic ? 'text-red-400' : 'text-text-secondary'}
+          sub={`When on: ${WATCHLIST_LIMITS.toxicDays} consecutive SELL/STRONG_SELL recs remove a name (after the minimum stay). Off by default: bearish names are put candidates`}
+        />
+      </div>
+
+      <div>
+        <SectionHeading
+          title="Rotation Rules"
+          blurb="Hysteresis keeps names on the list long enough to act on them: entering is harder than staying."
+        />
+        <DocTable<RotationRule>
+          rows={ROTATION_RULES}
+          rowKey={(r) => r.rule}
+          columns={[
+            { key: 'rule', header: 'Rule', headerClass: 'w-36', className: 'text-text-primary' },
+            { key: 'desc', header: 'Description', className: 'text-text-secondary' },
+          ]}
         />
       </div>
 
@@ -78,7 +123,8 @@ export default function WatchlistTab() {
           <span className="text-accent-400 font-semibold">Manual</span> tickers are added by hand and are
           not scored — they remain on the watchlist until removed.{' '}
           <span className="text-amber-400 font-semibold">Locked</span> tickers participate in scoring but
-          are protected from automatic rotation, ensuring they stay on the watchlist regardless of rank.
+          are protected from automatic rotation, ensuring they stay on the watchlist regardless of rank. A
+          ticker rotated in by hand is grace-locked for {WATCHLIST_LIMITS.lockDays} trading days.
         </p>
       </div>
     </div>

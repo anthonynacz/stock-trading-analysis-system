@@ -3,9 +3,23 @@ import { ActionBadge } from '../../components/ui/badges';
 
 export { ACTION_COLORS, BRAND } from '../../utils/theme';
 
-// Mirrors backend/config.py (MAX_WATCHLIST / MAX_PER_SECTOR / SECTOR_ETFS /
-// MAX_CHANGES_PER_DAY) and the toxic-ticker streak in watchlist rotation.
-export const WATCHLIST_LIMITS = { max: 60, perSector: 12, sectors: 8, maxDailyChanges: 10, toxicDays: 3 } as const;
+// Mirrors the watchlist rotation rules in backend/config.py (MAX_WATCHLIST,
+// MAX_PER_SECTOR, MAX_CHANGES_PER_DAY, ENTER_RANK, ENTER_MARGIN, EXIT_RANK,
+// EXIT_DAYS, MIN_STAY_TRADING_DAYS, LOCK_DAYS, TOXIC_CONVICTION_DAYS, DROP_TOXIC).
+export const WATCHLIST_LIMITS = {
+  max: 60,
+  perSector: 12,
+  sectors: 8,
+  maxDailyChanges: 10,
+  enterRank: 10,
+  enterMargin: 5,
+  exitRank: 15,
+  exitDays: 2,
+  minStayDays: 5,
+  lockDays: 10,
+  toxicDays: 3,
+  dropToxic: false,
+} as const;
 
 // IV-rank buckets used by backend/services/deep_options_analyzer.py.
 export const IV_BUCKETS = { low: '<30', mid: '30–69', high: '>=70' } as const;

@@ -85,7 +85,7 @@ For local dev, `.env` at project root with `DATABASE_URL` pointing to `localhost
 
 ## Pipeline Idempotency
 
-Pipeline re-runs on the same day are safe. `watchlist_manager.rotate_watchlist()` deletes existing snapshots for the date before inserting new ones. The `uq_snapshot_date_ticker` constraint prevents duplicates. Recommendations use `uq_rec_date_ticker` — re-runs update existing rows. Scanner runs use `uq_mbs_date_ticker` with delete-before-insert on `run_date`.
+Pipeline re-runs on the same day are safe. `watchlist_manager.rotate_watchlist()` runs once per ET day (a `watchlist_rotation` row in `pipeline_run_log` marks the run; later runs are skipped) and never deletes snapshot rows; later changes update / append their own row (`uq_snapshot_date_ticker`). Recommendations use `uq_rec_date_ticker` — re-runs update existing rows. Scanner runs use `uq_mbs_date_ticker` with delete-before-insert on `run_date`.
 
 ## Known Backend Limitations
 

@@ -8,7 +8,7 @@ from io import BytesIO
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import Date, Float, cast, delete, select, func
+from sqlalchemy import Date, cast, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -246,49 +246,28 @@ async def dev_token(payload: dict):
 
 
 async def _get_unusual_options_set(db: AsyncSession) -> set[str]:
-    """Return tickers with ≥3x historical avg call volume (today vs 20-day)."""
-    try:
-        now = datetime.now()
-        cutoff_20d = now - timedelta(days=20)
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    """Unusual call volume in the last completed session (shared helper,
+    same rule as the daily rotation — services/unusual_options.py)."""
+    from services.unusual_options import get_unusual_options_tickers
 
-        hist_avg = (
-            select(
-                OptionsSnapshot.ticker,
-                func.avg(cast(OptionsSnapshot.total_call_volume, Float)).label("avg_call"),
-            )
-            .where(OptionsSnapshot.snapshot_time >= cutoff_20d, OptionsSnapshot.snapshot_time < today_start)
-            .group_by(OptionsSnapshot.ticker)
-            .subquery()
-        )
-        today_snap = (
-            select(
-                OptionsSnapshot.ticker,
-                func.max(OptionsSnapshot.total_call_volume).label("today_call"),
-            )
-            .where(OptionsSnapshot.snapshot_time >= today_start)
-            .group_by(OptionsSnapshot.ticker)
-            .subquery()
-        )
-        result = await db.execute(
-            select(today_snap.c.ticker)
-            .join(hist_avg, today_snap.c.ticker == hist_avg.c.ticker)
-            .where(hist_avg.c.avg_call > 0, today_snap.c.today_call >= 3 * hist_avg.c.avg_call)
-        )
-        return {row[0] for row in result.all()}
-    except Exception:
-        return set()
+    return await get_unusual_options_tickers(db)
 
 
-def _apply_protection(item: WatchlistItemResponse, unusual_tickers: set[str]) -> WatchlistItemResponse:
+def _apply_protection(
+    item: WatchlistItemResponse,
+    unusual_tickers: set[str],
+    open_position_tickers: set[str] | None = None,
+) -> WatchlistItemResponse:
     """Set rotation_protected flag and reasons on a watchlist response item."""
     reasons: list[str] = []
     if item.is_locked:
-        reasons.append("Locked by user — protected from auto-rotation")
+        reasons.append("Locked — protected from auto-rotation")
     if item.is_manual:
         reasons.append("Manually added — not subject to auto-rotation")
+    if open_position_tickers and item.ticker in open_position_tickers:
+        reasons.append("Open position — never rotated out automatically")
     if item.ticker in unusual_tickers:
-        reasons.append("Unusual options activity — call volume ≥3x the 20-day average")
+        reasons.append("Unusual options activity — last session's call volume ≥3x the 20-session average")
     if reasons:
         item.rotation_protected = True
         item.protection_reasons = reasons
@@ -315,8 +294,14 @@ async def get_watchlist(
     status_map: dict[str, str] = {s.ticker: s.status for s in snapshots}
     sector_map: dict[str, str | None] = {s.ticker: s.sector for s in snapshots}
 
-    # Fetch unusual options tickers once for protection annotations
+    # Fetch protection inputs once for the annotations
     unusual_tickers = await _get_unusual_options_set(db) if is_today else set()
+    if is_today:
+        from services.watchlist_manager import get_open_position_tickers
+
+        open_positions = await get_open_position_tickers(db)
+    else:
+        open_positions = set()
 
     if is_today:
         # For today: query active watchlist, overlay snapshot statuses,
@@ -379,7 +364,7 @@ async def get_watchlist(
                         status="REMOVED",
                     )
                 )
-        return [_apply_protection(r, unusual_tickers) for r in response]
+        return [_apply_protection(r, unusual_tickers, open_positions) for r in response]
     else:
         # Historical: drive entirely from snapshots, join Watchlist for metadata
         all_tickers = [s.ticker for s in snapshots]
@@ -465,6 +450,8 @@ async def add_to_watchlist(
                 sector_id = sector_obj.id
                 sector_name = sector_obj.name
 
+    from services.watchlist_manager import record_snapshot_change
+
     wl = Watchlist(
         ticker=ticker,
         company_name=company_name,
@@ -475,6 +462,7 @@ async def add_to_watchlist(
         entry_reason="manually added",
     )
     db.add(wl)
+    await record_snapshot_change(db, ticker, "NEW_ENTRANT", sector_name)
     await db.commit()
     await db.refresh(wl)
 
@@ -497,8 +485,12 @@ async def remove_from_watchlist(
     ticker: str,
     db: AsyncSession = Depends(get_db),
 ):
+    from services.watchlist_manager import record_snapshot_change
+
     result = await db.execute(
-        select(Watchlist).where(
+        select(Watchlist)
+        .options(selectinload(Watchlist.sector))
+        .where(
             Watchlist.ticker == ticker.upper(),
             Watchlist.is_active.is_(True),
             Watchlist.is_manual.is_(True),
@@ -511,6 +503,9 @@ async def remove_from_watchlist(
     wl.is_active = False
     wl.removed_date = date.today()
     wl.exit_reason = "manually removed"
+    await record_snapshot_change(
+        db, wl.ticker, "REMOVED", wl.sector.name if wl.sector else None,
+    )
     await db.commit()
     return {"status": "removed", "ticker": ticker.upper()}
 
@@ -641,7 +636,7 @@ async def rotate_out_preview(
     """
     from db.connection import async_session
     from services.earnings_calendar import EarningsCalendarService
-    from services.watchlist_manager import WatchlistManager
+    from services.watchlist_manager import WatchlistManager, get_open_position_tickers
 
     requested = list(dict.fromkeys(
         t.strip().upper() for t in body.tickers if t and t.strip()
@@ -659,6 +654,7 @@ async def rotate_out_preview(
             valid = [t for t in requested if t in active]
 
             unusual = await manager._get_unusual_options_tickers()
+            open_positions = await get_open_position_tickers(session)
             proposals = await manager.propose_replacements(valid) if valid else {}
 
             items: list[RotationPreviewItem] = []
@@ -674,6 +670,7 @@ async def rotate_out_preview(
                     continue
                 gate = await manager.evaluate_rotation_gate(
                     t, unusual_tickers=unusual, earnings_service=earnings_svc,
+                    open_position_tickers=open_positions,
                 )
                 cand = (proposals.get(t) or [None])[0]
                 items.append(RotationPreviewItem(
@@ -707,7 +704,12 @@ async def rotate_out_commit(
     from db.connection import async_session
     from services.earnings_calendar import EarningsCalendarService
     from services.universe_discoverer import YFINANCE_SECTOR_MAP
-    from services.watchlist_manager import WatchlistManager
+    from services.watchlist_manager import (
+        GRACE_LOCK_REASON,
+        WatchlistManager,
+        get_open_position_tickers,
+        record_snapshot_change,
+    )
 
     if _rotation_run_state["running"]:
         return RotationCommitResponse(status="already_running")
@@ -746,6 +748,7 @@ async def rotate_out_commit(
             manager = WatchlistManager(session, client)
             earnings_svc = EarningsCalendarService(session, client)
             unusual = await manager._get_unusual_options_tickers()
+            open_positions = await get_open_position_tickers(session)
 
             active_rows = await manager.get_active_watchlist()
             active_map = {w.ticker: w for w in active_rows}
@@ -765,6 +768,7 @@ async def rotate_out_commit(
 
                 gate = await manager.evaluate_rotation_gate(
                     rem, unusual_tickers=unusual, earnings_service=earnings_svc,
+                    open_position_tickers=open_positions,
                 )
                 if gate["blocked"]:
                     blocked.append(RotationBlockedItem(
@@ -814,7 +818,8 @@ async def rotate_out_commit(
                                     add_sector = sobj.name
 
                 # ---- addition (resurrect-or-insert, grace-locked) ----
-                entry_reason = "rotated in (manual; grace-locked)"
+                # Grace lock: expires after config.LOCK_DAYS trading days.
+                entry_reason = GRACE_LOCK_REASON
                 dup_res = await session.execute(
                     select(Watchlist).where(
                         Watchlist.ticker == add,
@@ -826,6 +831,8 @@ async def rotate_out_commit(
                     dup.is_active = True
                     dup.removed_date = None
                     dup.is_locked = True
+                    dup.exit_reason = None
+                    dup.weak_days = 0
                     dup.entry_reason = entry_reason
                     if sector_id is not None:
                         dup.sector_id = sector_id
@@ -842,21 +849,9 @@ async def rotate_out_commit(
                         entry_reason=entry_reason,
                     ))
 
-                # ---- daily snapshot (scoped delete — never clobber pipeline rows) ----
-                await session.execute(
-                    delete(WatchlistDailySnapshot).where(
-                        WatchlistDailySnapshot.snapshot_date == today,
-                        WatchlistDailySnapshot.ticker.in_([rem, add]),
-                    )
-                )
-                session.add(WatchlistDailySnapshot(
-                    snapshot_date=today, ticker=rem, status="REMOVED",
-                    sector=rem_sector,
-                ))
-                session.add(WatchlistDailySnapshot(
-                    snapshot_date=today, ticker=add, status="NEW_ENTRANT",
-                    sector=add_sector,
-                ))
+                # ---- daily snapshot: this change's own rows (others kept) ----
+                await record_snapshot_change(session, rem, "REMOVED", rem_sector, today)
+                await record_snapshot_change(session, add, "NEW_ENTRANT", add_sector, today)
 
                 committed.append(RotationCommitPair(remove=rem, add=add))
 

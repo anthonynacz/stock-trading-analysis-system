@@ -46,7 +46,9 @@ last_refresh: dict[str, datetime | None] = {
 
 EASTERN = pytz.timezone("US/Eastern")
 
-ALL_PHASES = ["discovery", "watchlist", "ratings", "earnings", "news", "options", "recommendations", "industries"]
+# Universe discovery is not part of the pipeline any more (never scheduled,
+# not in the presets); it only runs from POST /api/universe/discover.
+ALL_PHASES = ["watchlist", "ratings", "earnings", "news", "options", "recommendations", "industries"]
 
 # Phases that are safe to run concurrently (independent data-fetchers,
 # separate tables, no cross-reads).
@@ -86,10 +88,13 @@ async def _inject_custom_universe(session) -> set[str]:
         concern documented in CLAUDE.md.
       - Re-runs the same day are safe: existing rows are detected via
         is_active=True, so we don't violate uq_watchlist_ticker_date.
+      - Each inserted ticker gets a NEW_ENTRANT row in today's
+        watchlist_daily_snapshot (earlier rows of the day are kept).
     """
     from datetime import date as _date
     from sqlalchemy import select
     from db.models import UserPreferences, Watchlist
+    from services.watchlist_manager import record_snapshot_change
 
     pref_result = await session.execute(select(UserPreferences))
     custom: set[str] = set()
@@ -125,6 +130,7 @@ async def _inject_custom_universe(session) -> set[str]:
             is_manual=True,
             entry_reason="Custom universe slot",
         ))
+        await record_snapshot_change(session, ticker, "NEW_ENTRANT", None, today)
         added.add(ticker)
 
     await session.commit()
@@ -154,6 +160,7 @@ async def run_pipeline_phase(phase: str) -> None:
         watchlist_mgr = WatchlistManager(session, data_client)
 
         if phase == "discovery":
+            # Manual only (POST /api/universe/discover); not in ALL_PHASES.
             discoverer = UniverseDiscoverer(session, data_client)
             candidates = await discoverer.discover()
             logger.info("Discovery complete: %d new candidates", len(candidates))
@@ -285,8 +292,8 @@ async def run_tracked_pipeline(phases: list[str]) -> None:
     start = datetime.now(tz=EASTERN)
 
     # Group consecutive parallelizable phases into batches.
-    # E.g. [discovery, watchlist, ratings, earnings, news, options, recommendations]
-    # becomes: [[discovery], [watchlist], [ratings, earnings, news, options], [recommendations]]
+    # E.g. [watchlist, ratings, earnings, news, options, recommendations]
+    # becomes: [[watchlist], [ratings, earnings, news, options], [recommendations]]
     batches: list[list[str]] = []
     for phase in phases:
         if phase in PARALLEL_PHASES:
@@ -371,10 +378,8 @@ def start_scheduler() -> None:
     weekdays = "mon-fri"
 
     # -- Pre-market ----------------------------------------------------------
-    scheduler.add_job(
-        run_pipeline_phase, "cron", args=["discovery"],
-        hour=5, minute=0, day_of_week=weekdays, id="premarket_discovery",
-    )
+    # Watchlist rotation runs at most once per ET day (rotate_watchlist skips
+    # a second run; custom-universe injection still runs).
     scheduler.add_job(
         run_pipeline_phase, "cron", args=["watchlist"],
         hour=5, minute=30, day_of_week=weekdays, id="premarket_watchlist",

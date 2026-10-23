@@ -89,7 +89,7 @@ class TierEntitlements:
     # get the full pipeline (~250 calls). FREE/STARTER is intentionally
     # empty (manual_pipeline_trigger=False already gates them out).
     #
-    # The expensive phases (discovery, watchlist rotation, ratings, earnings)
+    # The expensive phases (watchlist rotation, ratings, earnings)
     # are once-a-day operations driven by cron — there's no real value in
     # PRO-tier users invoking them on-demand.
     allowed_pipeline_phases: tuple[str, ...]
@@ -97,7 +97,7 @@ class TierEntitlements:
 
 _INTRADAY_PHASES = ("news", "options", "recommendations", "industries")
 _FULL_PHASES = (
-    "discovery", "watchlist", "ratings", "earnings",
+    "watchlist", "ratings", "earnings",
     "news", "options", "recommendations", "industries",
 )
 

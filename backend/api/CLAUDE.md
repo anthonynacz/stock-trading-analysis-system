@@ -9,11 +9,11 @@ POST /api/dev/token                    # Mint dev HS256 JWT { email } (gated by 
 GET  /api/watchlist                    # Active watchlist with status tags; ?date= for historical
 GET  /api/watchlist/history            # Historical snapshots; ?ticker=&days= (no portal consumer)
 GET  /api/watchlist/changes            # Entrants/exiters for a date; ?date=
-POST /api/watchlist                    # Add manual ticker { "ticker": "AAPL" }
-DELETE /api/watchlist/{ticker}         # Remove manual ticker
+POST /api/watchlist                    # Add manual ticker { "ticker": "AAPL" } (appends a NEW_ENTRANT snapshot row)
+DELETE /api/watchlist/{ticker}         # Remove manual ticker (appends a REMOVED snapshot row)
 PUT  /api/watchlist/{ticker}/lock      # Toggle lock (protected from rotation)
-POST /api/watchlist/rotate-out/preview # Preview manual rotate-out { tickers: [] } → per-ticker { gate{blocked,reasons}, candidate|null }. Read-only; scores universe for next-in-line. Gate = "strong imminent potential" (PRE_POSITION / leading signal / active catalyst / unusual options / bullish high conviction)
-POST /api/watchlist/rotate-out/commit  # Commit swap { pairs:[{remove,add}] }. Re-validates gate server-side (hard block → blocked[]); removes outgoing (auto OR manual — unlike DELETE which only removes is_manual), adds candidate grace-locked (is_locked=true), then spawns background rec generation. → { status, committed, blocked, analysis_started }
+POST /api/watchlist/rotate-out/preview # Preview manual rotate-out { tickers: [] } → per-ticker { gate{blocked,reasons}, candidate|null }. Read-only; scores universe for next-in-line. Gate = open position held, or "strong imminent potential" (PRE_POSITION / leading signal / active catalyst / unusual options / bullish high conviction)
+POST /api/watchlist/rotate-out/commit  # Commit swap { pairs:[{remove,add}] }. Re-validates gate server-side (hard block → blocked[]); removes outgoing (auto OR manual — unlike DELETE which only removes is_manual), adds candidate grace-locked (is_locked=true, expires after LOCK_DAYS trading days), records its own snapshot rows, then spawns background rec generation. → { status, committed, blocked, analysis_started }
 GET  /api/watchlist/rotate-out/status  # Poll background analysis state → { running, started_at, tickers{ticker:pending|analyzing|done|error}, errors }
 GET  /api/pipeline-dates               # Distinct snapshot dates (last 90 days)
 GET  /api/recommendations              # Recs; ?action=&min_conviction=&date=&sort=conviction|revised_at  (default conviction; revised_at suppresses the personalized weighted re-sort)
@@ -42,13 +42,13 @@ POST /api/research/{ticker}            # On-demand full analysis for any ticker 
 GET  /api/research                     # List research results; ?ticker=&limit=&offset=
 GET  /api/research/{id}                # Single research result
 DELETE /api/research/{id}              # Delete research result
-GET  /api/universe                     # Universe grouped by sector + pending candidate count
+GET  /api/universe                     # Universe grouped by sector + pending candidate count (no UI page since 2026-10-23)
 POST /api/universe                     # Add stock to universe { ticker, sector }
 DELETE /api/universe/{ticker}          # Soft-remove stock from universe
 GET  /api/universe/candidates          # List pending discovery candidates
 POST /api/universe/candidates/{id}/approve  # Approve candidate into sector { sector }
 POST /api/universe/candidates/{id}/dismiss  # Dismiss candidate
-POST /api/universe/discover            # Trigger discovery manually
+POST /api/universe/discover            # Trigger discovery (the only way it runs; not scheduled)
 POST /api/positions                    # Create position { ticker, position_type, quantity, entry_price, recommendation_id?, ... } (rec link validated quietly; bogus id → unlinked)
 GET  /api/positions                    # List positions; ?status=OPEN/CLOSED, ?ticker=
 GET  /api/positions/{id}               # Single position with P&L + recommendation
