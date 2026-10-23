@@ -31,6 +31,7 @@ def upgrade() -> None:
             hv20 NUMERIC(6, 4),
             hv60 NUMERIC(6, 4),
             spot NUMERIC(12, 4),
+            source VARCHAR(8) NOT NULL DEFAULT 'yahoo',
             captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             PRIMARY KEY (ticker, day)
         )

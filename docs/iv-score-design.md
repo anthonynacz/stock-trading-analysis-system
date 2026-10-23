@@ -41,7 +41,15 @@ So the score cannot simply combine today's rank and percentile. It needs a clean
 - Cost: about 2–3 s per ticker at the 0.5 s yfinance limit, so roughly 25 minutes in all.
 - A ticker the pipeline or Research needs that has no reading in the last 5 trading days is measured on demand. Outside market hours that gives no reading, and the score says "IV unknown".
 
-**No backfill:** there is no free IV history, so the IV history starts clean on day 1. HV is computed from daily closes each time, so it needs no history table. The old `atm_iv` history is no longer used for rank or percentile. It is kept, not deleted, and new snapshots store the clean IV30 in that column.
+**Backfill (added 2026-10-23):** Yahoo has no IV history, but EODHD's US options product ($29.99/month, about 2 years of end-of-day chains with bid, ask and IV per contract) does.
+- `services/iv_backfill.py` rebuilds a year of IV30 for the capture universe with the same code. That is about 150k requests, one per ticker and day.
+- Rows are stored as `source='eodhd'`, and live captures as `yahoo`.
+- Checked with the demo key:
+  - AAPL had a clean reading on 51 of 51 sampled days (18.6–30.4%), with the front IV rising into each earnings date.
+  - AMZN's front IV on Oct 19 was 29.4% from EODHD at the close against 29.2% from Yahoo in the afternoon.
+- Without a key, the history starts clean on the first capture day.
+
+HV is computed from daily closes each time. The old `atm_iv` history is no longer used for rank or percentile. It is kept, not deleted, and new snapshots store the clean IV30 in that column.
 
 ## 3. The score
 

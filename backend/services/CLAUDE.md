@@ -27,6 +27,10 @@ The daily workflow runs as a phased pipeline orchestrated by APScheduler in `sch
   - Debit spread instead of naked at 60 or more.
   - The Radar's option_lag class.
 - **Radar:** reads `iv_daily` read-only for each name's history (`RadarStore.load_iv_histories`).
+- **Backfill:** `python -m services.iv_backfill --days 365` (`EODHD_API_KEY`) rebuilds the history from EODHD end-of-day chains with the same IV30 code.
+  - One request per ticker and day. The API filters on the contract's last trade date, so only the record whose id ends in that day is kept.
+  - Rows are stored as `source='eodhd'` and never overwrite existing rows, so a rerun resumes where it stopped.
+  - Live captures are `source='yahoo'`. On 2026-10-19, AMZN's front IV was 29.2% at about 15:00 (Yahoo) and 29.4% at the close (EODHD).
 
 ## Manual rotate-out (user-driven swap + on-demand rec)
 

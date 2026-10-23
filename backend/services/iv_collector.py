@@ -57,13 +57,18 @@ def _dec(v: float | None, nd: int) -> Decimal | None:
     return None if v is None else Decimal(str(round(v, nd)))
 
 
-async def upsert_reading(session: AsyncSession, row: dict) -> None:
-    values = {
+def reading_values(row: dict) -> dict:
+    """iv_daily column values of one reading (fractions rounded to the column scale)."""
+    return {
         "ticker": row["ticker"], "day": row["day"], "iv30": _dec(row["iv30"], 4),
         "iv_front": _dec(row["iv_front"], 4), "front_dte": row["front_dte"],
         "hv20": _dec(row["hv20"], 4), "hv60": _dec(row["hv60"], 4), "spot": _dec(row["spot"], 4),
-        "captured_at": datetime.now(timezone.utc),
+        "source": row.get("source", "yahoo"), "captured_at": datetime.now(timezone.utc),
     }
+
+
+async def upsert_reading(session: AsyncSession, row: dict) -> None:
+    values = reading_values(row)
     stmt = pg_insert(IvDaily).values(**values)
     stmt = stmt.on_conflict_do_update(
         index_elements=["ticker", "day"], set_={k: v for k, v in values.items() if k not in ("ticker", "day")},

@@ -535,6 +535,8 @@ class IvDaily(Base):
     hv20: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 4))
     hv60: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 4))
     spot: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
+    # yahoo = the 15:00 ET live capture; eodhd = the backfill from end-of-day chains (services/iv_backfill.py)
+    source: Mapped[str] = mapped_column(String(8), nullable=False, server_default="yahoo")
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

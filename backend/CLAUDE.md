@@ -57,6 +57,7 @@ asyncio.run(rescore())
 # Data sources
 FINNHUB_API_KEY=     # Finnhub (60 calls/min free) — used for news; ratings fallback only
 NEWSAPI_KEY=         # NewsAPI.org (100 calls/day free) — news fallback
+EODHD_API_KEY=       # EODHD US options marketplace product — only the one-off IV history backfill (services/iv_backfill.py)
 FMP_API_KEY=         # Financial Modeling Prep (Starter $22/mo, 300 req/min) — primary for ratings, earnings, insider trades, news
 DATABASE_URL=postgresql+asyncpg://edgeflow:<password>@db:5432/edgeflow  # Docker internal
 
