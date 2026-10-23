@@ -4,7 +4,7 @@ PostgreSQL 16. `db/models.py` is the source of truth; Alembic owns schema migrat
 
 ## Table Groups
 
-**Shared / pipeline-owned** (no `user_id`): `sectors`, `universe_stocks`, `discovery_candidates`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `news_ticker_relevance`, `options_snapshots`, `suggested_options`, `recommendations`, `recommendation_outcomes`, `multibagger_snapshot`, `industry_recommendations`. Written by the daily APScheduler pipeline; read by every user. `recommendation_outcomes` (one row per rec, T+1/5/20 forward returns) is written by the nightly outcome_scoring worker; `positions.recommendation_id` is a nullable FK linking a position to the rec that prompted it.
+**Shared / pipeline-owned** (no `user_id`): `sectors`, `universe_stocks`, `discovery_candidates`, `watchlist_daily_snapshot`, `analyst_ratings`, `earnings_calendar`, `market_news`, `news_ticker_relevance`, `options_snapshots`, `iv_daily`, `suggested_options`, `recommendations`, `recommendation_outcomes`, `multibagger_snapshot`, `industry_recommendations`. Written by the daily APScheduler pipeline; read by every user. `recommendation_outcomes` (one row per rec, T+1/5/20 forward returns) is written by the nightly outcome_scoring worker; `positions.recommendation_id` is a nullable FK linking a position to the rec that prompted it.
 
 **User-owned** (have `user_id` FK to `users`): `watchlist`, `positions`, `strike_snapshots`, `research_results`, `deep_options_analyses`, `multibagger_universe`, `chart_configs`. Routes scope reads/writes by `current_user.id`. **Note:** `watchlist` and `multibagger_universe` carry the column but per-user route scoping is deferred to the Custom Universe Slots feature — the daily pipeline still writes them globally.
 
@@ -38,7 +38,7 @@ All `DateTime` columns use `DateTime(timezone=True)` (maps to PostgreSQL `TIMEST
 These columns were added via `ALTER TABLE` and may need to be re-added if the database is recreated from models alone:
 - `watchlist.is_manual`, `watchlist.is_locked` — `BOOLEAN NOT NULL DEFAULT FALSE`
 - `watchlist_daily_snapshot` — `UNIQUE(snapshot_date, ticker)` (`uq_snapshot_date_ticker`)
-- `options_snapshots.atm_iv` — `NUMERIC(6,4)` — persisted near-ATM IV for historical IV rank (`utils/iv_history.py`)
+- `options_snapshots.atm_iv` — `NUMERIC(6,4)`. Since 2026-10-23 it holds the clean IV30 behind the snapshot's `iv_score` (JSON, migration `c9e4b2a7d315`). Older rows are front-week junk; IV history lives in `iv_daily` (one clean reading per ticker per trading day, `services/iv_collector.py`).
 - `recommendations.prior_action / prior_conviction_score / revision_number / revised_at / revision_reason` — same-day revision tracking. `revision_reason` is populated by the intraday news rescore path with the headline that triggered the revision; daily pipeline revisions leave it NULL.
 - `market_news.content_hash` — `VARCHAR(64)`, SHA-256 of normalized `(headline + summary)`. Indexed (`ix_news_content_hash`). Sentiment cache key in `NewsScanner.scan_news`: same hash → reuse existing `sentiment_score` instead of re-running FinBERT. Catches wire-story reprints that share text but differ in `source_url`. Backward-compatible NULL on rows predating the column.
 - **All user-owned tables** — `user_id INTEGER REFERENCES users(id)` added by `_ensure_user_id_columns()` in `init_db.py` on first startup after the retrofit. Idempotent.

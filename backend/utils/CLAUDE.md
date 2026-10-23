@@ -34,9 +34,19 @@ yfinance returns inconsistent types that cause asyncpg crashes if not sanitized:
 
 `utils/greeks.py` computes Black-Scholes delta/gamma/theta/vega/rho using yfinance IV per contract. Used by strike recommender (`options_analyzer.py`), deep options analyzer, and Greek signals in `recommendation_engine.py`. `RISK_FREE_RATE` (0.045) is the one rate for every pricer; `radar/options.py` imports it too.
 
-## IV History
+## IV measurement and the IV cost score
 
-`utils/iv_history.compute_iv_rank_and_percentile(ticker, current_iv, snapshots)` — historical rank over last ~year of `options_snapshots.atm_iv` when ≥20 data points, stabilized cross-sectional fallback otherwise. Never use raw chain min/max — it's unstable.
+Design: `docs/iv-score-design.md`.
+- **`utils/iv_measure.py`** is the one IV definition. IV30 is the constant-maturity 30-day ATM IV: the call/put average at the strike nearest spot, interpolated in total variance. Front IV is the first expiry ≥ 7 DTE. HV20/HV60 are close-to-close realised vols.
+- **Quality gate:** only two-sided quotes count (spread ≤ 25% of mid, IV 5–300%). After-hours chains give **no reading**, never a junk number. The old front-week `atm_iv` history mixed 0.00 and 5.88 readings, so it is no longer used.
+- **`utils/iv_score.py`** turns IV30, HV20 and the clean history into the 0–100 IV cost score:
+  - Parts: a size-damped percentile in the history, with a regime window and a spike note, plus IV/HV.
+  - Weights: 50/50 once 120+ clean days exist.
+  - Labels and confidence: cheap/fair/pricey/expensive at 35/60/80; confidence high/medium/low.
+  - Events: an earnings date or a front IV ≥ 1.2× IV30 floors the label at pricey.
+  
+  It is pure and tested in `tests/test_iv_score.py`.
+- **Rank and percentile** now come only from the `iv_daily` history (`history.rank` / `history.percentile` in the score).
 
 ## Maintaining this file
 

@@ -92,13 +92,13 @@ export function verdictFor(o: RadarOptionMetrics | undefined, ctx: VerdictContex
   // A crush earlier today hurt contracts bought before it; for a new entry it only matters if IV is still rich.
   const price = ivPrice(o);
   const crushing = o.iv_risk?.level === 'crushing';
-  const times = o.iv_hv ? ` ${o.iv_hv.toFixed(1)}× the stock's normal` : ' above normal';
+  const cost = o.iv_score ? ` (IV cost ${o.iv_score.score}/100)` : '';
   if (o.earnings_before_expiry) add('caution', `Earnings ${fmtShortDate(o.earnings_date)} before this expiry: close the trade the same day; holding through the report usually loses a big part of the price.`);
-  else if (price.level === 'expensive' || price.level === 'rich') {
-    if (crushing) add('caution', `IV is falling and still${times}: the premium has room to deflate further.`);
-    else add('caution', `Options are ${price.level === 'expensive' ? 'expensive' : 'pricey'} (IV${times}): if the story fades, the premium deflates.`);
+  else if (price.level === 'expensive' || price.level === 'pricey') {
+    if (crushing) add('caution', `IV is falling but options are still ${price.level}${cost}: the premium has room to deflate further.`);
+    else add('caution', `Options are ${price.level}${cost}: if the story fades, the premium deflates.`);
   } else if (crushing) add('good', 'IV already reset today: options are cheaper now than this morning.');
-  else if (price.level === 'cheap') add('good', "Options are cheap: IV is close to the stock's normal swings.");
+  else if (price.level === 'cheap') add('good', `Options are cheap${cost}: IV is low for this stock and its normal swings.`);
   if (o.iv_risk?.reasons?.some((r) => r.startsWith('Reported earnings'))) add('caution', 'Earnings were just reported: moves can reverse sharply.');
 
   // 3. Momentum and timing. A blow-off shape comes first: it is the reason not to enter right now.

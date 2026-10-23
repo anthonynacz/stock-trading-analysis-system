@@ -43,11 +43,16 @@ def _safe_int(val: Any) -> int:
 
 
 def iv_bucket_for(score: dict | None) -> str:
-    """Verdict IV bucket from the IV cost score: LOW = cheap, HIGH = pricey or expensive."""
-    label = (score or {}).get("label")
-    if label == "cheap":
+    """Verdict IV bucket from the IV cost score's number: LOW < 35 (cheap), HIGH >= 60 (pricey or expensive).
+
+    The number, not the label: the label's event floor would count earnings twice, since the strategy
+    matrix already branches on near_earnings.
+    """
+    if not score:
+        return "MID"
+    if score["score"] < 35:
         return "LOW"
-    if label in ("pricey", "expensive"):
+    if score["score"] >= 60:
         return "HIGH"
     return "MID"
 
@@ -1027,9 +1032,9 @@ class DeepOptionsAnalyzer:
         is_long_premium = strategy.get("verdict", "").startswith("BUY")
         is_short_premium = strategy.get("verdict", "").startswith("SELL")
 
-        # IV CRUSH — long premium bought with an event priced in and IV already dear
+        # IV CRUSH — long premium bought with an event priced in (the event floors the label at pricey)
         event = (iv_score or {}).get("event")
-        if event and iv_score["score"] >= 60 and is_long_premium:
+        if event and iv_score["label"] in ("pricey", "expensive") and is_long_premium:
             risks.append({
                 "severity": "HIGH",
                 "code": "IV_CRUSH",

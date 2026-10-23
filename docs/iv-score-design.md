@@ -122,8 +122,8 @@ Every part is a 0–100 sub-score where 50 means normal, higher means more expen
 
 | # | Rule (file) | Today | Proposed |
 |---|---|---|---|
-| 1 | Options Lab verdict bucket (`deep_options_analyzer`) | LOW < 30, HIGH ≥ 70 | LOW = Cheap, HIGH = Pricey or Expensive |
-| 2 | IV_CRUSH hidden risk | earnings ≤ 14 d and rank > 60 and a BUY verdict | event priced and score ≥ 60 and a BUY verdict |
+| 1 | Options Lab verdict bucket (`deep_options_analyzer`) | LOW < 30, HIGH ≥ 70 | LOW = score < 35, HIGH = score ≥ 60. This uses the number, not the event-floored label, since the matrix already branches on earnings (changed during the build, 2026-10-23). |
+| 2 | IV_CRUSH hidden risk | earnings ≤ 14 d and rank > 60 and a BUY verdict | an event priced in (which floors the label at Pricey) and a BUY verdict. With "score ≥ 60" a BUY verdict could never coincide, since HIGH routes to credit spreads (changed during the build). |
 | 3 | Signal "High IV Rank" −10 | rank > 70 | "Rich IV" −10 at score ≥ 70 |
 | 4 | Signal "IV Spike Warning" −12 | rank +20 pts in 4–8 days | IV30 up 25%+ over 5 days (relative, on clean data) |
 | 5 | Signal "Smart Money" IV leg | rank +10 pts in ~5 days | IV30 up 10%+ over 5 days |

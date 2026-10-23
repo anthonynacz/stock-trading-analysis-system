@@ -17,6 +17,9 @@ import { useOptionsLabContext } from '../contexts/OptionsLabContext';
 import { fmtInt, fmtNum, fmtPct, fmtPrice } from '../utils/format';
 import { BIAS_COLORS, PALETTE, VERDICT_COLORS } from '../utils/theme';
 import { EmptyCard, LoadingRow, Spinner } from '../components/ui/feedback';
+import { IvHistoryChart } from '../components/IvHistoryChart';
+import { IV_COST_CLASS, IvScoreBadge, IvScorePanel } from '../components/ui/IvScore';
+import { IV_COST_TEXT } from '../utils/ivScore';
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -59,7 +62,7 @@ function ResultCard({ r, selected, onClick, onDelete }: {
 }) {
   const verdictColor = VERDICT_COLORS[r.verdict ?? 'NO_TRADE'] ?? PALETTE.grayMuted;
   const biasColor = BIAS_COLORS[r.directional_bias ?? 'NEUTRAL'];
-  const ivRank = r.iv_rank ?? 0;
+  const iv = r.iv_score;
   const risks = r.hidden_risks ?? [];
   const highRisks = risks.filter((x) => x.severity === 'HIGH').length;
   const medRisks = risks.filter((x) => x.severity === 'MEDIUM').length;
@@ -111,10 +114,14 @@ function ResultCard({ r, selected, onClick, onDelete }: {
           <div className="font-mono text-text-primary">{fmtPrice(r.stock_price)}</div>
         </div>
         <div>
-          <div className="text-text-secondary">IV Rank</div>
-          <div className="font-mono text-text-primary">
-            {r.iv_rank != null ? ivRank.toFixed(0) : '—'}
-          </div>
+          <div className="text-text-secondary">IV cost</div>
+          {iv ? (
+            <span className={`inline-block px-1 rounded border font-mono ${IV_COST_CLASS[iv.label]}`}>
+              {IV_COST_TEXT[iv.label]} {iv.score}
+            </span>
+          ) : (
+            <div className="font-mono text-text-primary">—</div>
+          )}
         </div>
         <div>
           <div className="text-text-secondary">Bias</div>
@@ -609,9 +616,27 @@ function DeepDetail({
       {/* Price + IV */}
       <div className="grid grid-cols-3 gap-2">
         <StatTile label="Price" value={fmtPrice(r.stock_price)} />
-        <StatTile label="IV Rank" value={r.iv_rank != null ? r.iv_rank.toFixed(0) : '—'} />
-        <StatTile label="IV %tile" value={r.iv_percentile != null ? r.iv_percentile.toFixed(0) : '—'} />
+        <div className="col-span-2 bg-page border border-border rounded p-2">
+          <div className="text-[10px] text-text-secondary uppercase">IV cost</div>
+          <IvScoreBadge score={r.iv_score} expandable={false} size="sm" />
+        </div>
       </div>
+
+      {/* IV cost breakdown */}
+      <section>
+        <SectionHeader title="IV Cost" />
+        <div className="space-y-2">
+          {r.iv_score ? (
+            <IvScorePanel score={r.iv_score} full />
+          ) : (
+            <p className="text-[11px] text-text-secondary">
+              No clean IV reading for this run: it needs live two-sided option quotes (market hours). Re-analyze during
+              the session.
+            </p>
+          )}
+          <IvHistoryChart ticker={r.ticker} medianPct={r.iv_score?.history?.median_pct} />
+        </div>
+      </section>
 
       {/* Strategy card */}
       <section>

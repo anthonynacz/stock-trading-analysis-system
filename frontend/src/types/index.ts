@@ -244,6 +244,61 @@ export interface CatalystEvent {
   window_status: 'APPROACHING' | 'ACTIVE' | 'POST';
 }
 
+// ── IV cost score (backend/utils/iv_score.py) ───────────────────────────────
+
+/** What a buyer pays for volatility now: cheap < 35 <= fair < 60 <= pricey < 80 <= expensive. */
+export type IvCostLabel = 'cheap' | 'fair' | 'pricey' | 'expensive';
+
+export interface IvScorePart {
+  key: 'history' | 'realised';
+  label: string;
+  /** 0-100, 50 = normal, higher = dearer. */
+  sub_score: number;
+  weight: number;
+  /** weight / total weight of the parts present. */
+  share: number;
+}
+
+export interface IvScoreHistory {
+  days: number;
+  window_days: number;
+  percentile: number;
+  rank: number;
+  median_pct: number;
+  /** Today's IV30 vs the window median, in %. */
+  size_pct: number;
+  low_pct: number;
+  high_pct: number;
+  /** Percentile far above rank: one spike stretches the range. */
+  spike: boolean;
+  regime: { recent_median_pct: number; year_median_pct: number } | null;
+}
+
+export interface IvScore {
+  score: number;
+  label: IvCostLabel;
+  /** Raised to "pricey" because an event is priced in. */
+  floored: boolean;
+  confidence: 'high' | 'medium' | 'low';
+  iv30_pct: number;
+  iv_front_pct: number | null;
+  term_ratio: number | null;
+  hv20_pct: number | null;
+  hv60_pct: number | null;
+  iv_hv: number | null;
+  history: IvScoreHistory | null;
+  parts: IvScorePart[];
+  event: { kind: 'earnings' | 'term'; date: string | null; note: string } | null;
+  notes: string[];
+  as_of: string | null;
+}
+
+export interface IvHistoryPoint {
+  day: string;
+  iv30_pct: number;
+  hv20_pct: number | null;
+}
+
 export interface OptionsSnapshot {
   id: number;
   ticker: string;
@@ -256,6 +311,7 @@ export interface OptionsSnapshot {
   total_put_volume: number | null;
   unusual_activity: boolean;
   unusual_activity_detail: string | null;
+  iv_score?: IvScore | null;
 }
 
 export interface SystemStatus {
@@ -335,6 +391,7 @@ export interface ResearchResult {
     stock_price: number | null;
     iv_rank: number | null;
     iv_percentile: number | null;
+    iv_score?: IvScore | null;
     put_call_ratio: number | null;
     total_call_volume: number | null;
     total_put_volume: number | null;
@@ -530,6 +587,7 @@ export interface DeepOptionsAnalysis {
   stock_price: number | null;
   iv_rank: number | null;
   iv_percentile: number | null;
+  iv_score?: IvScore | null;
   directional_bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | null;
   conviction_score: number | null;
   verdict: string | null;
@@ -1117,6 +1175,9 @@ export interface RadarOptionMetrics {
   iv_change_pts?: number | null;
   iv_change_pct?: number | null;
   iv_risk?: RadarIvRisk;
+  /** Clean IV (call/put average, two-sided quotes) behind the IV cost score. */
+  iv_clean?: { iv30_pct: number | null; front_pct: number; front_dte: number } | null;
+  iv_score?: IvScore | null;
   // ── market context (FMP) ──
   catalysts?: RadarCatalyst[];
   earnings_time?: string | null;

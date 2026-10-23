@@ -23,10 +23,11 @@ GET  /api/news/breaking                # Material headlines (intraday materialit
 GET  /api/catalysts                    # Upcoming earnings (14 days) with fiscal quarter + EPS
 GET  /api/reports/daily                # Download PDF daily report; ?date= (default today)
 GET  /api/options/watchlist/strikes     # Strike recs for all watchlist tickers; ?budget=
-GET  /api/options/{ticker}             # Latest options snapshot
+GET  /api/options/{ticker}             # Latest options snapshot (incl. iv_score, the IV cost score object)
+GET  /api/options/{ticker}/iv-history  # Clean daily IV30 / HV20 from iv_daily, percent, oldest first; ?days=
 GET  /api/options/{ticker}/strikes     # Strike rec for one risk level; ?risk=&budget=
 GET  /api/options/{ticker}/strikes/all # Strike recs for all 3 risk levels; ?budget=
-POST /api/options/deep/{ticker}        # Run expert-level options analysis (greeks, vol structure, strategy, hidden risks)
+POST /api/options/deep/{ticker}        # Run expert-level options analysis (greeks, vol structure, strategy, hidden risks, iv_score)
 GET  /api/options/deep                 # List deep analyses; ?ticker=&limit=&offset=
 GET  /api/options/deep/{id}            # Single deep analysis
 DELETE /api/options/deep/{id}          # Delete a deep analysis

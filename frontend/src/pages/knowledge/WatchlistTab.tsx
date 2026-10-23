@@ -6,7 +6,7 @@ const WEIGHTS = [
   { factor: 'Recommendation Conviction', weight: '15%', desc: 'Feedback loop: SELL/STRONG_SELL recs deprioritize the stock' },
   { factor: 'Sector Momentum', weight: '15%', desc: 'Relative strength of the stock\'s sector' },
   { factor: 'Options Liquidity', weight: '10%', desc: 'Daily options volume and open interest' },
-  { factor: 'Volatility Profile', weight: '5%', desc: 'IV rank and historical volatility' },
+  { factor: 'Volatility Profile', weight: '5%', desc: 'Beta: 1.5+ scores 100, 1.0 scores 50, 0.5 or less scores 0' },
   { factor: 'Institutional Flow', weight: '5%', desc: 'Insider buying/selling activity' },
   { factor: 'Price vs Consensus PT', weight: '5%', desc: 'Discount to average analyst price target' },
 ];

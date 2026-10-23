@@ -57,7 +57,7 @@ const PHASES: { name: string; time: string; desc: string }[] = [
   {
     name: 'Options Snapshots',
     time: '09:35, 16:15',
-    desc: 'Pulls options chains via yfinance. Calculates IV rank, detects unusual volume activity.',
+    desc: 'Pulls options chains via yfinance. Attaches the IV cost score from the latest clean daily IV reading, detects unusual volume activity.',
   },
   {
     name: 'Recommendations',
@@ -68,6 +68,11 @@ const PHASES: { name: string; time: string; desc: string }[] = [
     name: 'Industry Recs',
     time: '11:15, 17:15',
     desc: "Aggregates the day's recommendations into industry-level views.",
+  },
+  {
+    name: 'IV Capture',
+    time: '15:00 (trading days)',
+    desc: 'Saves one clean 30-day at-the-money IV reading per ticker (watchlist, positions, recent research, Radar universe) while quotes are live. This daily history feeds the IV cost score.',
   },
   {
     name: 'P&L Snapshot',

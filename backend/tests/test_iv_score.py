@@ -156,8 +156,8 @@ def test_rules_read_the_score():
     assert eng._determine_risk_level(65, None) == "MEDIUM"          # no clean IV: never LOW
     assert eng._determine_risk_level(10, 20) == "HIGH"
 
-    assert [iv_bucket_for({"label": l}) for l in ("cheap", "fair", "pricey", "expensive")] == [
-        "LOW", "MID", "HIGH", "HIGH"]
+    assert [iv_bucket_for({"score": s, "label": "pricey"}) for s in (34, 35, 59, 60, 85)] == [
+        "LOW", "MID", "MID", "HIGH", "HIGH"]                     # the number, not the event-floored label
     assert iv_bucket_for(None) == "MID"
 
     assert "debit spread" in OptionsAnalyzer._build_rationale("CALL_DEBIT_SPREAD", 65, None, 30, "BULLISH")

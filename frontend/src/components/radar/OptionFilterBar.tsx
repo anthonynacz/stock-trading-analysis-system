@@ -2,7 +2,6 @@ import { useState, type ReactNode } from 'react';
 import {
   ADV_CHOICES,
   CALL_PRESET,
-  IVHV_CHOICES,
   NO_FILTERS,
   OI_CHOICES,
   PRICE_CHOICES,
@@ -137,8 +136,17 @@ export default function OptionFilterBar({
             <Field label="Call bid-ask spread" hint="At-the-money call spread in % of mid: what a round trip can cost">
               <NumSelect label="Maximum call spread" value={value.maxSpreadPct} choices={SPREAD_CHOICES} any="Any" fmt={(v) => `≤ ${v}%`} onChange={(v) => set('maxSpreadPct', v)} />
             </Field>
-            <Field label="IV vs realised vol" hint="Skip calls priced for a much bigger move than the stock usually makes">
-              <NumSelect label="Maximum IV to realised volatility" value={value.maxIvHv} choices={IVHV_CHOICES} any="Any" fmt={(v) => `≤ ${v}×`} onChange={(v) => set('maxIvHv', v)} />
+            <Field label="IV cost" hint="The IV cost score: implied volatility against its own history and the stock's realised moves. Names without a clean reading pass.">
+              <select
+                aria-label="Highest IV cost"
+                className={selectClass(value.maxIvCost !== 'any')}
+                value={value.maxIvCost}
+                onChange={(e) => set('maxIvCost', e.target.value as OptionFilters['maxIvCost'])}
+              >
+                <option value="any">Any</option>
+                <option value="pricey">Not expensive</option>
+                <option value="fair">Cheap or fair</option>
+              </select>
             </Field>
             <label
               className={`flex items-center gap-2 text-xs self-end pb-1 ${value.noEarnings ? 'text-sky-100 font-semibold' : 'text-text-primary'}`}

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   BreakingNewsItem,
+  IvHistoryPoint,
   WatchlistItem,
   Recommendation,
   NewsItem,
@@ -307,6 +308,11 @@ export const analyzeDeepOptions = (ticker: string) =>
   api
     .post<DeepOptionsAnalysis>(`/options/deep/${ticker}`)
     .then((r) => parseDeepOptions(r.data));
+
+export const getIvHistory = (ticker: string, days = 365) =>
+  api
+    .get<{ ticker: string; points: IvHistoryPoint[] }>(`/options/${ticker}/iv-history`, { params: { days } })
+    .then((r) => r.data.points);
 
 export const getDeepOptionsResults = (ticker?: string, limit = 50, offset = 0) =>
   api

@@ -2,7 +2,7 @@
 // option cost, event risk). Pure: no React. The metrics come from
 // backend/radar/options.py via GET /api/radar `options`.
 
-import type { RadarDirection, RadarOptionLiquidity, RadarOptionMetrics } from '../../types';
+import type { IvCostLabel, RadarDirection, RadarOptionLiquidity, RadarOptionMetrics } from '../../types';
 import { sideOf } from './optionSide';
 
 export interface OptionFilters {
@@ -16,8 +16,8 @@ export interface OptionFilters {
   minNtmOi: number;
   /** Maximum at-the-money call bid-ask spread in % of mid (0 = any). */
   maxSpreadPct: number;
-  /** Maximum implied / realised volatility ratio (0 = any). */
-  maxIvHv: number;
+  /** Highest IV cost label allowed (the IV cost score; 'any' = no limit). */
+  maxIvCost: 'any' | 'fair' | 'pricey';
   /** Hide names with earnings on or before the option's expiry. */
   noEarnings: boolean;
   /** Only names with weekly options. */
@@ -32,7 +32,7 @@ export const NO_FILTERS: OptionFilters = {
   liquidity: 'any',
   minNtmOi: 0,
   maxSpreadPct: 0,
-  maxIvHv: 0,
+  maxIvCost: 'any',
   noEarnings: false,
   weekliesOnly: false,
   noIvCrush: false,
@@ -45,7 +45,7 @@ export const CALL_PRESET: OptionFilters = {
   liquidity: 'fair',
   minNtmOi: 500,
   maxSpreadPct: 15,
-  maxIvHv: 2,
+  maxIvCost: 'pricey',
   noEarnings: true,
   weekliesOnly: false,
   noIvCrush: true,
@@ -55,9 +55,9 @@ export const ADV_CHOICES = [0, 10, 20, 50, 100, 500];
 export const PRICE_CHOICES = [0, 2, 5, 10, 20];
 export const OI_CHOICES = [0, 100, 500, 1000, 5000];
 export const SPREAD_CHOICES = [0, 5, 10, 15, 25];
-export const IVHV_CHOICES = [0, 1.25, 1.5, 2, 3];
 
 const LIQ_RANK: Record<RadarOptionLiquidity, number> = { none: 0, thin: 1, fair: 2, good: 3 };
+const COST_RANK: Record<IvCostLabel, number> = { cheap: 0, fair: 1, pricey: 2, expensive: 3 };
 
 const sameFilters = (a: OptionFilters, b: OptionFilters) =>
   (Object.keys(a) as (keyof OptionFilters)[]).every((k) => a[k] === b[k]);
@@ -71,7 +71,7 @@ export const activeCount = (f: OptionFilters) =>
 
 /** Filters that need option metrics (a name without them fails these). */
 const needsOptions = (f: OptionFilters) =>
-  f.liquidity !== 'any' || f.minNtmOi > 0 || f.maxSpreadPct > 0 || f.maxIvHv > 0 || f.noEarnings || f.weekliesOnly ||
+  f.liquidity !== 'any' || f.minNtmOi > 0 || f.maxSpreadPct > 0 || f.maxIvCost !== 'any' || f.noEarnings || f.weekliesOnly ||
   f.noIvCrush;
 
 /**
@@ -106,7 +106,8 @@ export function failReason(
       if (side.spreadPct > f.maxSpreadPct) return `${k} spread over ${f.maxSpreadPct}%`;
     }
   }
-  if (f.maxIvHv > 0 && o.iv_hv !== null && o.iv_hv > f.maxIvHv) return `IV over ${f.maxIvHv}× realised`;
+  if (f.maxIvCost !== 'any' && o.iv_score && COST_RANK[o.iv_score.label] > COST_RANK[f.maxIvCost])
+    return `options ${o.iv_score.label} (IV cost ${o.iv_score.score})`;
   if (f.noEarnings && o.earnings_before_expiry) return 'earnings before expiry';
   if (f.weekliesOnly && !o.weeklies) return 'no weekly options';
   if (f.noIvCrush && (o.iv_risk?.level === 'crushing' || o.iv_risk?.level === 'high'))
@@ -124,6 +125,7 @@ export function readFilters(raw: unknown): OptionFilters {
     if (typeof v === typeof NO_FILTERS[k]) (out as unknown as Record<string, unknown>)[k] = v;
   }
   if (!['any', 'fair', 'good'].includes(out.liquidity)) out.liquidity = 'any';
+  if (!['any', 'fair', 'pricey'].includes(out.maxIvCost)) out.maxIvCost = 'any';
   return out;
 }
 
