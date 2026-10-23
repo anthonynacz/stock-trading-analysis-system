@@ -1,6 +1,6 @@
-# IV cost score: design (draft for approval)
+# IV cost score: design
 
-Branch `feat/iv-score`, 2026-10-23. Nothing is built yet.
+Branch `feat/iv-score`, 2026-10-23. Approved 2026-10-23 with the four proposed decisions (section 9).
 
 One 0–100 score answers a single question for someone **about to buy** an option: *is the volatility I am paying for cheap or expensive right now?* It replaces the IV rank badge (dashboard), the IV/HV badge (Radar) and the IV rank / percentile tiles (Options Lab). Each badge expands to show why. Holder-side warnings (IV crushing today, earnings just reported) stay separate and unchanged.
 
@@ -32,17 +32,16 @@ So the score cannot simply combine today's rank and percentile. It needs a clean
   - Interpolate in total variance to exactly 30 days.
 - **Front IV:** the same measure at the first expiry ≥ 7 DTE. It is used only for the term ratio, front / IV30.
 - **Quality gate:** a contract counts only if it has a two-sided quote (bid > 0, ask > 0, spread ≤ 25% of mid) and IV between 5% and 300%. No valid quote means **no reading**, never a junk number.
-- **HV20 / HV60 / HV252:** close-to-close realised volatility, annualised, from daily closes. This is the same method as the Radar's HV20.
+- **HV20 / HV60:** close-to-close realised volatility, annualised, from daily closes. This is the same method as the Radar's HV20.
 
-**New table `iv_daily`** (ticker, date, iv30, iv_front, term_ratio, hv20, hv60, hv252, spot, quality).
+**New table `iv_daily`** (ticker, day, iv30, iv_front, front_dte, term_ratio, hv20, hv60, spot, captured_at).
 - One row per ticker per trading day.
-- Captured by a backend job at **15:20 ET** on weekdays, during the session when quotes are live.
-- Universe: active watchlist, open positions, research tickers of the last 30 days, and the Radar universe (about 550 names; see decision 3).
-- Cost: about 2–3 s per ticker at the 0.5 s yfinance limit, so 25 minutes for the full Radar universe, or 5 minutes without it.
+- Captured by a backend job starting at **15:00 ET** on trading days, during the session when quotes are live.
+- Universe: active watchlist, open positions, research tickers of the last 30 days, and the Radar universe (`radar/universe.py`, about 550 names).
+- Cost: about 2–3 s per ticker at the 0.5 s yfinance limit, so roughly 25 minutes in all.
+- A ticker the pipeline or Research needs that has no reading in the last 5 trading days is measured on demand. Outside market hours that gives no reading, and the score says "IV unknown".
 
-**Backfill:**
-- HV can be backfilled for a full year at once, since daily closes are free.
-- IV cannot: there is no free IV history. The IV history therefore starts clean on day 1, and the old `atm_iv` column is no longer used for rank or percentile. It is kept, not deleted.
+**No backfill:** there is no free IV history, so the IV history starts clean on day 1. HV is computed from daily closes each time, so it needs no history table. The old `atm_iv` history is no longer used for rank or percentile. It is kept, not deleted, and new snapshots store the clean IV30 in that column.
 
 ## 3. The score
 
@@ -87,7 +86,7 @@ Every part is a 0–100 sub-score where 50 means normal, higher means more expen
 **Event premium**
 - Trigger: earnings before the expiry in question (or within 30 days for IV30), or term ratio ≥ 1.2.
 - Effect: a separate **"Event priced"** tag with the date ("Earnings Oct 29 priced in: IV usually drops right after").
-- Proposed rule: the score stays the cost now, and the label is floored at **Pricey** while the event is ahead (decision 1). Today the Radar shows Expensive in that case.
+- Rule (decision 1): the score stays the cost now, and the label is floored at **Pricey** while the event is ahead. Before this change the Radar showed Expensive in that case.
 
 ## 4. Worked examples (made-up numbers, run through a prototype)
 
@@ -143,7 +142,7 @@ Rules 4 and 5 are about IV *rising*, not its cost, so they move to the clean IV3
 
 ## 8. Build order (each step its own commit, tests and frontend build, no deploy without a go-ahead)
 
-1. `iv_measure.py`, the `iv_daily` table and migration, the 15:20 ET job, and the HV backfill. Rank and percentile move to `iv_daily`.
+1. `iv_measure.py`, the `iv_daily` table and migration, and the 15:00 ET job. Rank and percentile move to `iv_daily`.
 2. `iv_score.py` with tests, and the `iv_score` object in the APIs.
 3. `IvScoreBadge` replacing the three badges; the Options Lab breakdown.
 4. The rule switches you approve, plus Knowledge texts.
@@ -151,11 +150,9 @@ Rules 4 and 5 are about IV *rising*, not its cost, so they move to the clean IV3
 
 Until `iv_daily` has 20+ days for a ticker, its score runs on IV/HV alone at Low confidence. The badge says so.
 
-## 9. Decisions needed
+## 9. Decisions (2026-10-23)
 
-1. **Earnings before expiry:** floor the label at Pricey (proposed), at Expensive (the Radar today), or tag only?
-2. **Rules 1–9:** switch all as proposed, or keep some on the old logic?
-3. **Daily IV universe:**
-   - **Proposed:** the full Radar universe (~600 names, ~25 min/day of Yahoo calls), so Radar names build history.
-   - **Alternative:** watchlist + positions + Radar names seen that day (~150 names); most Radar names would stay at Low confidence.
-4. **Weights:** start at 50/50 history vs IV/HV once history is full, and tune after the outcome check?
+1. **Earnings before expiry:** the label is floored at Pricey, and an "Event priced" tag is shown.
+2. **Rules 1–9:** all switch as proposed.
+3. **Daily IV universe:** the full Radar universe plus the watchlist, positions and recent research tickers.
+4. **Weights:** start at 50/50 (history vs IV/HV) once history is full; tune after the outcome check.
