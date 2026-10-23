@@ -223,6 +223,7 @@ class RecommendationEngine:
                 "total_put_volume": options_snapshot.total_put_volume,
                 "unusual_activity": options_snapshot.unusual_activity,
                 "unusual_activity_detail": options_snapshot.unusual_activity_detail,
+                "iv_score": options_snapshot.iv_score,
             }
 
         logger.info(

@@ -56,13 +56,17 @@ def option_class(side: dict | None) -> str | None:
 
 
 def iv_class(m: dict) -> str | None:
+    """The IV cost label (utils/iv_score.py); rows written before the score fall back to IV/HV."""
+    label = m.get("iv_label") or (m.get("iv_score") or {}).get("label")
+    if label:
+        return label
     if not m.get("iv_pct"):
         return None
     r = m.get("iv_hv")
     if m.get("earnings_before_expiry") or (r is not None and r >= IV_EXPENSIVE):
         return "expensive"
     if (r or 0) >= IV_RICH or (m.get("term_ratio") or 0) >= TERM_INVERTED:
-        return "rich"
+        return "pricey"
     if r is None or r > IV_CHEAP_MAX:
         return "fair"
     return "cheap"

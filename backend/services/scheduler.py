@@ -500,6 +500,16 @@ def start_scheduler() -> None:
         hour=18, minute=0, day_of_week=weekdays, id="outcome_scoring",
     )
 
+    # Clean daily IV capture at 15:00 ET on trading days (quotes are live then):
+    # one iv_daily row per watchlist / position / research / Radar-universe
+    # ticker, the history behind the IV cost score (services/iv_collector.py).
+    from services.iv_collector import run_iv_capture
+    scheduler.add_job(
+        run_iv_capture, "cron",
+        hour=15, minute=0, day_of_week=weekdays, id="iv_capture",
+        misfire_grace_time=600,
+    )
+
     # Weekly multibagger scan — Friday 17:30 ET, after the post-market chain,
     # so the week's closing data is fresh (weekend runs get stale yfinance
     # quotes). Shares its single-flight guard with POST /api/scanner/run.

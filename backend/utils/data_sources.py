@@ -17,6 +17,7 @@ import httpx
 import yfinance as yf
 
 from config import settings
+from utils.iv_measure import pick_iv_expiries
 
 logger = logging.getLogger(__name__)
 
@@ -636,6 +637,8 @@ class DataSourceClient:
           21-45, 45-90, 90-180, 180+) — used by the deep-options analyzer for
           term structure and LEAPS-aware strategy selection, and by the strike
           recommender to cover each risk tier's DTE window.
+        - "iv30": the expiries a constant-maturity 30-day IV needs (the first
+          one >= 7 DTE and the two around 30 days; utils/iv_measure.py).
         """
         cache_key = f"options_chain:{ticker}:{mode}"
         cached = self._get_cached(cache_key)
@@ -652,6 +655,8 @@ class DataSourceClient:
 
             if mode == "spread":
                 selected = self._spread_expirations(expirations)
+            elif mode == "iv30":
+                selected = pick_iv_expiries(expirations, datetime.now(timezone.utc).date())
             else:
                 selected = list(expirations[:4])
             chains: dict[str, dict[str, list[dict]]] = {}

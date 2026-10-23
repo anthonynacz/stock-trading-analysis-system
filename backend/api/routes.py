@@ -32,6 +32,7 @@ def _jsonable(obj):
     return obj
 from db.models import (
     DeepOptionsAnalysis,
+    IvDaily,
     DiscoveryCandidate,
     EarningsCalendar,
     IndustryRecommendation,
@@ -1614,6 +1615,7 @@ async def analyze_options_deep(
             liquidity=_jsonable(report.get("liquidity")),
             strategy=_jsonable(report.get("strategy")),
             hidden_risks=_jsonable(report.get("hidden_risks")),
+            iv_score=_jsonable(report.get("iv_score")),
             rationale=report.get("rationale"),
         )
         db.add(row)
@@ -1732,6 +1734,29 @@ async def get_options_snapshot(
     if not snapshot:
         raise HTTPException(status_code=404, detail=f"No options snapshot found for {ticker.upper()}")
     return snapshot
+
+
+@router.get("/options/{ticker}/iv-history")
+async def get_iv_history(
+    ticker: str,
+    days: int = Query(365, ge=30, le=730),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clean daily IV30 and HV20 (iv_daily), oldest first, in percent: the IV cost score's history."""
+    since = date.today() - timedelta(days=days)
+    rows = await db.execute(
+        select(IvDaily.day, IvDaily.iv30, IvDaily.hv20)
+        .where(IvDaily.ticker == ticker.upper(), IvDaily.day >= since, IvDaily.iv30.isnot(None))
+        .order_by(IvDaily.day)
+    )
+    return {
+        "ticker": ticker.upper(),
+        "points": [
+            {"day": d.isoformat(), "iv30_pct": round(float(iv) * 100, 1),
+             "hv20_pct": round(float(hv) * 100, 1) if hv is not None else None}
+            for d, iv, hv in rows.all()
+        ],
+    }
 
 
 @router.get("/options/{ticker}/strikes")

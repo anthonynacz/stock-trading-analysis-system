@@ -513,6 +513,29 @@ class OptionsSnapshot(Base):
     total_put_oi: Mapped[Optional[int]] = mapped_column(Integer)
     unusual_activity: Mapped[bool] = mapped_column(Boolean, default=False)
     unusual_activity_detail: Mapped[Optional[str]] = mapped_column(Text)
+    # IV cost score (utils/iv_score.py) from the latest clean iv_daily reading. Added by c9e4b2a7d315.
+    iv_score: Mapped[Optional[dict]] = mapped_column(JSON)
+
+
+class IvDaily(Base):
+    """One clean IV reading per ticker per trading day (utils/iv_measure.py, services/iv_collector.py).
+
+    IV30 is the constant-maturity 30-day ATM IV from two-sided quotes, captured
+    in-session; it is the history behind IV rank, percentile and the IV cost
+    score. Fractions (0.32 = 32%).
+    """
+
+    __tablename__ = "iv_daily"
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    iv30: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 4))
+    iv_front: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 4))
+    front_dte: Mapped[Optional[int]] = mapped_column(Integer)
+    hv20: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 4))
+    hv60: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 4))
+    spot: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # ── Recommendations ──────────────────────────────────────────────────────────
@@ -720,6 +743,7 @@ class DeepOptionsAnalysis(Base):
     liquidity: Mapped[Optional[dict]] = mapped_column(JSON)  # spread distribution, thin OI flags
     strategy: Mapped[Optional[dict]] = mapped_column(JSON)  # recommended strategy with legs
     hidden_risks: Mapped[Optional[list]] = mapped_column(JSON)  # list of risk dicts w/ severity
+    iv_score: Mapped[Optional[dict]] = mapped_column(JSON)  # utils/iv_score.py; added by c9e4b2a7d315
     rationale: Mapped[Optional[str]] = mapped_column(Text)
 
 

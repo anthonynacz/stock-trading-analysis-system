@@ -26,7 +26,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
-from sqlalchemy import create_engine, delete, inspect, null, select, text
+from sqlalchemy import bindparam, create_engine, delete, inspect, null, select, text
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
@@ -461,6 +461,19 @@ class RadarStore:
             q = q.where(_OPTIONS.c.ticker.in_(list(tickers)))
         with self.engine.connect() as conn:
             return {r.ticker: r.metrics for r in conn.execute(q) if isinstance(r.metrics, dict)}
+
+    def load_iv_histories(self, tickers: list[str], before: date, days: int = 400) -> dict[str, list[float]]:
+        """{ticker: clean daily IV30 before `before`, oldest first} from the backend's iv_daily (read-only;
+        services/iv_collector.py writes it). The IV cost score's history part."""
+        if not tickers:
+            return {}
+        q = text("SELECT ticker, iv30 FROM iv_daily WHERE ticker IN :t AND day < :b AND day >= :s "
+                 "AND iv30 IS NOT NULL ORDER BY ticker, day").bindparams(bindparam("t", expanding=True))
+        out: dict[str, list[float]] = {t: [] for t in tickers}
+        with self.engine.connect() as conn:
+            for r in conn.execute(q, {"t": list(tickers), "b": before, "s": before - timedelta(days=days)}):
+                out.setdefault(r.ticker, []).append(float(r.iv30))
+        return out
 
     # ------------------------------------------------------------ worker support
 

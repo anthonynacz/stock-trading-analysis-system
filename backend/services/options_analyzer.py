@@ -26,9 +26,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models import OptionsSnapshot, SuggestedOption
+from services.iv_collector import score_for_ticker
 from utils.data_sources import DataSourceClient
 from utils.greeks import RISK_FREE_RATE, compute_greeks
-from utils.iv_history import compute_iv_rank_and_percentile
 
 logger = logging.getLogger(__name__)
 
@@ -123,21 +123,14 @@ class OptionsAnalyzer:
                             "ratio": round(vol / oi, 2),
                         })
 
-            # IV rank: prefer historical ATM IV over last year of snapshots;
-            # fall back to a stabilized cross-sectional proxy when history is thin.
-            iv_rank_value: float | None = None
-            iv_pct_value: float | None = None
-            atm_iv_value: float | None = None
-            if stock_price:
-                atm_iv_value = self._find_atm_iv(chains, stock_price)
-                if atm_iv_value is not None:
-                    iv_rank_value, iv_pct_value, _src = await compute_iv_rank_and_percentile(
-                        self._session,
-                        ticker,
-                        atm_iv_value,
-                        chains=chains,
-                        spot=stock_price,
-                    )
+            # IV: the clean 30-day reading and its cost score (services/iv_collector.py).
+            # Rank and percentile come from that clean daily history, never from this
+            # front-week chain (its IVs are junk outside market hours).
+            iv_score_value = await score_for_ticker(self._session, self._data_client, ticker)
+            iv_hist = (iv_score_value or {}).get("history") or {}
+            atm_iv_value = iv_score_value["iv30_pct"] / 100 if iv_score_value else None
+            iv_rank_value: float | None = iv_hist.get("rank")
+            iv_pct_value: float | None = iv_hist.get("percentile")
 
             # Put/call ratio
             put_call_ratio: float | None = None
@@ -189,6 +182,7 @@ class OptionsAnalyzer:
                 total_put_oi=total_put_oi,
                 unusual_activity=has_unusual,
                 unusual_activity_detail=unusual_detail,
+                iv_score=iv_score_value,
             )
 
             self._session.add(snapshot)
@@ -803,27 +797,6 @@ class OptionsAnalyzer:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _find_atm_iv(
-        chains: dict[str, dict[str, list[dict]]], stock_price: float
-    ) -> float | None:
-        """Find implied volatility of the contract nearest to ATM across all expirations."""
-        best_iv: float | None = None
-        best_dist = float("inf")
-
-        for _exp, sides in chains.items():
-            for contract in sides.get("calls", []):
-                strike = contract.get("strike")
-                iv = contract.get("impliedVolatility")
-                if strike is None or iv is None or iv <= 0:
-                    continue
-                dist = abs(strike - stock_price)
-                if dist < best_dist:
-                    best_dist = dist
-                    best_iv = iv
-
-        return best_iv
 
     @staticmethod
     def _dte_range(
