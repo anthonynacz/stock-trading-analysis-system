@@ -32,7 +32,7 @@ yfinance returns inconsistent types that cause asyncpg crashes if not sanitized:
 
 ## Greeks
 
-`utils/greeks.py` computes Black-Scholes delta/gamma/theta/vega/rho using yfinance IV per contract. Used by strike recommender (`options_analyzer.py`), deep options analyzer, and Greek signals in `recommendation_engine.py`.
+`utils/greeks.py` computes Black-Scholes delta/gamma/theta/vega/rho using yfinance IV per contract. Used by strike recommender (`options_analyzer.py`), deep options analyzer, and Greek signals in `recommendation_engine.py`. `RISK_FREE_RATE` (0.045) is the one rate for every pricer; `radar/options.py` imports it too.
 
 ## IV History
 

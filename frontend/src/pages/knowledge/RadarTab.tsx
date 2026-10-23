@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { DocTable, SectionHeading, StatTile } from './shared';
 
 // Mirrors backend/radar/config.py PARAMS ("radar-sm-2") and the replay evidence
-// in backend/radar/docs/signal-model.md. Update both when a threshold changes.
+// in backend/radar/docs/signal-model.md; the "What to expect" tiles mirror
+// backend/radar/docs/replay-scorecard-sm2.json. Update both when a threshold changes.
 const RADAR = {
   scanMin: 5,
   universe: 550,
@@ -267,13 +268,13 @@ export default function RadarTab() {
       <div>
         <SectionHeading
           title="What to expect"
-          blurb="Evidence from a replay of 491 stocks over 39 sessions (Aug 3 to Sep 25, 2026) with these exact rules."
+          blurb="Evidence from a replay of 521 stocks over 40 sessions (Jul 31 to Sep 25, 2026) with these exact rules."
         />
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-          <StatTile label="Still moving the same way 30 min later" value="≈ 58%" sub="vs 47% for a plain fast-move list" />
-          <StatTile label="Entries per day" value="≈ 5.7" sub="Median 4; usually none listed at a given moment" />
-          <StatTile label="Time on the radar" value="≈ 40 min" sub="Middle half 25–55 min" />
-          <StatTile label="Flicker (off and back on)" value="≈ 3.6%" sub="Of entries, thanks to the hold rules" />
+          <StatTile label="Still moving the same way 30 min later" value="≈ 55%" sub="vs 46% for a plain fast-move list" />
+          <StatTile label="Entries per day" value="≈ 5.1" sub="Median 4; usually none listed at a given moment" />
+          <StatTile label="Time on the radar" value="≈ 40 min" sub="Middle half 25–60 min" />
+          <StatTile label="Flicker (off and back on)" value="≈ 4.4%" sub="Of entries, thanks to the hold rules" />
         </div>
         <ul className="list-disc pl-5 space-y-1.5 text-xs text-text-secondary">
           <li>
@@ -281,7 +282,7 @@ export default function RadarTab() {
             price of the &ldquo;in play&rdquo; filter; loosening it brings back moves that snap back (below 50%).
           </li>
           <li>
-            58% has a wide margin (about 52–65%) and comes from a calm period with no crash or melt-up day. The gain over
+            55% has a wide margin (about 48–62%) and comes from a calm period with no crash or melt-up day. The gain over
             a plain fast-move list is more reliable than the exact number.
           </li>
           <li>

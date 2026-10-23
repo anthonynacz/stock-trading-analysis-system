@@ -828,10 +828,11 @@ class DeepOptionsAnalyzer:
 
         Score = (OI + 5 × daily_vol) × max(0, 1 − 4 × |k − target| / target).
         With factor 4, a strike 2% off-target needs ~9% more raw liquidity to
-        win; one 5% off-target needs ~25% more. This keeps picks tracking the
-        math target instead of drifting to whichever in-band strike happens
-        to have the most OI, which is what produces 10%+ strike swings on a
-        small spot move across a discrete grid.
+        win; one 3% off-target (the edge of the default band) needs ~14% more.
+        This keeps picks tracking the math target instead of drifting to
+        whichever in-band strike happens to have the most OI, which is what
+        produces 10%+ strike swings on a small spot move across a discrete
+        grid.
         """
         if not contracts or target is None:
             return None, None
@@ -885,7 +886,7 @@ class DeepOptionsAnalyzer:
             return f" [OI {oi}, vol {vol}]"
 
         # Each strategy below builds its target strikes mathematically, then
-        # snaps each to the most liquid contract within ±5%. If any leg fails
+        # snaps each to the most liquid contract within ±3%. If any leg fails
         # to find a tradeable strike, the whole plan is dropped (return [])
         # so the caller can downgrade to NO_TRADE.
 
