@@ -43,6 +43,7 @@ So the score cannot simply combine today's rank and percentile. It needs a clean
 
 **Backfill (added 2026-10-23):** Yahoo has no IV history, but EODHD's US options product ($29.99/month, about 2 years of end-of-day chains with bid, ask and IV per contract) does.
 - `services/iv_backfill.py` rebuilds a year of IV30 for the capture universe with the same code. That is about 150k requests, one per ticker and day.
+- It needs only the "US Stock Options Data API" add-on; EODHD's price plans (e.g. Active Trader) carry no options data. Daily closes come from Yahoo.
 - Rows are stored as `source='eodhd'`, and live captures as `yahoo`.
 - Checked with the demo key:
   - AAPL had a clean reading on 51 of 51 sampled days (18.6–30.4%), with the front IV rising into each earnings date.

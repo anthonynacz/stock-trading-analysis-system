@@ -11,8 +11,11 @@ run is resumable: start it again and it continues where it stopped.
     docker compose exec backend python -m services.iv_backfill --days 365
     docker compose exec backend python -m services.iv_backfill --tickers AAPL,AMZN --days 30
 
-Needs EODHD_API_KEY (the options marketplace product). One request per ticker
-and day: about 150k requests for 600 tickers over a year.
+Needs EODHD_API_KEY: the "US Stock Options Data API" marketplace add-on alone
+(no EODHD price plan). One request per ticker and day, about 150k requests for
+600 tickers over a year. Daily closes (strike window, realised vol) come from
+Yahoo, one call per ticker. Yahoo's closes are split-adjusted while EODHD keeps
+the strikes as listed, so days before a split find no strikes and are skipped.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ from config import settings
 from db.connection import async_session
 from db.models import IvDaily
 from services.iv_collector import et_today, iv_universe, reading_values
+from utils.data_sources import DataSourceClient
 from utils.iv_measure import MIN_DTE, iv_from_chains, realised_vol
 
 logger = logging.getLogger(__name__)
@@ -95,17 +99,13 @@ def day_chains(fetch: Fetch, ticker: str, day: date, spot: float) -> dict[str, d
     return chains
 
 
-def closes_for(fetch: Fetch, ticker: str, start: date, end: date) -> list[dict]:
-    """[{date, close, adjusted_close}], ascending: unadjusted close for strikes, adjusted for realised vol."""
-    rows = fetch(f"/eod/{ticker}.US", {"from": (start - timedelta(days=HV_LOOKBACK_DAYS)).isoformat(),
-                                       "to": end.isoformat(), "fmt": "json"}) or []
-    return [r for r in rows if isinstance(r, dict) and r.get("close")]
-
-
-def ticker_readings(fetch: Fetch, ticker: str, start: date, end: date, skip: set[date],
+def ticker_readings(fetch: Fetch, ticker: str, start: date, end: date, skip: set[date], closes: list[dict],
                     pause_s: float = PAUSE_S) -> list[dict]:
-    """iv_daily rows for the trading days in [start, end] not in `skip`."""
-    closes = closes_for(fetch, ticker, start, end)
+    """iv_daily rows for the trading days in [start, end] not in `skip`.
+
+    `closes` is [{date, close, adjusted_close}] ascending from HV_LOOKBACK_DAYS before `start`: the traded close
+    centres the strike window, the adjusted close feeds realised vol.
+    """
     out: list[dict] = []
     for i, c in enumerate(closes):
         d = date.fromisoformat(c["date"])
@@ -125,13 +125,15 @@ def ticker_readings(fetch: Fetch, ticker: str, start: date, end: date, skip: set
     return out
 
 
-async def run_backfill(tickers: list[str] | None, days: int, fetch: Fetch | None = None) -> dict:
+async def run_backfill(tickers: list[str] | None, days: int, fetch: Fetch | None = None,
+                       prices: DataSourceClient | None = None) -> dict:
     from services.run_log import STATUS_FAILED, STATUS_SUCCESS, record_run_finish, record_run_start
 
     if fetch is None:
         if not settings.EODHD_API_KEY:
             raise SystemExit("EODHD_API_KEY is not set")
         fetch = http_fetch(settings.EODHD_API_KEY)
+    prices = prices or DataSourceClient()
     end = et_today() - timedelta(days=1)
     start = end - timedelta(days=days)
     run_id = await record_run_start(phase="iv_backfill", user_id=None, meta={"days": days})
@@ -147,7 +149,9 @@ async def run_backfill(tickers: list[str] | None, days: int, fetch: Fetch | None
                 select(IvDaily.day).where(IvDaily.ticker == ticker, IvDaily.day >= start, IvDaily.day <= end)
             )).scalars())
             try:
-                rows = await loop.run_in_executor(None, ticker_readings, fetch, ticker, start, end, have)
+                closes = await loop.run_in_executor(
+                    None, prices.get_daily_prices, ticker, start - timedelta(days=HV_LOOKBACK_DAYS), end)
+                rows = await loop.run_in_executor(None, ticker_readings, fetch, ticker, start, end, have, closes)
             except Exception:
                 summary["errors"] += 1
                 logger.warning("iv backfill failed for %s", ticker, exc_info=True)

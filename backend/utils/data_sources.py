@@ -289,6 +289,28 @@ class DataSourceClient:
             logger.debug("get_daily_closes failed for %s", ticker, exc_info=True)
             return []
 
+    def get_daily_prices(self, ticker: str, start: date, end: date) -> list[dict]:
+        """[{date, close, adjusted_close}] ascending, from `start` to `end` inclusive. `close` is the traded
+        close (split-adjusted by Yahoo, not dividend-adjusted): what option strikes are quoted against.
+        Used by the IV backfill (services/iv_backfill.py)."""
+        try:
+            self._wait_for_rate_limit("yfinance")
+            hist = yf.Ticker(ticker).history(start=start.isoformat(), end=(end + timedelta(days=1)).isoformat(),
+                                             auto_adjust=False)
+            if hist is None or len(hist) == 0:
+                return []
+            out = []
+            for idx, row in hist.iterrows():
+                close, adj = row.get("Close"), row.get("Adj Close")
+                if close is None or close != close or close <= 0:
+                    continue
+                out.append({"date": idx.date().isoformat(), "close": float(close),
+                            "adjusted_close": float(adj) if adj == adj and adj else float(close)})
+            return out
+        except Exception:
+            logger.debug("get_daily_prices failed for %s", ticker, exc_info=True)
+            return []
+
     # ------------------------------------------------------------------ #
 
     def get_income_statement_quarterly(

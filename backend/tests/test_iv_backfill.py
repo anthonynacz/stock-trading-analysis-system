@@ -22,11 +22,7 @@ class FakeApi:
 
     def __call__(self, path: str, params: dict):
         self.calls.append((path, params))
-        if path.startswith("/eod/"):
-            closes = [{"date": (D1 - timedelta(days=90 - i)).isoformat(), "close": 100 + (i % 3),
-                       "adjusted_close": 100 + (i % 3)} for i in range(90)]
-            return closes + [{"date": D1.isoformat(), "close": 100.0, "adjusted_close": 100.0},
-                             {"date": D2.isoformat(), "close": 101.0, "adjusted_close": 101.0}]
+        assert path == "/mp/unicornbay/options/eod"                          # options add-on only, no EODHD prices
         day = date.fromisoformat(params["filter[tradetime_eq]"])
         e1, e2 = day + timedelta(days=21), day + timedelta(days=42)
         recs = [_rec(day, e, t, 100.0, iv) for e, iv in ((e1, 0.30), (e2, 0.30)) for t in ("call", "put")]
@@ -45,11 +41,17 @@ def test_day_chains_keeps_only_the_snapshot_of_that_day_and_filters_near_the_mon
     assert params["filter[exp_date_from]"] == (D1 + timedelta(days=7)).isoformat()
 
 
+CLOSES = [{"date": (D1 - timedelta(days=90 - i)).isoformat(), "close": 100.0 + (i % 3),
+           "adjusted_close": 100.0 + (i % 3)} for i in range(90)] + [
+    {"date": D1.isoformat(), "close": 100.0, "adjusted_close": 100.0},
+    {"date": D2.isoformat(), "close": 101.0, "adjusted_close": 101.0}]
+
+
 def test_ticker_readings_build_rows_and_skip_days_already_stored():
     api = FakeApi()
-    rows = ticker_readings(api, "X", D1, D2, skip={D2}, pause_s=0)
+    rows = ticker_readings(api, "X", D1, D2, skip={D2}, closes=CLOSES, pause_s=0)
     assert [r["day"] for r in rows] == [D1]
     r = rows[0]
     assert r["iv30"] == pytest.approx(0.30) and r["source"] == "eodhd" and r["spot"] == 100.0
     assert r["hv20"] is not None and r["hv60"] is not None
-    assert sum(1 for p, _ in api.calls if "options" in p) == 1            # one chain request per new day
+    assert len(api.calls) == 1                                            # one chain request per new day
