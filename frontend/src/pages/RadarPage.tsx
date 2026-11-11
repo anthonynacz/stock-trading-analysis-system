@@ -195,7 +195,7 @@ export default function RadarPage() {
     "The day's largest plain percentage moves since yesterday's close among the scanned stocks: no market adjustment, " +
     'no volatility scaling. Ordered by option liquidity (calls for stocks that are up, puts for stocks that are down), ' +
     'then by dollars traded today. A list to browse, not a signal: nothing here says a move will continue.' +
-    (moversAt !== null ? ` Prices as of ${live ? fmtEt(moversAt) : fmtEtDay(moversAt)} ET.` : '');
+    (moversAt !== null ? ` Prices as of ${live ? fmtEt(moversAt) : fmtEtDay(moversAt)}.` : '');
   const moversEmpty = c.scanning
     ? 'No stock has moved 2% or more yet, or the first scan of the day has not run.'
     : 'No movers to show. The list fills with the first scan of the next session.';
