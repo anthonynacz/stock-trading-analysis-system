@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import calendar_nyse as cal
 from .config import PARAMS, REFERENCE_SYMBOLS, RUNTIME, effective_params, sensitivity_summary
+from .movers import plain_movers
 
 if TYPE_CHECKING:
     from .types import FetchReport, Quote
@@ -581,6 +582,7 @@ class Tick:
                                "The recompute found no bars for the session; the radar is unchanged.")
         status, message = self._scan_status(qrep, brep, bars)
         snap = out.snapshot
+        snap.update(self._movers(date, quotes, qrep, pack, session, now))
         events, rows = list(out.events), list(out.member_rows)
         processed = [int(j) for j in out.processed_slots]
         members, heating = snap.get("members") or [], snap.get("heating") or []
@@ -622,6 +624,19 @@ class Tick:
         return self._finish(session_date=None, phase=state["session"]["phase"], status="closed",
                             message=state["message"], state=state, engine_doc=engine_doc)
 
+    def _movers(self, date: str, quotes: dict[str, Quote], qrep: Any, pack: Any, session: cal.Session,
+                now: int) -> dict:
+        """The plain percentage movers of this scan's quotes. Without quotes (the call is down) or on an
+        error, the session's previous list is kept: the list is a bonus and never fails a scan."""
+        if qrep.status != "down" and quotes:
+            try:
+                slot = (now - session.open_epoch - 300 - PARAMS["session"]["bar_final_grace_s"]) // 300
+                rows = plain_movers(quotes, pack, int(min(max(slot, -1), session.n_slots - 1)))
+                return {"movers": rows, "movers_as_of": iso(now)}
+            except Exception as e:  # noqa: BLE001
+                self.errors.append(f"movers list: {type(e).__name__}: {e}")
+        return {"movers": self._prev_same(date, "movers") or [], "movers_as_of": self._prev_same(date, "movers_as_of")}
+
     def _session_tickers(self, date: str) -> list[str]:
         try:
             return list(self.store.session_tickers(date)) if hasattr(self.store, "session_tickers") else []
@@ -634,7 +649,8 @@ class Tick:
         start empty (SPEC 12.6)."""
         date = session.day.isoformat()
         same = same_session_scan(self.prev_state, date)
-        snap = {k: self.prev_state.get(k) for k in ("members", "heating", "recent_exits", "sector_banners", "market")} if same else {}
+        snap = {k: self.prev_state.get(k) for k in ("members", "heating", "recent_exits", "sector_banners", "market",
+                                                    "movers", "movers_as_of")} if same else {}
         counts = {**EMPTY_COUNTS, **(self.prev_state.get("counts") or {})} if same else dict(EMPTY_COUNTS)
         source = self._source()
         state = self._state(session_json(session, cal.phase_at(self._now_dt())[0]), status, message, source, snap,
@@ -692,6 +708,8 @@ class Tick:
                 "members": snap.get("members") or [], "heating": snap.get("heating") or [],
                 "recent_exits": snap.get("recent_exits") or [], "sector_banners": snap.get("sector_banners") or [],
                 "trending": snap.get("trending") or [],
+                # Plain percentage movers (radar/movers.py), display only; as of the quotes of `movers_as_of`.
+                "movers": snap.get("movers") or [], "movers_as_of": snap.get("movers_as_of"),
                 "health": self._health(), "disclaimer": DISCLAIMER, "sensitivity": self.sensitivity}
 
     def _closed_state(self) -> dict:
@@ -715,6 +733,8 @@ class Tick:
         else:
             message = f"Market closed. The radar starts again {upcoming.open.astimezone(cal.ET):%a} at {first_tick_et(upcoming)} ET."
         snap = {"recent_exits": self.prev_state.get("recent_exits") if keep else []}
+        if keep:     # the last session's movers stay listed (like its exits) until the next session starts
+            snap.update(movers=self.prev_state.get("movers"), movers_as_of=self.prev_state.get("movers_as_of"))
         return self._state(session_json(show, phase), "closed", message, self._source(), snap, counts,
                            self.prev_state.get("last_bar") if keep else None)
 

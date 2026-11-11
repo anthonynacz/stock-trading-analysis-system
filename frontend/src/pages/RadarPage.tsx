@@ -27,6 +27,8 @@ import RadarMemberList from '../components/radar/RadarMemberList';
 import { RadarContextBanners, RadarScanBanner, RadarStatusBar } from '../components/radar/RadarStatus';
 import { RadarEmpty, RadarExitList, RadarHeatingList, RadarSection, RadarTrendingList } from '../components/radar/RadarLists';
 import { RadarDisclaimer, RadarHowItWorks, RadarScannerHealth } from '../components/radar/RadarAbout';
+import MoversView from '../components/radar/MoversView';
+import { readMoverFilters, readMoverSort, type MoverFilters, type MoverSort } from '../components/radar/movers';
 
 const VIEW_KEY = 'vela.radar_view';
 
@@ -36,7 +38,20 @@ const FILTER_OPTIONS: SegmentOption<RadarFilter>[] = [
   { key: 'down', label: '▼ Down', title: 'Stocks racing down' },
 ];
 
+type RadarTab = 'radar' | 'movers';
+
+const TAB_OPTIONS: SegmentOption<RadarTab>[] = [
+  { key: 'radar', label: '📡 Momentum radar', title: 'Stocks racing now, measured against the market and their own volatility' },
+  { key: 'movers', label: '% Movers', title: "The day's largest plain percentage moves, ordered by option liquidity" },
+];
+
 interface RadarView {
+  /** Which view of the page is shown. */
+  tab: RadarTab;
+  /** The Movers view: stock filters, sort and its own option filters. */
+  mv: MoverFilters;
+  mvSort: MoverSort;
+  optMovers: OptionFilters;
   f: RadarFilter;
   sort: RadarSort;
   opt: OptionFilters;
@@ -46,11 +61,24 @@ interface RadarView {
 
 /** Direction filter, sort and option filters, remembered per browser (`localStorage["vela.radar_view"]`). */
 function readView(): RadarView {
-  const view: RadarView = { f: 'all', sort: 'intensity', opt: readFilters(null), optTrend: readFilters(null) };
+  const view: RadarView = {
+    tab: 'radar',
+    mv: readMoverFilters(null),
+    mvSort: readMoverSort(null),
+    optMovers: readFilters(null),
+    f: 'all',
+    sort: 'intensity',
+    opt: readFilters(null),
+    optTrend: readFilters(null),
+  };
   try {
     const v = JSON.parse(localStorage.getItem(VIEW_KEY) ?? 'null') as Partial<RadarView> | null;
     view.opt = readFilters(v?.opt);
     view.optTrend = readFilters(v?.optTrend ?? v?.opt);
+    view.optMovers = readFilters(v?.optMovers);
+    view.mv = readMoverFilters(v?.mv);
+    view.mvSort = readMoverSort(v?.mvSort);
+    if (v?.tab === 'movers') view.tab = 'movers';
     if (v && FILTER_OPTIONS.some((o) => o.key === v.f)) view.f = v.f as RadarFilter;
     if (v && RADAR_SORTS.some((o) => o.key === v.sort)) view.sort = v.sort as RadarSort;
   } catch {
@@ -160,6 +188,19 @@ export default function RadarPage() {
     .sort((a, b) => Number(b.active) - Number(a.active) || Math.abs(b.zday ?? 0) - Math.abs(a.zday ?? 0));
   const trendingDimmed = showHiddenTrending ? new Set(trendingHidden.keys()) : undefined;
 
+  // Movers view: the last scan's plain percentage moves stay listed until the next session's first scan.
+  const movers = st?.movers ?? null;
+  const moversAt = toMs(st?.movers_as_of);
+  const moversNote =
+    "The day's largest plain percentage moves since yesterday's close among the scanned stocks: no market adjustment, " +
+    'no volatility scaling. Ordered by option liquidity (calls for stocks that are up, puts for stocks that are down), ' +
+    'then by dollars traded today. A list to browse, not a signal: nothing here says a move will continue.' +
+    (moversAt !== null ? ` Prices as of ${live ? fmtEt(moversAt) : fmtEtDay(moversAt)} ET.` : '');
+  const moversEmpty = c.scanning
+    ? 'No stock has moved 2% or more yet, or the first scan of the day has not run.'
+    : 'No movers to show. The list fills with the first scan of the next session.';
+  const onRadar = new Set(all.map((m) => m.ticker));
+
   const summary: string[] = [];
   const day = st ? listsDay(st) : null;
   if (st) {
@@ -198,6 +239,13 @@ export default function RadarPage() {
             US stocks racing up or down right now. The radar checks about 550 stocks every 5 minutes while the market
             is open, and a stock stays on it until its move is over.
           </p>
+          <div className="mt-3">
+            <SegmentedControl
+              options={TAB_OPTIONS}
+              value={view.tab}
+              onChange={(tab) => setView((v) => ({ ...v, tab }))}
+            />
+          </div>
         </header>
 
         <RadarStatusBar c={c} st={st} f={f} />
@@ -207,8 +255,29 @@ export default function RadarPage() {
           closedHint={`The radar scans only while the market is open${resumes ? `; it starts again ${resumes}` : ''}.`}
           refetch={radar.refetch}
         />
-        <SensitivityPanel applied={st?.sensitivity} busy={requestActive(scanRequest, now)} onApplied={radar.refetch} />
+        {view.tab === 'radar' && (
+          <SensitivityPanel applied={st?.sensitivity} busy={requestActive(scanRequest, now)} onApplied={radar.refetch} />
+        )}
         <RadarScanBanner c={c} st={st} f={f} error={radar.error} notPublished={notPublished} />
+        {view.tab === 'movers' && (
+          <MoversView
+            movers={movers}
+            options={options}
+            loading={loading}
+            emptyText={nothingYet ?? moversEmpty}
+            note={moversNote}
+            onRadar={onRadar}
+            now={now}
+            filters={view.mv}
+            onFilters={(mv) => setView((v) => ({ ...v, mv }))}
+            sort={view.mvSort}
+            onSort={(mvSort) => setView((v) => ({ ...v, mvSort }))}
+            opt={view.optMovers}
+            onOpt={(optMovers) => setView((v) => ({ ...v, optMovers }))}
+          />
+        )}
+        {view.tab === 'radar' && (
+          <>
         {live && <RadarContextBanners st={st} />}
 
         <RadarSection
@@ -346,6 +415,8 @@ export default function RadarPage() {
         <RadarHistory rules={rules} />
 
         <RadarHowItWorks />
+          </>
+        )}
         {st && <RadarScannerHealth st={st} />}
         <RadarDisclaimer />
       </div>

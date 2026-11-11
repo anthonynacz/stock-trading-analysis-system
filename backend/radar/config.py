@@ -94,6 +94,15 @@ BACKUP_DIR = os.environ.get("RADAR_BACKUP_DIR", "/backups/radar")
 # Nightly housekeeping (US Eastern) and the row-level retention of hot rows, backups and manifest entries.
 HOUSEKEEPING = {"schedule_et": "03:30", "retention_months": 3}
 
+# Plain movers (radar/movers.py): the largest percentage moves since the prior close among the scanned stocks,
+# with no market adjustment and no volatility scaling. Display only (the "Movers" view of the radar page).
+MOVERS: dict = {
+    "min_abs_pct": 2.0,            # smaller moves are not listed
+    "max_rows_per_side": 60,       # the largest gainers and the largest losers kept in the snapshot, each
+    "options_per_refresh": 40,     # movers whose option metrics are refreshed after a scan (oldest reading first)
+    "context_ttl_min": 30,         # their catalysts / float / earnings dates are re-read at most this often
+}
+
 # Option-chain metrics for radar names (radar/options.py): display and the page's call-option filters only,
 # never read by the engine. Fetched after each scan for the members and warming-up names.
 OPTIONS: dict = {

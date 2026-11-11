@@ -37,7 +37,7 @@ SCAN = ["AAPL", "NVDA", "XOM", "SPY", "QQQ", "IWM"]
 
 STATE_KEYS = {"schema", "generated_at", "tick_id", "last_bar", "status", "message", "session", "next_tick_at",
               "params_version", "source", "market", "counts", "members", "heating", "recent_exits", "sector_banners",
-              "health", "disclaimer", "sensitivity", "trending"}
+              "health", "disclaimer", "sensitivity", "trending", "movers", "movers_as_of"}
 SCAN_KEYS = {"v", "tick", "run_id", "written_at", "session", "phase", "status", "lag_s", "universe", "stage_b",
              "quotes_ok", "quotes_err", "bars_ok", "bars_err", "members", "heating", "entered", "exited",
              "processed_slots", "source", "ms", "git_prev", "hot_bytes", "errors"}
@@ -128,6 +128,9 @@ class FakeSym:
     eligible: bool = True
     ineligible_reason: str | None = None
     medbar_usd: float = 1e6
+    prev_close: float | None = None          # the plain movers list (radar/movers.py) reads these three
+    adv20_usd: float = 0.0
+    cvm: tuple = ()
 
 
 @dataclass

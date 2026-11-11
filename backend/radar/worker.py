@@ -726,7 +726,8 @@ class Worker:
             scanned, _ = resolve_session(slot.tick_epoch, now, ignore_calendar=False, final=slot.final)
             if not same_session_scan(state, scanned.day.isoformat() if scanned else None):
                 state.update(last_bar=None, market=dict(DEFAULT_MARKET), counts=dict(EMPTY_COUNTS),
-                             **{k: [] for k in ("members", "heating", "recent_exits", "sector_banners", "trending")})
+                             **{k: [] for k in ("members", "heating", "recent_exits", "sector_banners", "trending",
+                                                "movers")}, movers_as_of=None)
             if scanned is not None:
                 state["session"] = session_json(scanned, cal.phase_at(datetime.fromtimestamp(now, cal.UTC))[0])
             what = "timed out" if res.get("status") == "timeout" else "failed"
@@ -740,6 +741,8 @@ class Worker:
             if not isinstance(state.get("sensitivity"), dict):
                 state["sensitivity"] = self._sensitivity()
             state.setdefault("trending", [])
+            state.setdefault("movers", [])              # a snapshot written before the Movers view existed
+            state.setdefault("movers_as_of", None)
             published = state
         else:
             # The warmup (or a tick before any snapshot exists) leaves the snapshot as it is: the store

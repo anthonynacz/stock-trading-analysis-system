@@ -28,7 +28,7 @@ from typing import Any, Callable
 from utils.greeks import RISK_FREE_RATE
 
 from . import calendar_nyse as cal
-from .config import OPTIONS
+from .config import MOVERS, OPTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -470,11 +470,53 @@ def radar_tickers(state: dict, limit: int) -> list[str]:
     return list(dict.fromkeys(t for t in names if isinstance(t, str) and t))[:limit]
 
 
+CONTEXT_KEYS = ("catalysts", "float", "earnings_date", "earnings_time", "earnings_estimate", "days_to_earnings",
+                "earnings_before_expiry", "last_earnings_date", "last_earnings_time", "context_source", "context_at")
+
+
+def mover_tickers(state: dict, have: list[str], rows: dict[str, dict], limit: int) -> list[str]:
+    """The plain movers (state["movers"], radar/movers.py) to refresh now, besides the radar names `have`:
+    the ones never read first, then the oldest reading; ties go to the larger move (the list's order). With
+    `limit` per refresh the whole list is covered every few scans."""
+    skip = set(have)
+    names = [m.get("ticker") for m in state.get("movers") or [] if isinstance(m, dict)]
+    names = [t for t in dict.fromkeys(names) if isinstance(t, str) and t and t not in skip]
+    order = sorted(range(len(names)), key=lambda i: (str((rows.get(names[i]) or {}).get("as_of") or ""), i))
+    return [names[i] for i in order[:max(limit, 0)]]
+
+
+def context_fresh(prev: dict | None, now: float, ttl_min: float) -> bool:
+    """True when the previous reading's market context (catalysts, float, earnings dates) is recent enough
+    to carry over instead of asking FMP again."""
+    at = (prev or {}).get("context_at")
+    if not at:
+        return False
+    try:
+        then = datetime.strptime(str(at), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return False
+    return 0 <= now - then <= ttl_min * 60
+
+
+def carry_context(doc: dict, prev: dict) -> None:
+    for k in CONTEXT_KEYS:
+        if k in prev:
+            doc[k] = prev[k]
+
+
 def refresh(store: Any, tickers: list[str] | None = None, *, fetch: Fetch | None = None,
-            clock: Callable[[], float] = time.time, params: dict = OPTIONS) -> dict:
+            clock: Callable[[], float] = time.time, params: dict = OPTIONS, movers: dict = MOVERS) -> dict:
     t0 = time.monotonic()
     state = store.load_state() or {}
     syms = tickers if tickers is not None else radar_tickers(state, int(params["max_tickers"]))
+    radar_names = set(syms)
+    if tickers is None and state.get("movers"):
+        # The plain movers ride along, a few per refresh: they are a display list, the radar names come first.
+        try:
+            rows = store.load_option_metrics([m.get("ticker") for m in state["movers"] if isinstance(m, dict)])
+        except Exception:  # noqa: BLE001 - no rows: every mover counts as never read
+            rows = {}
+        syms = syms + mover_tickers(state, syms, rows, int(movers["options_per_refresh"]))
     if not syms:
         return {"status": "ok", "tickers": 0, "ok": 0, "failed": [], "duration_ms": 0}
     session_date = ((state.get("session") or {}).get("date"))
@@ -492,11 +534,21 @@ def refresh(store: Any, tickers: list[str] | None = None, *, fetch: Fetch | None
         except Exception as e:  # noqa: BLE001 - no history: the first reading starts today's IV trail
             logger.info("options: previous metrics unreadable: %s", e)
             prev = {}
+        # Radar names get fresh context every refresh; plain movers at most every context_ttl_min (4 FMP calls
+        # a name), carrying the previous reading's in between.
+        ttl = float(movers["context_ttl_min"])
+        fresh = {s: d for s, d in got.items() if s in radar_names or not context_fresh(prev.get(s), now, ttl)}
         try:
             from .context import add_context
-            add_context(got, now)            # FMP: catalysts, exact earnings dates, float (when a key is set)
+            add_context(fresh, now)          # FMP: catalysts, exact earnings dates, float (when a key is set)
         except Exception:  # noqa: BLE001 - context is a bonus; the option metrics are stored regardless
             logger.warning("options: market context failed", exc_info=True)
+        stamp = datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for sym, doc in got.items():
+            if sym not in fresh:
+                carry_context(doc, prev[sym])
+            elif doc.get("context_source"):
+                doc["context_at"] = stamp
         for sym, doc in got.items():
             carry_iv_first(doc, prev.get(sym), now)
             doc["iv_risk"] = iv_risk(doc, now)
@@ -504,8 +556,9 @@ def refresh(store: Any, tickers: list[str] | None = None, *, fetch: Fetch | None
         store.put_option_metrics(got, as_of, int(params["keep_days"]))
         try:                                 # the staleness log is a bonus: never fails the refresh
             dirs = radar_directions(state)
-            store.put_option_history([(s, dirs.get(s), history_doc(d)) for s, d in got.items()], as_of,
-                                     int(params.get("history_days", 21)))
+            # The staleness log is about the radar's own names: the ride-along movers stay out of it.
+            store.put_option_history([(s, dirs.get(s), history_doc(d)) for s, d in got.items() if s in radar_names],
+                                     as_of, int(params.get("history_days", 21)))
         except Exception:  # noqa: BLE001
             logger.warning("options: history not written", exc_info=True)
     status = "ok" if not failed else "degraded" if got else "error"

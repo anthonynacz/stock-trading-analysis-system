@@ -1011,6 +1011,28 @@ export interface RadarTrend {
   exit_reason: string | null;
 }
 
+/**
+ * A plain mover (radar/movers.py): the stock's percentage change since the prior close, with no market
+ * adjustment and no volatility scaling. Display only: not a radar signal.
+ */
+export interface RadarMover {
+  ticker: string;
+  name: string | null;
+  sector: string;
+  direction: RadarDirection;
+  price: number;
+  prev_close: number;
+  change_pct: number;
+  day_volume: number | null;
+  /** Price x shares traded so far today. */
+  dollar_volume: number | null;
+  /** Today's volume against the stock's normal volume by this time of day. */
+  rvol: number | null;
+  /** Typical daily dollar volume (20-day median). */
+  adv_usd: number | null;
+  market_cap: number | null;
+}
+
 /** Names the per-sector cap kept off the radar (never members). */
 export interface RadarSectorBanner {
   sector: string;
@@ -1052,6 +1074,9 @@ export interface RadarState {
   sector_banners: RadarSectorBanner[];
   /** Trending today, active first (absent on older snapshots). */
   trending?: RadarTrend[];
+  /** Largest plain percentage moves of the last scan (absent on older snapshots), as of `movers_as_of`. */
+  movers?: RadarMover[];
+  movers_as_of?: string | null;
   health: RadarHealth;
   disclaimer: string;
   /** The scan sensitivity these results were computed with (absent on older snapshots). */

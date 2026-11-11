@@ -4049,7 +4049,7 @@ async def radar_snapshot(
                 "scan_request": scan_request}
     # Members, warming-up names and today's exits (positions on them may still be open: IV keeps mattering).
     tickers = [x.get("ticker") for x in (state.get("members") or []) + (state.get("heating") or [])
-               + (state.get("recent_exits") or []) + (state.get("trending") or [])
+               + (state.get("recent_exits") or []) + (state.get("trending") or []) + (state.get("movers") or [])
                if isinstance(x, dict) and x.get("ticker")]
     options = await run_in_threadpool(_radar_options, store, tickers)
     return {**state, "stale": radar_is_stale(state, datetime.now(timezone.utc)),

@@ -36,8 +36,8 @@ export interface VerdictPoint {
 
 export interface VerdictContext {
   direction: RadarDirection;
-  /** member: on the radar; heating: not confirmed yet; trending: the Trending today list. */
-  role: 'member' | 'heating' | 'trending';
+  /** member: on the radar; heating: not confirmed yet; trending: the Trending today list; mover: the Movers view. */
+  role: 'member' | 'heating' | 'trending' | 'mover';
   /** Member state and exit-watch level (members only). */
   state?: RadarMemberState;
   exitLevel?: WatchLevel;
@@ -113,6 +113,8 @@ export function verdictFor(o: RadarOptionMetrics | undefined, ctx: VerdictContex
   } else if (ctx.role === 'trending') {
     if (ctx.active === false) add('avoid', 'No longer trending: it fell back through VWAP.');
     else add('caution', 'Trend list is informational: about half of these keep going to the close.');
+  } else if (ctx.role === 'mover') {
+    add('caution', 'A plain percentage move, not a radar signal: nothing here says the move will continue.');
   }
   const { h, m } = etParts(ctx.nowMs);
   const minutes = h * 60 + m;
