@@ -8,11 +8,14 @@ from datetime import datetime, timezone
 import numpy as np
 
 from radar import options
-from radar.movers import plain_movers
+from radar.movers import history_stats, plain_movers, setup_of
 from radar.types import Quote
 from tests.radar.test_options import Yahoo, today_of
 
-CFG = {"min_abs_pct": 2.0, "max_rows_per_side": 3}
+CFG = {"min_abs_pct": 2.0, "max_rows_per_side": 3, "windows": [3, 5, 10, 20], "window_min_abs_pct": 5.0,
+       "window_rows_per_side": 2, "dip_chg_5d_max": -8.0, "stretched_chg_5d_min": 15.0, "setup_rows": 1}
+NO_HISTORY = {"chg_3d": None, "chg_5d": None, "chg_10d": None, "chg_20d": None, "vs_sma20": None, "vs_sma50": None,
+              "off_high_20d": None, "setup": None}
 
 
 @dataclass
@@ -23,6 +26,7 @@ class Base:
     sector: str | None = "Technology"
     adv20_usd: float = 50e6
     cvm: np.ndarray = field(default_factory=lambda: np.arange(1, 79) * 1000.0)
+    closes: list = field(default_factory=list)
 
 
 @dataclass
@@ -45,7 +49,7 @@ def test_movers_are_plain_percent_changes_largest_first():
     up = rows[2]
     assert up == {"ticker": "UP", "name": "Name", "sector": "Technology", "direction": "up", "price": 105.0,
                   "prev_close": 100.0, "change_pct": 5.0, "day_volume": 20_000, "dollar_volume": 2_100_000,
-                  "rvol": 2.0, "adv_usd": 50_000_000, "market_cap": None}
+                  "rvol": 2.0, "adv_usd": 50_000_000, "market_cap": None, **NO_HISTORY}
     assert rows[1]["direction"] == "down" and rows[1]["change_pct"] == -8.0 and rows[1]["market_cap"] == 3_000_000_000
     big = rows[0]
     assert (big["name"], big["sector"]) == ("Big Co", "Energy")           # the quote's, when the pack has none
@@ -61,6 +65,53 @@ def test_movers_cap_each_side_use_the_quote_close_as_fallback_and_skip_rvol_befo
     assert [r["ticker"] for r in rows] == ["Q", "S5", "S4", "DN"] and rows[0]["change_pct"] == 25.0
     assert all(r["rvol"] is None for r in rows)
     assert plain_movers({}, pack, 5, CFG) == []
+
+
+# ---------------------------------------------------------------- multi-day moves and setups
+
+def test_history_stats_count_sessions_back_with_today_as_the_last_one():
+    closes = [100.0] * 40 + [110.0, 120.0, 130.0, 125.0, 120.0]      # 45 closes, yesterday 120
+    st = history_stats(108.0, closes, CFG)
+    assert st["chg_3d"] == -16.92          # 108 against the close 3 sessions back (130)
+    assert st["chg_5d"] == -1.82           # against 110
+    assert st["chg_10d"] == 8.0 and st["chg_20d"] == 8.0
+    assert st["vs_sma20"] == round((108 / ((100 * 14 + 110 + 120 + 130 + 125 + 120 + 108) / 20) - 1) * 100, 2)
+    assert st["vs_sma50"] is None          # 45 closes: one short of 49 + today
+    assert st["off_high_20d"] == round((108 / 130 - 1) * 100, 2)
+    assert history_stats(131.0, closes, CFG)["off_high_20d"] == 0.0      # today is the 20-day high
+    short = history_stats(108.0, closes[-4:], CFG)
+    assert short["chg_3d"] == -16.92 and short["chg_5d"] is None and short["vs_sma20"] is None
+    assert history_stats(108.0, [], CFG) == {k: v for k, v in NO_HISTORY.items() if k != "setup"}
+    assert history_stats(108.0, [100.0, float("nan"), 0.0], CFG)["chg_3d"] is None
+
+
+def test_setups_are_named_from_the_5_day_move_and_the_50_day_average():
+    assert setup_of({"chg_5d": -9.0, "vs_sma50": 4.0}, CFG) == "dip_uptrend"
+    assert setup_of({"chg_5d": -9.0, "vs_sma50": -0.5}, CFG) == "falling"
+    assert setup_of({"chg_5d": -9.0, "vs_sma50": None}, CFG) is None       # no 50-day average: no call
+    assert setup_of({"chg_5d": -7.9, "vs_sma50": 4.0}, CFG) is None
+    assert setup_of({"chg_5d": 15.0, "vs_sma50": None}, CFG) == "stretched"
+    assert setup_of({"chg_5d": None, "vs_sma50": 4.0}, CFG) is None
+
+
+def test_multi_day_movers_and_dips_are_listed_even_when_flat_today():
+    up_run = [100.0] * 55 + [101.0, 102.0, 103.0, 104.0, 105.0]            # yesterday 105
+    dip = [50.0] * 30 + [80.0] * 25 + [100.0, 104.0, 108.0, 112.0, 110.0]   # ran to 112, 50-day average ~70
+    pack = Pack({"FLAT": Base(closes=[100.0] * 60), "WEEK": Base(prev_close=105.0, closes=up_run),
+                 "DIP": Base(prev_close=110.0, closes=dip), "OLD": Base(prev_close=None, closes=up_run),
+                 "DAY": Base(closes=[100.0] * 60)})
+    quotes = {"FLAT": q("FLAT", 100.5), "WEEK": q("WEEK", 106.0), "DIP": q("DIP", 91.0),
+              "OLD": q("OLD", 106.0, prev_close=105.0), "DAY": q("DAY", 103.0)}
+    rows = {r["ticker"]: r for r in plain_movers(quotes, pack, 9, CFG)}
+    # FLAT moved nowhere; OLD has no pack close, so its closes are not aligned and it has no multi-day move.
+    assert set(rows) == {"DIP", "DAY", "WEEK"}
+    assert rows["DAY"]["change_pct"] == 3.0 and rows["DAY"]["chg_5d"] == 3.0 and rows["DAY"]["setup"] is None
+    week = rows["WEEK"]                                                    # +0.95% today, +6% over 10 sessions
+    assert week["change_pct"] == 0.95 and week["chg_5d"] == 4.95 and week["chg_10d"] == 6.0
+    d = rows["DIP"]
+    assert d["chg_5d"] == -9.0 and d["vs_sma50"] > 0 and d["setup"] == "dip_uptrend" and d["direction"] == "down"
+    assert d["off_high_20d"] == round((91 / 112 - 1) * 100, 2)
+    assert list(rows) == ["DIP", "DAY", "WEEK"]                            # largest move today first
 
 
 # ---------------------------------------------------------------- options ride-along

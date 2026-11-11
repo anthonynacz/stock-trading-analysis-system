@@ -1031,6 +1031,19 @@ export interface RadarMover {
   /** Typical daily dollar volume (20-day median). */
   adv_usd: number | null;
   market_cap: number | null;
+  // ── multi-day context, from daily closes (absent on older snapshots, null without enough history) ──
+  /** Move over the last N sessions, today included, in %. */
+  chg_3d?: number | null;
+  chg_5d?: number | null;
+  chg_10d?: number | null;
+  chg_20d?: number | null;
+  /** Distance from the 20- / 50-day average, in %. */
+  vs_sma20?: number | null;
+  vs_sma50?: number | null;
+  /** Distance from the highest of the last 20 sessions, in % (0 at a new high). */
+  off_high_20d?: number | null;
+  /** Multi-day pattern (a label, not a forecast): see backend/radar/movers.py setup_of. */
+  setup?: 'dip_uptrend' | 'falling' | 'stretched' | null;
 }
 
 /** Names the per-sector cap kept off the radar (never members). */
@@ -1102,8 +1115,19 @@ export interface RadarOptionAtm {
 export type RadarOptionLiquidity = 'good' | 'fair' | 'thin' | 'none';
 
 /** Option-chain and liquidity metrics of one radar name, refreshed after each scan. */
+/** One at-the-money contract of the swing expiry: `cost_usd` is mid x 100 (the ask when there is no bid). */
+export interface RadarSwingQuote {
+  strike: number;
+  bid: number | null;
+  ask: number | null;
+  mid: number | null;
+  cost_usd: number;
+}
+
 export interface RadarOptionMetrics {
   as_of: string;
+  /** The first expiry 2 weeks to a month out and what one at-the-money contract costs (absent on older rows). */
+  swing?: { expiry: string; dte: number; call: RadarSwingQuote | null; put: RadarSwingQuote | null } | null;
   price: number | null;
   /** Typical daily dollar volume of the stock (20-day median). */
   adv_usd: number | null;

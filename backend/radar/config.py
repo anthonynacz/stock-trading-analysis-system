@@ -30,7 +30,8 @@ PARAMS: dict = {
     "dynamic": {"enabled": True, "max_adds_per_day": 150, "market_cap_min": 2_000_000_000,
                 "price_min": 5.0, "abs_change_pct_min": 3.0},
     "baseline": {"sessions": 20, "daily_sessions": 21, "tod_clamp": [0.6, 4.0], "beta_shrink": 0.5,
-                 "beta_clamp": [0.3, 2.5], "sigma5_floor": 0.0002},
+                 "beta_clamp": [0.3, 2.5], "sigma5_floor": 0.0002,
+                 "history_closes": 60},   # daily closes kept per symbol for the Movers view (display only)
     "entry": {"z3": 2.5, "z6": 3.0, "abs_r6": 0.0075, "rvol3": 2.0, "rvolc": 1.0, "er6": 0.45,
               "inplay_zday": 2.5, "inplay_rvolc": 1.5},
     "confirm": {"z6": 2.0, "rvol3": 1.3, "fast_path_score": None},
@@ -99,7 +100,19 @@ HOUSEKEEPING = {"schedule_et": "03:30", "retention_months": 3}
 MOVERS: dict = {
     "min_abs_pct": 2.0,            # smaller moves are not listed
     "max_rows_per_side": 60,       # the largest gainers and the largest losers kept in the snapshot, each
-    "options_per_refresh": 40,     # movers whose option metrics are refreshed after a scan (oldest reading first)
+    # Multi-day view: the move over the last N sessions (today included), from the pack's daily closes.
+    "windows": [3, 5, 10, 20],
+    "window_min_abs_pct": 5.0,     # smaller multi-day moves are not listed for their window
+    "window_rows_per_side": 25,    # the largest gainers and losers kept per window, each
+    # Setups (labels of a multi-day pattern, not forecasts). Daily-bar study, 536 names, 2026-03-31..11-10
+    # (156 sessions), next 5 sessions against SPY: down 8%+ over 5 days and still above the 50-day average
+    # +1.6% on average, right 54% of the time (48% for any stock-day; both halves agree, +1.7% and +1.3%);
+    # the same drop below the 50-day average +0.7% / 51%; up 15%+ over 5 days +0.0% / 45% (-0.8% in the
+    # second half).
+    "dip_chg_5d_max": -8.0,
+    "stretched_chg_5d_min": 15.0,
+    "setup_rows": 40,              # dips in an uptrend kept even when no window lists them
+    "options_per_refresh": 50,     # movers whose option metrics are refreshed after a scan (oldest reading first)
     "context_ttl_min": 30,         # their catalysts / float / earnings dates are re-read at most this often
 }
 
@@ -107,6 +120,7 @@ MOVERS: dict = {
 # never read by the engine. Fetched after each scan for the members and warming-up names.
 OPTIONS: dict = {
     "min_dte": 7,                  # the first expiry at least this many calendar days out (skips 0-6 DTE)
+    "swing_dte": (14, 31),         # the "swing" premium shown in the Movers view: first expiry 2 weeks to a month out
     "ntm_band": 0.10,              # "near the money": strikes within ±10% of the stock price
     "weekly_window_days": 35,      # >= 4 expiries inside this window counts as weekly options
     "max_tickers": 45,

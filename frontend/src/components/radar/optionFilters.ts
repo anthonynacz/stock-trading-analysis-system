@@ -132,6 +132,7 @@ export function readFilters(raw: unknown): OptionFilters {
 export function fmtCompact(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
   const a = Math.abs(v);
+  if (a >= 1e12) return `${(v / 1e12).toFixed(2)}T`;
   if (a >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
   if (a >= 1e6) return `${(v / 1e6).toFixed(a >= 1e7 ? 0 : 1)}M`;
   if (a >= 1e3) return `${(v / 1e3).toFixed(a >= 1e4 ? 0 : 1)}k`;

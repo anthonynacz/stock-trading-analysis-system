@@ -90,6 +90,37 @@ def pick_expiry(expirations: list[int], today: date, min_dte: int) -> int | None
     return exps[-1]
 
 
+def pick_swing_expiry(expirations: list[int], today: date, lo: int, hi: int) -> int | None:
+    """The first expiry `lo`..`hi` calendar days out (2 weeks to a month): the "swing" premium of the Movers
+    view. Without one in the window, the first expiry beyond it (monthlies only); None when all are nearer."""
+    exps = sorted(int(e) for e in expirations or [])
+    later = [e for e in exps if (exp_date(e) - today).days >= lo]
+    return later[0] if later else None
+
+
+def swing_quote(chain: dict | None, spot: float | None, expiry: int, today: date) -> dict | None:
+    """What one at-the-money contract of `chain` costs: {"expiry", "dte", "call": {...}, "put": {...}} with
+    strike, bid, ask, mid and cost_usd (mid x 100, the ask when there is no bid) per side; a side without a
+    quote is None. None when neither side is quoted."""
+    if not chain or not spot:
+        return None
+    out: dict = {"expiry": exp_date(expiry).isoformat(), "dte": (exp_date(expiry) - today).days}
+    for kind in ("call", "put"):
+        rows = [c for c in chain.get(f"{kind}s") or [] if _num(c.get("strike")) is not None]
+        out[kind] = None
+        if not rows:
+            continue
+        atm = min(rows, key=lambda c: (abs(float(c["strike"]) - spot), -float(c["strike"]) if kind == "call" else float(c["strike"])))
+        bid, ask = _num(atm.get("bid")), _num(atm.get("ask"))
+        mid = (bid + ask) / 2.0 if bid and ask and bid > 0 and ask >= bid else None
+        px = mid if mid else ask if ask and ask > 0 else None
+        if px is None:
+            continue
+        out[kind] = {"strike": float(atm["strike"]), "bid": _r(bid), "ask": _r(ask), "mid": _r(mid),
+                     "cost_usd": _r(px * 100.0, 0)}
+    return out if out["call"] or out["put"] else None
+
+
 def next_earnings(quote: dict, now: float) -> tuple[date | None, bool]:
     """(next earnings date on or after today ET, whether Yahoo marks it as an estimate)."""
     today = et_date(now)
@@ -306,15 +337,26 @@ def ticker_metrics(fetch: Fetch, symbol: str, now: float, baseline: dict | None,
         chain = chains[0] if chains else None
         result = {**result, "quote": second.get("quote") or result.get("quote")}
     doc = chain_metrics(result, chain, now, baseline=baseline, params=params)
+    by_expiry = {chosen: chain}          # chains already read, for the swing premium below
     # The ~30-day expiry for the term structure (one more request; skipped when it is the same expiry).
     term = pick_expiry(exps, et_date(now), int(IV["term_dte"]))
     if term is not None and term != chosen and doc.get("price"):
         third = _get(fetch, symbol, {"date": term}, timeout)
         chains3 = (third or {}).get("options") or []
+        by_expiry[term] = chains3[0] if chains3 else None
         doc["iv_30d_pct"] = _r(atm_iv(chains3[0] if chains3 else None, doc["price"]), 1)
         doc["iv_30d_expiry"] = exp_date(term).isoformat()
     elif term is not None and term == chosen:
         doc["iv_30d_pct"], doc["iv_30d_expiry"] = doc.get("iv_pct"), doc.get("expiry")
+    # The swing premium: one at-the-money contract 2 weeks to a month out (a request more when that expiry is
+    # neither of the two above, which is the usual case for names with weekly options).
+    swing = pick_swing_expiry(exps, et_date(now), *params.get("swing_dte", (14, 31)))
+    if swing is not None and doc.get("price"):
+        if swing not in by_expiry:
+            fourth = _get(fetch, symbol, {"date": swing}, timeout)
+            chains4 = (fourth or {}).get("options") or []
+            by_expiry[swing] = chains4[0] if chains4 else None
+        doc["swing"] = swing_quote(by_expiry[swing], doc["price"], swing, et_date(now))
     atm = doc.get("atm") or {}
     doc["vega_per_pt_usd"] = _r(vega_per_point(doc.get("price"), atm.get("strike"), doc.get("iv_pct"),
                                                doc.get("dte")), 2)

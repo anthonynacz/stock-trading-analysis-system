@@ -42,6 +42,9 @@ class SymbolBaseline:
     prev_close: float | None
     eligible: bool
     ineligible_reason: str | None
+    # The last daily closes before the session, oldest first (the Movers view's multi-day moves, radar/movers.py).
+    # Empty without a fresh prior close, and on packs built before the field existed. Never read by the engine.
+    closes: list[float] = field(default_factory=list)
 
     def to_json(self) -> dict:
         return {"name": self.name, "sector": self.sector, "sigma5": _num(self.sigma5), "beta": _num(self.beta),
@@ -49,14 +52,15 @@ class SymbolBaseline:
                 "sigma_d": _num(self.sigma_d), "adv20_usd": _num(self.adv20_usd),
                 "medbar_usd": _num(self.medbar_usd), "missing_share": float(self.missing_share),
                 "n_base": int(self.n_base), "prev_close": _num(self.prev_close), "eligible": bool(self.eligible),
-                "ineligible_reason": self.ineligible_reason}
+                "ineligible_reason": self.ineligible_reason, "closes": [float(x) for x in self.closes]}
 
     @classmethod
     def from_json(cls, symbol: str, d: dict) -> SymbolBaseline:
         return cls(symbol, d["name"], d["sector"], _nan(d["sigma5"]), _nan(d["beta"]),
                    np.asarray(d["vm"], dtype=np.float64), np.asarray(d["cvm"], dtype=np.float64),
                    _nan(d["sigma_d"]), _nan(d["adv20_usd"]), _nan(d["medbar_usd"]), float(d["missing_share"]),
-                   int(d["n_base"]), d["prev_close"], bool(d["eligible"]), d["ineligible_reason"])
+                   int(d["n_base"]), d["prev_close"], bool(d["eligible"]), d["ineligible_reason"],
+                   [float(x) for x in d.get("closes") or []])
 
 
 @dataclass
@@ -153,22 +157,26 @@ def _intraday_stats(c: np.ndarray, v: np.ndarray, present: np.ndarray, lr: np.nd
 
 
 def _daily_stats(d: DailyBars | None, session: Session, prev_day: date, bp: dict):
-    """(prev_close, sigma_d, adv20$) from daily bars strictly before the session.
+    """(prev_close, sigma_d, adv20$, closes) from daily bars strictly before the session.
 
-    prev_close is None unless the last bar is the previous session's (a stale close would fake a gap)."""
+    prev_close is None unless the last bar is the previous session's (a stale close would fake a gap).
+    closes: the last `history_closes` daily closes, oldest first; empty without a fresh prev_close (the
+    multi-day moves count sessions back from yesterday) or when any of them is not a positive number."""
     if d is None or len(d.day) == 0:
-        return None, math.nan, math.nan
+        return None, math.nan, math.nan, []
     days = np.asarray(d.day, dtype="datetime64[D]")
     keep = days < np.datetime64(session.day)
     close, vol, days = np.asarray(d.c, dtype=np.float64)[keep], np.asarray(d.v, dtype=np.float64)[keep], days[keep]
     if len(close) == 0:
-        return None, math.nan, math.nan
+        return None, math.nan, math.nan, []
     prev_close = float(close[-1]) if days[-1] == np.datetime64(prev_day) and close[-1] > 0 else None
+    tail = close[-int(bp.get("history_closes", 0)):] if bp.get("history_closes") else close[:0]
+    closes = [round(float(x), 4) for x in tail] if prev_close is not None and np.all(np.isfinite(tail) & (tail > 0)) else []
     nd, n = bp["daily_sessions"], bp["sessions"]
     with np.errstate(divide="ignore", invalid="ignore"):
         sigd = float(np.std(np.diff(np.log(close[-nd:])), ddof=1)) if len(close) >= nd else math.nan
     adv = float(np.median(close[-n:] * vol[-n:])) if len(close) >= n else math.nan
-    return prev_close, sigd, adv
+    return prev_close, sigd, adv, closes
 
 
 def _eligibility(sym: str, meta: dict, prev_close, sigd, adv, medbar, missing, n_base, u: dict):
@@ -206,11 +214,11 @@ def _symbol_baselines(symbols: list[str], grid: tuple, lr: np.ndarray, daily: di
     out = {}
     for i, sym in enumerate(symbols):
         info = meta.get(sym, {})
-        pc, sigd, adv = _daily_stats(daily.get(sym), session, prev_day, params["baseline"])
+        pc, sigd, adv, closes = _daily_stats(daily.get(sym), session, prev_day, params["baseline"])
         ok, why = _eligibility(sym, info, pc, sigd, adv, medbar[i], missing[i], int(n_base[i]), params["universe"])
         out[sym] = SymbolBaseline(sym, info.get("name"), info.get("sector"), float(sig5[i]), float(beta[i]),
                                   vm[i], cvm[i], sigd, adv, float(medbar[i]), float(missing[i]), int(n_base[i]),
-                                  pc, ok, why)
+                                  pc, ok, why, closes)
     return out
 
 

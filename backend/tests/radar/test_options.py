@@ -272,8 +272,12 @@ def test_unquoted_iv_and_ask_are_left_out():
 def test_ticker_metrics_requests_the_chosen_expiry_second():
     y = Yahoo(NOW)
     doc = options.ticker_metrics(y, "XYZ", NOW, {"sigma_d": SIGMA_D})
-    # 2 DTE skipped; the third request is the ~30-day expiry for the IV term structure
-    assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 9)}, {"date": exp_epoch(NOW, 30)}]
+    # 2 DTE skipped; the third request is the ~30-day expiry for the IV term structure, the fourth the first
+    # expiry 2 weeks to a month out (the swing premium of the Movers view)
+    assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 9)}, {"date": exp_epoch(NOW, 30)},
+                                       {"date": exp_epoch(NOW, 16)}]
+    assert doc["swing"] == {"expiry": "2026-10-23", "dte": 16, "put": None,
+                            "call": {"strike": 100.0, "bid": 2.0, "ask": 2.2, "mid": 2.1, "cost_usd": 210.0}}
     assert all(c[0] == options.YAHOO_OPTIONS.format("XYZ") for c in y.calls)
     assert all(c[2] == float(OPTIONS["fetch_timeout_s"]) for c in y.calls)
     assert doc["expiry"] == "2026-10-16" and doc["dte"] == 9 and doc["liquidity"] == "good"
@@ -283,7 +287,31 @@ def test_ticker_metrics_uses_the_first_chain_when_it_is_the_chosen_expiry():
     y = Yahoo(NOW, by_symbol={"XYZ": result(NOW, days=(9, 16, 23))})
     doc = options.ticker_metrics(y, "XYZ", NOW, None)
     # no expiry 30+ days out: the farthest one (23 days) stands in for the term structure
-    assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 23)}] and doc["expiry"] == "2026-10-16"
+    assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 23)}, {"date": exp_epoch(NOW, 16)}]
+    assert doc["expiry"] == "2026-10-16" and doc["swing"]["dte"] == 16
+
+
+def test_swing_premium_reuses_a_chain_already_read_and_falls_back_past_the_window():
+    # Monthlies only: the first expiry at least 7 days out is 20 days away, inside the 2-week-to-a-month window.
+    y = Yahoo(NOW, by_symbol={"XYZ": result(NOW, days=(20, 48))})
+    doc = options.ticker_metrics(y, "XYZ", NOW, None)
+    assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 48)}] and doc["swing"]["dte"] == 20
+    # Nothing in the window: the first expiry beyond it; nothing 2 weeks out at all: no swing premium.
+    today = today_of(NOW)
+    assert options.pick_swing_expiry([exp_epoch(NOW, d) for d in (3, 10, 45, 80)], today, 14, 31) == exp_epoch(NOW, 45)
+    assert options.pick_swing_expiry([exp_epoch(NOW, d) for d in (3, 10)], today, 14, 31) is None
+    assert options.pick_swing_expiry([], today, 14, 31) is None
+
+
+def test_swing_quote_prices_both_sides_and_skips_unquoted_ones():
+    today, e = today_of(NOW), exp_epoch(NOW, 21)
+    put = {"strike": 100.0, "bid": 0.0, "ask": 3.0}
+    got = options.swing_quote(chain(e, puts=[put, {"strike": 90.0, "bid": 1.0, "ask": 1.2}]), 100.0, e, today)
+    assert got["dte"] == 21 and got["call"]["cost_usd"] == 210.0
+    assert got["put"] == {"strike": 100.0, "bid": 0.0, "ask": 3.0, "mid": None, "cost_usd": 300.0}   # no bid: the ask
+    dead = [call(100, bid=0.0, ask=0.0)]
+    assert options.swing_quote(chain(e, calls=dead, puts=[]), 100.0, e, today) is None
+    assert options.swing_quote(None, 100.0, e, today) is None and options.swing_quote(chain(e), None, e, today) is None
 
 
 def test_ticker_metrics_without_expiries():
@@ -305,7 +333,8 @@ def test_a_rate_limit_or_server_error_is_retried_once(status, monkeypatch):
     y = Yahoo(NOW, statuses={"XYZ": [status]})
     doc = options.ticker_metrics(y, "XYZ", NOW, None)
     assert doc is not None and doc["expiry"] == "2026-10-16"
-    assert [c[1] for c in y.calls] == [{}, {}, {"date": exp_epoch(NOW, 9)}, {"date": exp_epoch(NOW, 30)}]
+    assert [c[1] for c in y.calls] == [{}, {}, {"date": exp_epoch(NOW, 9)}, {"date": exp_epoch(NOW, 30)},
+                                       {"date": exp_epoch(NOW, 16)}]
     assert naps == [1.0]
 
 

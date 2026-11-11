@@ -136,6 +136,9 @@ def test_pack_values(market):
     prev = daily["AAA"].c[daily["AAA"].day < np.datetime64(target.day)]
     assert aaa.prev_close == pytest.approx(prev[-1])
     assert aaa.sigma_d == pytest.approx(np.std(np.diff(np.log(prev[-21:])), ddof=1))
+    # The Movers view's multi-day moves read the prior closes, oldest first, yesterday's last.
+    assert aaa.closes == [round(float(x), 4) for x in prev[-PARAMS["baseline"]["history_closes"]:]]
+    assert aaa.closes[-1] == pytest.approx(aaa.prev_close, abs=1e-4) and len(aaa.closes) == len(prev)
     assert aaa.adv20_usd > 25e6 and aaa.medbar_usd > 150e3
     assert aaa.eligible and aaa.ineligible_reason is None
     reasons = {s: b.ineligible_reason for s, b in pack.symbols.items() if not b.eligible}
