@@ -413,6 +413,18 @@ class RadarStore:
         with self.engine.begin() as conn:
             self._put_runtime(conn, _now(), settings=doc)
 
+    # ------------------------------------------------------------ extended-hours movers (radar/extended.py)
+
+    def get_extended(self) -> dict | None:
+        """The latest pre-market / after-hours movers scan, or None."""
+        with self.engine.connect() as conn:
+            doc = conn.execute(select(_RUNTIME.c.extended).where(_RUNTIME.c.id == SINGLETON_ID)).scalar()
+        return doc if isinstance(doc, dict) else None
+
+    def put_extended(self, doc: dict) -> None:
+        with self.engine.begin() as conn:
+            self._put_runtime(conn, _now(), extended=doc)
+
     # ------------------------------------------------------------ option metrics (radar/options.py)
 
     def put_option_metrics(self, metrics: dict[str, dict], as_of: datetime, keep_days: int = 7) -> None:

@@ -32,6 +32,10 @@ restarts on its own), running every day instead of one job per session:
 - **Option metrics:** after every successful scan (scheduled or requested) `python -m radar.options` refreshes
   the option-chain metrics of the members and warming-up names (subprocess, OPTIONS.timeout_s); a failure
   is logged and never affects the radar.
+- **Extended hours:** in pre-market (04:00 ET to the open) and after hours (the close to 20:00 ET), while it
+  waits for the next job, `python -m radar.extended` lists the plain percentage movers of extended-hours trading
+  every EXTENDED.interval_s (subprocess, EXTENDED.timeout_s). Display only (the Movers view): it never starts
+  when a tick or the warmup is about to run, and a failure is logged and never affects the radar.
 - **Signals:** SIGTERM / SIGINT stop it within about 5 s and terminate a running tick (terminate, then
   kill after 3 s).
 - **Logging:** stdout, plus a pipeline_run_log row per tick (phase radar_tick) for the /schedule page.
@@ -57,7 +61,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, TypeVar
 
 from . import calendar_nyse as cal
-from .config import HOUSEKEEPING, OPTIONS, RUNTIME, sensitivity_summary
+from .config import EXTENDED, HOUSEKEEPING, OPTIONS, RUNTIME, sensitivity_summary
 from .tick import (
     CONTEXT_ENV,
     DEFAULT_MARKET,
@@ -97,6 +101,7 @@ RUN_LOG_TIMEOUT_S = 10.0
 BREAKER_TRIP = 3             # = fetch.BREAKER_TRIP (importing fetch would load numpy and curl_cffi into the worker)
 TICK_CMD = (sys.executable, "-m", "radar.tick")
 OPTIONS_CMD = (sys.executable, "-m", "radar.options")
+EXTENDED_CMD = (sys.executable, "-m", "radar.extended")
 SCAN_REQUEST_TTL_S = 180     # a pending "Scan now" request older than this is dropped as expired
 
 
@@ -335,13 +340,16 @@ class Worker:
                  housekeeping: Callable[[str], Any] | None = None,
                  run_log: Any = None, env: Mapping[str, str] = os.environ,
                  tick_cmd: tuple[str, ...] = TICK_CMD,
-                 refresh_options: Callable[[], dict] | None = None):
+                 refresh_options: Callable[[], dict] | None = None,
+                 scan_extended: Callable[[], dict] | None = None):
         self.store, self.clock, self.sleep, self.run_tick = store, clock, sleep, run_tick
         self.dispatch_alerts = dispatch_alerts
         self.housekeeping = housekeeping or self._run_housekeeping
         self.run_log = run_log if run_log is not None else PipelineRunLog()
         self.env, self.tick_cmd = env, tick_cmd
         self.refresh_options = refresh_options     # None: no option metrics (tests); main() sets the subprocess
+        self.scan_extended = scan_extended         # None: no extended-hours movers (tests); main() sets it
+        self.extended_at = 0.0                     # when the last extended-hours scan started
         self.handled_request: str | None = None    # id of the last "Scan now" request handled (runs at most once)
         self.stop = False
         self.started = 0.0
@@ -542,10 +550,30 @@ class Worker:
         """sleep_until(t), running "Scan now" requests that arrive meanwhile."""
         while not self.stop:
             self._poll_scan_request()
+            self._maybe_extended(t)
             left = t - self.clock()
             if left <= 0:
                 return
             self.sleep(min(left, NAP_S))
+
+    def _maybe_extended(self, next_job_at: float) -> None:
+        """Pre-market and after hours: an extended-hours movers scan (radar.extended) every EXTENDED.interval_s,
+        while the worker has nothing else to do. Never started when the next job (the warmup, a tick) is due
+        before the scan could time out, and a failure never touches the radar."""
+        if self.scan_extended is None:
+            return
+        now = self.clock()
+        if now - self.extended_at < EXTENDED["interval_s"] or next_job_at - now < EXTENDED["timeout_s"] + 30:
+            return
+        if cal.phase_at(datetime.fromtimestamp(now, cal.UTC))[0] not in ("pre", "post"):
+            return
+        self.extended_at = now
+        try:
+            res = self.scan_extended() or {}
+            logger.info("extended-hours movers %s: %s", res.get("status"),
+                        {k: v for k, v in res.items() if k not in ("status", "stdout", "stderr")})
+        except Exception:  # noqa: BLE001 - a display list: it never stops the radar
+            logger.warning("extended-hours movers scan failed", exc_info=True)
 
     def _poll_scan_request(self) -> None:
         getter = getattr(self.store, "get_scan_request", None)
@@ -865,7 +893,8 @@ def main(argv: list[str] | None = None) -> int:
     from .store import RadarStore
     store = RadarStore()
     worker = Worker(store, refresh_options=lambda: run_tick_subprocess(
-        list(OPTIONS_CMD), float(OPTIONS["timeout_s"]), dict(os.environ)))
+        list(OPTIONS_CMD), float(OPTIONS["timeout_s"]), dict(os.environ)),
+        scan_extended=lambda: run_tick_subprocess(list(EXTENDED_CMD), float(EXTENDED["timeout_s"]), dict(os.environ)))
     install_signal_handlers(worker)
     try:
         return worker.run()

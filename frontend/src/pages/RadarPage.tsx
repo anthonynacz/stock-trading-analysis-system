@@ -27,7 +27,7 @@ import RadarMemberList from '../components/radar/RadarMemberList';
 import { RadarContextBanners, RadarScanBanner, RadarStatusBar } from '../components/radar/RadarStatus';
 import { RadarEmpty, RadarExitList, RadarHeatingList, RadarSection, RadarTrendingList } from '../components/radar/RadarLists';
 import { RadarDisclaimer, RadarHowItWorks, RadarScannerHealth } from '../components/radar/RadarAbout';
-import MoversView from '../components/radar/MoversView';
+import MoversView, { type MoversMode } from '../components/radar/MoversView';
 import { readMoverFilters, readMoverSort, type MoverFilters, type MoverSort } from '../components/radar/movers';
 
 const VIEW_KEY = 'vela.radar_view';
@@ -134,6 +134,8 @@ export default function RadarPage() {
   const [showHidden, setShowHidden] = useState(false);
   const [allTrending, setAllTrending] = useState(false);
   const [showHiddenTrending, setShowHiddenTrending] = useState(false);
+  /** Movers view: null follows the clock (the newer of the two lists), else the user's pick for this visit. */
+  const [moversMode, setMoversMode] = useState<MoversMode | null>(null);
   useEffect(() => {
     try {
       localStorage.setItem(VIEW_KEY, JSON.stringify(view));
@@ -200,6 +202,20 @@ export default function RadarPage() {
     ? 'No stock has moved 2% or more yet, or the first scan of the day has not run.'
     : 'No movers to show. The list fills with the first scan of the next session.';
   const onRadar = new Set(all.map((m) => m.ticker));
+  // Pre-market / after-hours movers (radar/extended.py). Shown by default while they are newer than the last
+  // regular-session scan, i.e. from the close until the next session's first scan.
+  const ext = st?.extended && st.extended.movers ? st.extended : null;
+  const extAt = toMs(ext?.as_of);
+  const extLabel = ext ? (ext.phase === 'pre' ? 'Pre-market' : 'After hours') : null;
+  const extNewer = extAt !== null && extAt > (moversAt ?? 0);
+  const mode: MoversMode = ext ? moversMode ?? (extNewer ? 'extended' : 'regular') : 'regular';
+  const extNote = ext
+    ? `${extLabel} moves: each stock's last extended-hours trade against its close of ${fmtDayLabel(ext.ref_day)}, ` +
+      'among the radar stocks and other US stocks above $2B. Ordered by option liquidity as of the last regular session, ' +
+      'then by dollars traded in extended hours. A list to browse, not a signal.' +
+      (extAt !== null ? ` Prices as of ${fmtEtDay(extAt)}; refreshed every 10 minutes from 4:00 AM to the open and from the close to 8:00 PM ET.` : '') +
+      (ext.status === 'degraded' ? ' Some prices could not be read: the list may be incomplete.' : '')
+    : '';
 
   const summary: string[] = [];
   const day = st ? listsDay(st) : null;
@@ -261,11 +277,14 @@ export default function RadarPage() {
         <RadarScanBanner c={c} st={st} f={f} error={radar.error} notPublished={notPublished} />
         {view.tab === 'movers' && (
           <MoversView
-            movers={movers}
+            movers={mode === 'extended' && ext ? ext.movers : movers}
+            mode={mode}
+            onMode={setMoversMode}
+            extendedLabel={extLabel}
             options={options}
             loading={loading}
-            emptyText={nothingYet ?? moversEmpty}
-            note={moversNote}
+            emptyText={nothingYet ?? (mode === 'extended' ? 'No stock has moved 2% or more in extended hours.' : moversEmpty)}
+            note={mode === 'extended' ? extNote : moversNote}
             onRadar={onRadar}
             now={now}
             filters={view.mv}

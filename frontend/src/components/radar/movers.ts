@@ -236,7 +236,8 @@ export function sortMovers<T extends RadarMover>(
       liquidityRank(b, options?.[b.ticker]) - liquidityRank(a, options?.[a.ticker]) || dollars(b) - dollars(a),
     move: (a, b) => Math.abs(b.change_pct) - Math.abs(a.change_pct),
     dollar: (a, b) => dollars(b) - dollars(a),
-    rvol: (a, b) => num(b.rvol) - num(a.rvol),
+    // Extended-hours rows have no volume-vs-normal: their column is the last trade time (newest first).
+    rvol: (a, b) => num(b.rvol) - num(a.rvol) || (b.traded_at ?? '').localeCompare(a.traded_at ?? ''),
     price: (a, b) => b.price - a.price,
     ticker: (a, b) => b.ticker.localeCompare(a.ticker),
     premium: (a, b) => num(swingOf(b, options?.[b.ticker])?.cost_usd) - num(swingOf(a, options?.[a.ticker])?.cost_usd),

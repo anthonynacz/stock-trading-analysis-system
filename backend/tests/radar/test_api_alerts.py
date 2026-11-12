@@ -407,8 +407,8 @@ async def test_snapshot_passes_the_state_through_with_stale(monkeypatch):
     monkeypatch.setattr(routes, "radar_is_stale", fake_stale)
     out = await routes.radar_snapshot(store=FakeStore(state=state), user=MEMBER)
     assert out["stale"] is True
-    assert {k: v for k, v in out.items() if k not in ("stale", "options", "scan_request")} == state
-    assert out["options"] == {} and out["scan_request"] is None
+    assert {k: v for k, v in out.items() if k not in ("stale", "options", "scan_request", "extended")} == state
+    assert out["options"] == {} and out["scan_request"] is None and out["extended"] is None
     assert seen["now"].tzinfo is not None
 
 
@@ -875,6 +875,13 @@ async def test_snapshot_on_the_real_store_reads_options_and_the_request(radar_st
     radar_store.put_scan_request({"id": "r", "status": "pending", "requested_at": _iso(now)})
     out = await routes.radar_snapshot(store=radar_store, user=MEMBER)
     assert out["options"] == {"NVDA": {"liquidity": "good"}} and out["scan_request"]["status"] == "pending"
+    assert out["extended"] is None
+    # The extended-hours movers scan rides along, and its names get their option metrics too.
+    ext = {"schema": 1, "phase": "post", "movers": [{"ticker": "AMD", "change_pct": 6.0}]}
+    radar_store.put_extended(ext)
+    out = await routes.radar_snapshot(store=radar_store, user=MEMBER)
+    assert out["extended"] == ext
+    assert out["options"] == {"NVDA": {"liquidity": "good"}, "AMD": {"liquidity": "thin"}}
 
 
 @pytest.mark.parametrize("now, open_", [

@@ -31,7 +31,7 @@ BACKEND = Path(__file__).resolve().parents[2]
 # The radar migrations, in revision order: the tables, then the scan request column and option metrics.
 MIGRATIONS = tuple(BACKEND / "alembic" / "versions" / f for f in (
     "d6e2a4c8b1f9_radar_tables.py", "f3a9c2d7e510_radar_scan_request_options.py", "a8d4e6f2c913_radar_settings.py",
-    "b2c7e9f4a816_radar_option_history.py"))
+    "b2c7e9f4a816_radar_option_history.py", "d1f6a3c8e502_radar_runtime_extended.py"))
 
 SESSION = "2026-09-28"
 TICK = "2026-09-28T13:35:00Z"
@@ -1004,7 +1004,8 @@ def test_migration_is_the_single_head_after_recommendation_outcomes() -> None:
     assert scripts.get_revision(HISTORY_REVISION).down_revision == SETTINGS_REVISION
     # Later non-radar migrations stack on top; the chain must keep a single head.
     assert scripts.get_revision("c9e4b7a2d5f1").down_revision == HISTORY_REVISION
-    assert scripts.get_heads() == ["c9e4b7a2d5f1"]
+    assert scripts.get_revision("d1f6a3c8e502").down_revision == "c9e4b7a2d5f1"      # radar_runtime.extended
+    assert scripts.get_heads() == ["d1f6a3c8e502"]
 
 
 def test_session_tickers_lists_every_name_with_rows_or_events_in_the_session(radar_store):

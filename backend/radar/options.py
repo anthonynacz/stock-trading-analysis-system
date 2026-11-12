@@ -582,8 +582,11 @@ def refresh(store: Any, tickers: list[str] | None = None, *, fetch: Fetch | None
             clock: Callable[[], float] = time.time, params: dict = OPTIONS, movers: dict = MOVERS) -> dict:
     t0 = time.monotonic()
     state = store.load_state() or {}
-    syms = tickers if tickers is not None else radar_tickers(state, int(params["max_tickers"]))
-    radar_names = set(syms)
+    # The radar's own names: fresh market context on every refresh and a row in the staleness log. Anything
+    # else (plain movers, extended-hours movers, tickers asked for by hand) rides along without either.
+    radar_list = radar_tickers(state, int(params["max_tickers"]))
+    radar_names = set(radar_list)
+    syms = tickers if tickers is not None else radar_list
     if tickers is None and state.get("movers"):
         # The plain movers ride along, a few per refresh: they are a display list, the radar names come first.
         try:

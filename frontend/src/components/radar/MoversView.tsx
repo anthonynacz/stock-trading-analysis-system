@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import type { RadarMover, RadarOptionMetrics } from '../../types';
 import { SegmentedControl, type SegmentOption } from '../ui/SegmentedControl';
 import { LoadingRow } from '../ui/feedback';
+import { fmtEt, toMs } from './clock';
 import { DirArrow } from './DirArrow';
 import { fmtMove, fmtRadarPrice, signClass, tickerHref } from './model';
 import { LIQ_CLASS, failReason, fmtCompact, fmtShortDate, fmtUsdCompact, liqHint, liqText, type OptionFilters } from './optionFilters';
@@ -48,6 +49,14 @@ const DIR_OPTIONS: SegmentOption<MoverDir>[] = [
 ];
 
 const SHOWN = 40;
+
+/** Which list the view shows: the regular session's movers or the pre-market / after-hours ones. */
+export type MoversMode = 'regular' | 'extended';
+
+const MODE_TITLE: Record<MoversMode, string> = {
+  regular: 'Moves of the regular session (09:30-16:00 ET) against the prior close',
+  extended: 'Moves of the last pre-market / after-hours trade against the last regular close',
+};
 
 const SIDE_OPTIONS: { key: MoverSide; label: string }[] = [
   { key: 'follow', label: 'Options: with the move' },
@@ -206,13 +215,20 @@ export default function MoversView({
   note,
   onRadar,
   now,
-  filters,
+  filters: saved,
   onFilters,
   sort,
   onSort,
   opt,
   onOpt,
+  mode = 'regular',
+  onMode,
+  extendedLabel = null,
 }: {
+  /** The list being shown; `extendedLabel` ("Pre-market" / "After hours") is null when there is no such list. */
+  mode?: MoversMode;
+  onMode?: (m: MoversMode) => void;
+  extendedLabel?: string | null;
   /** null: no snapshot to show. */
   movers: RadarMover[] | null;
   options?: Record<string, RadarOptionMetrics>;
@@ -235,13 +251,17 @@ export default function MoversView({
   const [showFilters, setShowFilters] = useState(true);
 
   const raw = movers ?? [];
+  // Extended-hours rows carry no multi-day context and no volume-vs-normal: those settings are switched off for
+  // this list only (the saved ones come back with the regular session's list).
+  const ext = mode === 'extended';
+  const filters: MoverFilters = ext ? { ...saved, period: 'd1', setup: 'all', multi: false, minRvol: 0 } : saved;
   // Multi-day moves come from the day's baselines: a list written before they carried daily closes has none.
   const hasHistory = raw.some((m) => m.chg_5d !== null && m.chg_5d !== undefined);
   const period: MoverPeriod = hasHistory ? filters.period : 'd1';
   const periodLabel = MOVER_PERIODS.find((p) => p.key === period)?.label ?? 'Today';
   // Rows as shown: `change_pct` is the selected period's move, `direction` the option side they are judged on.
   const all = moverRows(raw, period, filters.side);
-  const set = <K extends keyof MoverFilters>(k: K, v: MoverFilters[K]) => onFilters({ ...filters, [k]: v });
+  const set = <K extends keyof MoverFilters>(k: K, v: MoverFilters[K]) => onFilters({ ...saved, [k]: v });
   // A setup chip lists every name with that pattern; otherwise the period's own floor applies (2% today, 5% over days).
   const passing = all.filter(
     (m) => moverPasses(filters, m) && (filters.setup !== 'all' || Math.abs(m.change_pct) >= PERIOD_FLOOR[period]),
@@ -311,7 +331,40 @@ export default function MoversView({
       }
     >
       <div className="mb-2 space-y-2">
-        <div className="rounded-md border border-border bg-card/40 p-2.5 space-y-2">
+        {extendedLabel && onMode && (
+          <SegmentedControl
+            options={[
+              { key: 'regular', label: 'Regular session', title: MODE_TITLE.regular },
+              { key: 'extended', label: extendedLabel, title: MODE_TITLE.extended },
+            ]}
+            value={mode}
+            onChange={onMode}
+          />
+        )}
+        {ext && (
+          <p className="text-xs leading-snug rounded border border-amber-500/30 bg-amber-500/10 text-amber-100 px-2 py-1.5">
+            <span className="font-semibold">{extendedLabel ?? 'Extended hours'}: volume unconfirmed.</span> Few shares trade
+            outside regular hours, so a move here can be a handful of trades and can vanish at the open. Options do not
+            trade now: the option columns show each stock&apos;s last regular-session reading, and spreads and IV are
+            usually worse in the first minutes after the open.
+          </p>
+        )}
+        {ext && (
+          <select
+            aria-label="Which options to judge"
+            value={filters.side}
+            onChange={(e) => set('side', e.target.value as MoverSide)}
+            title="With the move: calls for stocks that are up, puts for stocks that are down."
+            className={`${selectClass(filters.side !== 'follow')} !w-auto`}
+          >
+            {SIDE_OPTIONS.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        )}
+        <div className={`rounded-md border border-border bg-card/40 p-2.5 space-y-2 ${ext ? 'hidden' : ''}`}>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[11px] font-medium text-text-secondary">Move over</span>
             <SegmentedControl
@@ -403,7 +456,7 @@ export default function MoversView({
           {nFilters > 0 && (
             <button
               type="button"
-              onClick={() => onFilters({ ...NO_MOVER_FILTERS, sectors: [], period: filters.period, multi: filters.multi })}
+              onClick={() => onFilters({ ...NO_MOVER_FILTERS, sectors: [], period: saved.period, multi: saved.multi })}
               className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline"
             >
               Clear stock filters
@@ -413,7 +466,7 @@ export default function MoversView({
         {showFilters && (
           <div className="rounded-md border border-border bg-card/40 p-3 space-y-3">
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              <Field label={period === 'd1' ? 'Move today' : `Move over ${periodLabel}`} hint="Smallest move over the selected period, up or down">
+              <Field label={ext ? 'Move' : period === 'd1' ? 'Move today' : `Move over ${periodLabel}`} hint={ext ? 'Smallest move since the last regular close, up or down' : 'Smallest move over the selected period, up or down'}>
                 <NumSelect label="Smallest move" value={filters.minMovePct} choices={MOVE_CHOICES} any={`Any (${PERIOD_FLOOR[period]}%+)`} fmt={(v) => `${v}% or more`} onChange={(v) => set('minMovePct', v)} />
               </Field>
               <Field label="Price from" hint="Lowest stock price">
@@ -422,12 +475,21 @@ export default function MoversView({
               <Field label="Price up to" hint="Highest stock price">
                 <NumSelect label="Price up to" value={filters.maxPrice} choices={MAX_PRICE_CHOICES} any="Any" fmt={(v) => `$${v}`} onChange={(v) => set('maxPrice', v)} />
               </Field>
-              <Field label="$ volume today" hint="Dollars traded in the stock so far today (price × shares)">
+              <Field
+                label={ext ? '$ volume (extended)' : '$ volume today'}
+                hint={
+                  ext
+                    ? 'Dollars traded in extended hours since the last close. Known for the 30 largest gainers and losers only: this filter hides the rest.'
+                    : 'Dollars traded in the stock so far today (price × shares)'
+                }
+              >
                 <NumSelect label="$ volume today" value={filters.minDollarVolM} choices={DOLLAR_VOL_CHOICES} any="Any" fmt={(v) => (v >= 1000 ? `$${v / 1000}B+` : `$${v}M+`)} onChange={(v) => set('minDollarVolM', v)} />
               </Field>
-              <Field label="Volume vs normal" hint="Today's volume against the stock's normal volume by this time of day">
-                <NumSelect label="Volume vs normal" value={filters.minRvol} choices={RVOL_CHOICES} any="Any" fmt={(v) => `${v}× or more`} onChange={(v) => set('minRvol', v)} />
-              </Field>
+              {!ext && (
+                <Field label="Volume vs normal" hint="Today's volume against the stock's normal volume by this time of day">
+                  <NumSelect label="Volume vs normal" value={filters.minRvol} choices={RVOL_CHOICES} any="Any" fmt={(v) => `${v}× or more`} onChange={(v) => set('minRvol', v)} />
+                </Field>
+              )}
               <Field label="Company size" hint="Market capitalisation">
                 <NumSelect label="Company size" value={filters.minMcapB} choices={MCAP_CHOICES} any="Any" fmt={(v) => `$${v}B+`} onChange={(v) => set('minMcapB', v)} />
               </Field>
@@ -492,7 +554,7 @@ export default function MoversView({
               <thead>
                 <tr className="text-left text-[10px] text-text-secondary border-b border-border">
                   <SortTh k="ticker" sort={sort} onSort={onSort} className="pl-3 sm:pl-2">Stock</SortTh>
-                  <SortTh k="move" sort={sort} onSort={onSort} className="text-right" title={period === 'd1' ? "Change since yesterday's close" : `Change over the last ${periodLabel}, today included`}>
+                  <SortTh k="move" sort={sort} onSort={onSort} className="text-right" title={ext ? 'Last extended-hours trade against the last regular close' : period === 'd1' ? "Change since yesterday's close" : `Change over the last ${periodLabel}, today included`}>
                     {period === 'd1' ? 'Move' : periodLabel}
                   </SortTh>
                   {filters.multi &&
@@ -502,8 +564,8 @@ export default function MoversView({
                       </th>
                     ))}
                   <SortTh k="price" sort={sort} onSort={onSort} className="text-right">Price</SortTh>
-                  <SortTh k="dollar" sort={sort} onSort={onSort} className="text-right hidden sm:table-cell" title="Dollars traded so far today">$ volume</SortTh>
-                  <SortTh k="rvol" sort={sort} onSort={onSort} className="text-right hidden sm:table-cell" title="Today's volume against normal by this time of day">vs normal</SortTh>
+                  <SortTh k="dollar" sort={sort} onSort={onSort} className="text-right hidden sm:table-cell" title={ext ? 'Dollars traded in extended hours since the last close (largest movers only)' : 'Dollars traded so far today'}>$ volume</SortTh>
+                  <SortTh k="rvol" sort={sort} onSort={onSort} className="text-right hidden sm:table-cell" title={ext ? 'When the last extended-hours trade printed (ET)' : "Today's volume against normal by this time of day"}>{ext ? 'Last trade' : 'vs normal'}</SortTh>
                   <SortTh k="liquidity" sort={sort} onSort={onSort} className="hidden sm:table-cell" title="Calls for stocks that are up, puts for stocks that are down">Options</SortTh>
                   <SortTh k="premium" sort={sort} onSort={onSort} className="pr-3 sm:pr-2 text-right hidden sm:table-cell" title="What one at-the-money contract costs for the first expiry 2 weeks to a month out">2-4 wk premium</SortTh>
                 </tr>
@@ -568,7 +630,7 @@ export default function MoversView({
                         <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">{fmtRadarPrice(m.price)}</td>
                         <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap hidden sm:table-cell">{fmtUsdCompact(m.dollar_volume)}</td>
                         <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap hidden sm:table-cell">
-                          {m.rvol !== null ? `${m.rvol.toFixed(1)}×` : '—'}
+                          {ext ? fmtEt(toMs(m.traded_at)) : m.rvol !== null ? `${m.rvol.toFixed(1)}×` : '—'}
                         </td>
                         <td className="px-2 py-2 whitespace-nowrap hidden sm:table-cell">
                           <OptionCell m={m} o={o} />
@@ -580,10 +642,19 @@ export default function MoversView({
                       {isOpen && (
                         <tr className="border-b border-border/60 bg-card/40">
                           <td colSpan={7 + (filters.multi ? multiCols.length : 0)} className="px-3 py-3 space-y-2">
-                            <div className="text-xs text-text-secondary tabular-nums sm:hidden">
-                              {fmtUsdCompact(m.dollar_volume)} traded today
-                              {m.rvol !== null ? ` · ${m.rvol.toFixed(1)}× normal volume` : ''}
-                            </div>
+                            {ext ? (
+                              <div className="text-xs text-text-secondary tabular-nums">
+                                Last trade {fmtEt(toMs(m.traded_at))}
+                                {m.dollar_volume !== null
+                                  ? ` · ${fmtUsdCompact(m.dollar_volume)} traded in extended hours (${fmtCompact(m.day_volume)} shares)`
+                                  : ' · extended-hours volume not read for this stock'}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-text-secondary tabular-nums sm:hidden">
+                                {fmtUsdCompact(m.dollar_volume)} traded today
+                                {m.rvol !== null ? ` · ${m.rvol.toFixed(1)}× normal volume` : ''}
+                              </div>
+                            )}
                             {moveOf(m, 'd5') !== null && (
                               <div className="flex flex-wrap gap-x-3 text-xs text-text-secondary tabular-nums leading-relaxed">
                                 {[
@@ -608,7 +679,7 @@ export default function MoversView({
                               </p>
                             )}
                             <div className="text-xs text-text-secondary tabular-nums">
-                              Yesterday's close {fmtRadarPrice(m.prev_close)}
+                              {ext ? 'Last close' : "Yesterday's close"} {fmtRadarPrice(m.prev_close)}
                               {m.adv_usd !== null ? ` · typically ${fmtUsdCompact(m.adv_usd)} a day` : ''}
                               {m.market_cap !== null ? ` · market cap ${fmtUsdCompact(m.market_cap)}` : ''}
                             </div>
@@ -639,7 +710,9 @@ export default function MoversView({
                               </>
                             ) : (
                               <p className="text-xs text-text-secondary">
-                                Option data for this stock arrives within a few scans (about 40 movers are read per scan).
+                                {ext
+                                  ? 'No option data for this stock yet: about 30 movers are read after each extended-hours scan, and pre-market quotes are often empty until the open.'
+                                  : 'Option data for this stock arrives within a few scans (about 40 movers are read per scan).'}
                               </p>
                             )}
                           </td>

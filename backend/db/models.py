@@ -943,6 +943,9 @@ class RadarRuntime(Base):
     scan_request: Mapped[Optional[dict]] = mapped_column(JSON)
     # Added by migration a8d4e6f2c913: the scan sensitivity levels (radar.config.SENSITIVITY).
     settings: Mapped[Optional[dict]] = mapped_column(JSON)
+    # Added by migration d1f6a3c8e502: the latest extended-hours movers scan (radar/extended.py), pre-market
+    # and after hours, display only.
+    extended: Mapped[Optional[dict]] = mapped_column(JSON)
 
 
 class RadarOptionMetric(Base):

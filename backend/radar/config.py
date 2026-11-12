@@ -116,6 +116,25 @@ MOVERS: dict = {
     "context_ttl_min": 30,         # their catalysts / float / earnings dates are re-read at most this often
 }
 
+# Extended-hours movers (radar/extended.py): plain percentage moves of the last pre-market / after-hours trade
+# against the last regular close. Display only (the Movers view outside the regular session); FMP only.
+EXTENDED: dict = {
+    "interval_s": 600,             # one scan every 10 minutes while the market is in pre-market or after hours
+    "timeout_s": 120,              # hard cap on a scan (worker subprocess timeout), option metrics included
+    "fetch_timeout_s": 15,
+    "workers": 8,
+    "batch": 500,                  # symbols per quote / trade request (the symbols travel in the URL)
+    "cap_min": 2_000_000_000,      # names outside the universe: US stocks of at least this market cap...
+    "price_min": 5.0,              # ...and this price (also the floor for universe names)
+    "min_abs_pct": 2.0,            # smaller moves are not listed
+    "max_abs_pct": 80.0,           # larger ones are bad prints or corporate actions
+    "max_rows_per_side": 60,
+    "volume_rows_per_side": 30,    # the largest movers get their traded volume (one request each)
+    "close_grace_s": 900,          # a quote stamped up to this long after the close is still the closing price
+    "options_per_scan": 30,        # movers whose option metrics are read after a scan (oldest reading first)
+    "options_fresh_min": 45,       # ...skipping the ones read this recently
+}
+
 # Option-chain metrics for radar names (radar/options.py): display and the page's call-option filters only,
 # never read by the engine. Fetched after each scan for the members and warming-up names.
 OPTIONS: dict = {

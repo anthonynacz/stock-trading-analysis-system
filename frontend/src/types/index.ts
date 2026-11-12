@@ -1044,6 +1044,26 @@ export interface RadarMover {
   off_high_20d?: number | null;
   /** Multi-day pattern (a label, not a forecast): see backend/radar/movers.py setup_of. */
   setup?: 'dip_uptrend' | 'falling' | 'stretched' | null;
+  /** Extended-hours movers only: when the last pre-market / after-hours trade printed. */
+  traded_at?: string | null;
+}
+
+/**
+ * The latest extended-hours movers scan (radar/extended.py): the last pre-market or after-hours trade of each
+ * stock against its last regular close. In these rows `day_volume` / `dollar_volume` are what traded in the
+ * window (largest movers only), `rvol` is always null and there is no multi-day context. Display only.
+ */
+export interface RadarExtended {
+  /** pre: before the open of `session`; post: after its close. */
+  phase: 'pre' | 'post';
+  session: string;
+  /** The session whose close the moves are measured from. */
+  ref_day: string;
+  as_of: string;
+  status: 'ok' | 'degraded' | 'error';
+  message?: string;
+  movers: RadarMover[];
+  counts?: { scanned: number; traded: number; with_volume: number };
 }
 
 /** Names the per-sector cap kept off the radar (never members). */
@@ -1284,6 +1304,8 @@ export interface RadarSnapshot extends RadarState {
   /** Option metrics of the members and warming-up names, by ticker (missing until fetched). */
   options?: Record<string, RadarOptionMetrics>;
   scan_request?: RadarScanRequest | null;
+  /** Pre-market / after-hours movers (null until the first extended-hours scan; absent on older backends). */
+  extended?: RadarExtended | null;
 }
 
 /** One stay on the radar that has ended (`GET /api/radar/history`). */

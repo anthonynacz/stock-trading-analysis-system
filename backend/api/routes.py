@@ -4048,12 +4048,14 @@ async def radar_snapshot(
         return {"status": "no_data", "stale": False, "message": _RADAR_NO_DATA_MESSAGE,
                 "scan_request": scan_request}
     # Members, warming-up names and today's exits (positions on them may still be open: IV keeps mattering).
+    extended = await run_in_threadpool(_radar_extended, store)
     tickers = [x.get("ticker") for x in (state.get("members") or []) + (state.get("heating") or [])
                + (state.get("recent_exits") or []) + (state.get("trending") or []) + (state.get("movers") or [])
+               + ((extended or {}).get("movers") or [])
                if isinstance(x, dict) and x.get("ticker")]
     options = await run_in_threadpool(_radar_options, store, tickers)
     return {**state, "stale": radar_is_stale(state, datetime.now(timezone.utc)),
-            "options": _jsonable(options), "scan_request": scan_request}
+            "options": _jsonable(options), "scan_request": scan_request, "extended": extended}
 
 
 def _radar_saved_settings(store) -> dict | None:
@@ -4127,6 +4129,16 @@ def _radar_scan_request(store) -> dict | None:
         return store.get_scan_request()
     except Exception:  # noqa: BLE001
         logger.warning("Radar scan request unreadable", exc_info=True)
+        return None
+
+
+def _radar_extended(store) -> dict | None:
+    """The latest pre-market / after-hours movers scan (radar/extended.py); None when there is none or it
+    cannot be read (an older schema, a DB hiccup): the snapshot must still load."""
+    try:
+        return store.get_extended()
+    except Exception:  # noqa: BLE001
+        logger.warning("Radar extended-hours movers unreadable", exc_info=True)
         return None
 
 
