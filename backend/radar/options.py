@@ -98,13 +98,42 @@ def pick_swing_expiry(expirations: list[int], today: date, lo: int, hi: int) -> 
     return later[0] if later else None
 
 
-def swing_quote(chain: dict | None, spot: float | None, expiry: int, today: date) -> dict | None:
+def _time_value(kind: str, strike: float, spot: float, px: float) -> float:
+    """The part of an option's price that is not intrinsic value, per share."""
+    return px - (max(spot - strike, 0.0) if kind == "call" else max(strike - spot, 0.0))
+
+
+def implausible_swing_sides(sides: dict[str, tuple[float, float] | None], spot: float, dte: int,
+                            params: dict = OPTIONS) -> set[str]:
+    """The sides ({"call" | "put": (strike, price per share)}) whose quote cannot be right, typically a
+    stale quote on a thin contract left over from before a big move (Yahoo, 2026-11-11: a 50-strike put
+    quoted at $28.50 on a $49 stock, 37 days out).
+
+    1. Time value above what `swing_max_iv` (annualised volatility) would give an at-the-money option
+       (0.4 x iv x sqrt(dte / 365) x price), or a price well below intrinsic value.
+    2. Both sides at the same strike breaking put-call parity (call - put = price - strike) by more than
+       `swing_parity_tol` of the stock price: the side with the larger time value is the stale one."""
+    bad: set[str] = set()
+    cap = 0.4 * float(params.get("swing_max_iv", 3.0)) * math.sqrt(max(dte, 1) / 365.0) * spot
+    tol = float(params.get("swing_parity_tol", 0.08)) * spot
+    tv = {k: _time_value(k, v[0], spot, v[1]) for k, v in sides.items() if v}
+    bad.update(k for k, x in tv.items() if x > cap or x < -tol)
+    c, p = sides.get("call"), sides.get("put")
+    if c and p and not bad and c[0] == p[0] and abs((c[1] - p[1]) - (spot - c[0])) > tol:
+        bad.add(max(tv, key=tv.get))
+    return bad
+
+
+def swing_quote(chain: dict | None, spot: float | None, expiry: int, today: date,
+                params: dict = OPTIONS) -> dict | None:
     """What one at-the-money contract of `chain` costs: {"expiry", "dte", "call": {...}, "put": {...}} with
     strike, bid, ask, mid and cost_usd (mid x 100, the ask when there is no bid) per side; a side without a
-    quote is None. None when neither side is quoted."""
+    quote, or with a quote that cannot be right (implausible_swing_sides), is None. None when neither side
+    is left."""
     if not chain or not spot:
         return None
     out: dict = {"expiry": exp_date(expiry).isoformat(), "dte": (exp_date(expiry) - today).days}
+    priced: dict[str, tuple[float, float] | None] = {}
     for kind in ("call", "put"):
         rows = [c for c in chain.get(f"{kind}s") or [] if _num(c.get("strike")) is not None]
         out[kind] = None
@@ -116,8 +145,11 @@ def swing_quote(chain: dict | None, spot: float | None, expiry: int, today: date
         px = mid if mid else ask if ask and ask > 0 else None
         if px is None:
             continue
+        priced[kind] = (float(atm["strike"]), px)
         out[kind] = {"strike": float(atm["strike"]), "bid": _r(bid), "ask": _r(ask), "mid": _r(mid),
                      "cost_usd": _r(px * 100.0, 0)}
+    for kind in implausible_swing_sides(priced, spot, out["dte"], params):
+        out[kind] = None
     return out if out["call"] or out["put"] else None
 
 
@@ -356,7 +388,7 @@ def ticker_metrics(fetch: Fetch, symbol: str, now: float, baseline: dict | None,
             fourth = _get(fetch, symbol, {"date": swing}, timeout)
             chains4 = (fourth or {}).get("options") or []
             by_expiry[swing] = chains4[0] if chains4 else None
-        doc["swing"] = swing_quote(by_expiry[swing], doc["price"], swing, et_date(now))
+        doc["swing"] = swing_quote(by_expiry[swing], doc["price"], swing, et_date(now), params)
     atm = doc.get("atm") or {}
     doc["vega_per_pt_usd"] = _r(vega_per_point(doc.get("price"), atm.get("strike"), doc.get("iv_pct"),
                                                doc.get("dte")), 2)

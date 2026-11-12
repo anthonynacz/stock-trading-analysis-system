@@ -314,6 +314,38 @@ def test_swing_quote_prices_both_sides_and_skips_unquoted_ones():
     assert options.swing_quote(None, 100.0, e, today) is None and options.swing_quote(chain(e), None, e, today) is None
 
 
+def test_swing_quote_drops_quotes_that_cannot_be_right():
+    today, e = today_of(NOW), exp_epoch(NOW, 37)
+    # The live case (AZTA, 2026-11-11): $48.80 stock, 50 call 2.6 / 3.8, 50 put 26.4 / 30.6 (stale).
+    stale_put = chain(e, calls=[call(50, bid=2.6, ask=3.8)], puts=[{"strike": 50.0, "bid": 26.4, "ask": 30.6}])
+    got = options.swing_quote(stale_put, 48.8, e, today)
+    assert got["put"] is None and got["call"]["cost_usd"] == 320.0
+    # Both sides inside the volatility cap but far off put-call parity: the one with more time value goes.
+    off = chain(e, calls=[call(50, bid=2.9, ask=3.1)], puts=[{"strike": 50.0, "bid": 11.8, "ask": 12.2}])
+    got = options.swing_quote(off, 50.0, e, today)
+    assert got["put"] is None and got["call"]["cost_usd"] == 300.0
+    # A consistent pair on a very volatile stock is kept (time value 12% of the price on each side).
+    wild = chain(e, calls=[call(50, bid=5.9, ask=6.1)], puts=[{"strike": 50.0, "bid": 5.9, "ask": 6.1}])
+    got = options.swing_quote(wild, 50.0, e, today)
+    assert got["call"]["cost_usd"] == 600.0 and got["put"]["cost_usd"] == 600.0
+    # Priced well under intrinsic value (stale the other way): dropped, and with it the whole reading.
+    under = chain(e, calls=[call(40, bid=1.0, ask=1.2)], puts=[])
+    assert options.swing_quote(under, 50.0, e, today) is None
+    # In the money by a few dollars with a fair time value: fine.
+    itm = chain(e, calls=[call(45, bid=6.4, ask=6.8)], puts=[{"strike": 45.0, "bid": 1.5, "ask": 1.7}])
+    got = options.swing_quote(itm, 50.0, e, today)
+    assert got["call"]["cost_usd"] == 660.0 and got["put"]["cost_usd"] == 160.0
+
+
+def test_implausible_swing_sides_limits():
+    bad = options.implausible_swing_sides
+    assert bad({"call": (100.0, 5.0), "put": (100.0, 5.0)}, 100.0, 21) == set()
+    assert bad({"call": (100.0, 30.0), "put": None}, 100.0, 21) == {"call"}       # cap: 0.4 * 3 * sqrt(21/365) = 28.8%
+    assert bad({"call": (100.0, 28.0), "put": None}, 100.0, 21) == set()
+    assert bad({"call": (100.0, 5.0), "put": (105.0, 30.0)}, 100.0, 21) == set()   # different strikes: no parity check
+    assert bad({"call": None, "put": None}, 100.0, 21) == set()
+
+
 def test_ticker_metrics_without_expiries():
     y = Yahoo(NOW, by_symbol={"XYZ": {"expirationDates": [], "quote": quote(), "options": []}})
     doc = options.ticker_metrics(y, "XYZ", NOW, None)

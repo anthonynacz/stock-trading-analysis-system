@@ -121,6 +121,10 @@ MOVERS: dict = {
 OPTIONS: dict = {
     "min_dte": 7,                  # the first expiry at least this many calendar days out (skips 0-6 DTE)
     "swing_dte": (14, 31),         # the "swing" premium shown in the Movers view: first expiry 2 weeks to a month out
+    # Sanity limits on that premium (stale Yahoo quotes on thin contracts): time value above what 300%
+    # annualised volatility gives an at-the-money option, or put-call parity off by more than 8% of the price.
+    "swing_max_iv": 3.0,
+    "swing_parity_tol": 0.08,
     "ntm_band": 0.10,              # "near the money": strikes within ±10% of the stock price
     "weekly_window_days": 35,      # >= 4 expiries inside this window counts as weekly options
     "max_tickers": 45,
