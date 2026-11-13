@@ -33,6 +33,8 @@ agenticanalysis/
 - **`backend/api/CLAUDE.md`** — full endpoint reference
 - **`backend/utils/CLAUDE.md`** — FinBERT, data source fallback chains, yfinance sanitization, geopolitical, greeks, IV history
 - **`frontend/CLAUDE.md`** — auth/provider hierarchy, dashboard layout, pages, design system
+- **`backend/radar/CLAUDE.md`** — Momentum Radar working notes: rules for changing it, what was measured, traps
+- **`docs/deploy.md`** — the push-to-deploy workflow, its one-time setup, and what a cloud session needs
 
 ## Deployment
 
@@ -44,12 +46,16 @@ Project lives at `/root/edgeflow` on the server. Git remote is `origin = https:/
 
 ### Deploy workflow
 
-After `git push` from local lands on `origin/main`:
+A push to `main` runs `.github/workflows/deploy.yml`, which has the server run `scripts/deploy.sh`: it pulls
+and rebuilds only the services whose code changed (`backend/` → `backend` + `radar`, `frontend/` → `frontend`).
+The workflow does nothing until its `DEPLOY_*` secrets are set (`docs/deploy.md`). After a deploy, check that
+the server's commit is the one you meant to ship (the run log ends with it, or request `status`).
+
+By hand, on the server:
 ```bash
-ssh root@204.168.198.65
 cd /root/edgeflow
-git pull                                # fast-forwards master from origin/main
-docker compose up -d --build            # rebuilds backend + frontend, restarts
+scripts/deploy.sh            # same as the workflow: pull, rebuild what changed, health check
+scripts/deploy.sh all        # rebuild backend, radar and frontend whatever changed
 ```
 The backend's `entrypoint.sh` runs `alembic upgrade head` before uvicorn starts, so DB migrations apply automatically on container restart — no manual step needed. The frontend Dockerfile is multi-stage and bakes the compiled bundle in at build time, so a rebuild (not just a restart) is required for any frontend change to be visible.
 
@@ -64,6 +70,20 @@ docker compose up -d --build frontend   # Frontend-only rebuild
 ### Single-replica constraint
 APScheduler runs in-process inside the backend container. Multiple backend replicas would cause duplicate pipeline runs and upsert races on shared tables (`recommendations`, `watchlist_daily_snapshot`, etc.). Keep `docker-compose.yml` at one backend instance until the scheduler moves to a dedicated worker (or an external lock, e.g. a Postgres advisory lock keyed on phase, is introduced).
 
+## Working rules
+
+- **This checkout can be shared by several sessions.** Before committing, run `git status -sb`: confirm the
+  branch, stage only the files you changed (never `git add -A`), and use a separate worktree when someone
+  else's uncommitted work touches the same files. Local `master` tracks `origin/main`: push `master:main`.
+- **The repo is public.** No keys, tokens, passwords or `.env` content in code, docs, commit messages or
+  logs. Mask a secret before printing anything that may contain one.
+- **Production data is read-only** unless the user asks for a write: `SELECT`s and the app's own API. Deploy
+  when the user says so, not as a side effect of finishing a change.
+- **Prove it before calling it done:** tests for the change, then the real page or a dry run on live data;
+  after a deploy, the deployed commit and the feature on the live site.
+- **Nothing here is financial advice.** Entry verdicts and setups are rule checklists and measured patterns,
+  and the UI says so.
+
 ## Momentum Radar (separate `radar` container)
 
 A 5-minute racing-stocks scanner, `backend/radar/`. It was ported from the daily-market-analysis repo; `backend/radar/PORT_SPEC.md` is binding and `backend/radar/docs/` holds the design docs.
@@ -76,6 +96,7 @@ A 5-minute racing-stocks scanner, `backend/radar/`. It was ported from the daily
 - **Trending today (2026-10-15):** `radar/trend.py`, run by the engine every slot as display-only state (`st["trend"]`, snapshot `trending`); never touches members (replay scorecard unchanged). Rule and backtest: `backend/radar/docs/trend-day.md`. Listed names stay in Stage A and in the options/catalyst refresh.
 - **IV visibility + market context (2026-10-15):** `radar/options.py` adds the ~30-day IV (term ratio), the day's first IV reading and the change since, vega $/IV point per contract, and `iv_risk` (crushing / high / elevated / normal with plain reasons). `radar/context.py` merges FMP catalysts (news, press releases, 8-K, analyst actions; FMP news times are US/Eastern), exact earnings dates with bmo/amc, and free float into the same metrics row. Today's exits stay in the options refresh. The FMP key is never logged (httpx logging is turned down, errors masked).
 - **Put side + entry verdict (2026-10-16):** `radar/options.py` stores both sides of the chosen expiry under `sides.call` / `sides.put` (`side_metrics`: ATM quote, delta, Black-Scholes time decay $/day per contract, `spread_move_pct` = stock move that only pays the spread, near-the-money OI/volume, liquidity grade); the legacy call fields stay. The frontend trades up moves with calls and down moves with puts (`optionSide.ts`), and `verdict.ts` gives each member / heating / trending name a Favorable / Caution / Avoid verdict with one plain sentence (spread and liquidity first, then IV crush / earnings / rich IV, momentum state, last hour, DTE <= 3). Rules-based checklist, labelled as not advice; thresholds follow the options P&L backtest (spread <= 10% ~ break-even, > 15% loses).
+- **Movers view (2026-11-11):** `radar/movers.py`, a display-only list of plain percentage moves (today and over 3 / 5 / 10 / 20 sessions) with multi-day setups, written into the snapshot as `movers`; their option metrics ride along in `radar/options.py`, including `swing`, the cost of an at-the-money contract 2 weeks to a month out. Details and the study behind the setups: `backend/radar/CLAUDE.md`.
 - **Option metrics:** after each successful scan the worker runs `python -m radar.options` (subprocess) for members and warming-up names: Yahoo v7 option chain of the first expiry ≥ 7 DTE, stored one row per ticker in `radar_option_metrics` (pruned after 7 days). Display/filters only; the engine never reads it.
 
 ## Maintaining these files

@@ -1,0 +1,47 @@
+# Deploys production when main moves: the server pulls and rebuilds what changed (scripts/deploy.sh).
+# The deploy key can only run that script (SSH forced command); setup is in docs/deploy.md.
+# Until the DEPLOY_* secrets exist the job passes without doing anything.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      services:
+        description: What to rebuild (auto = what the new commits touched; status changes nothing)
+        type: choice
+        default: auto
+        options: [auto, all, backend, radar, frontend, status]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Deploy over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          REQUEST: ${{ github.event.inputs.services || 'auto' }}
+        run: |
+          if [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_KNOWN_HOSTS" ]; then
+            echo "::notice::Deploy secrets are not set: nothing deployed (see docs/deploy.md)."
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=20 -o ServerAliveInterval=15 \
+              "${DEPLOY_USER:-root}@${DEPLOY_HOST}" "$REQUEST"
