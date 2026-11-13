@@ -5,7 +5,7 @@
 # arrives in SSH_ORIGINAL_COMMAND, or by hand on the server:  scripts/deploy.sh [auto|all|backend|radar|frontend|status]
 #
 #   auto      rebuild what the pulled commits touched (backend/ -> backend + radar, frontend/ -> frontend,
-#             docker-compose.yml -> everything); nothing to pull -> nothing to do
+#             docker-compose.yml -> everything; *.md files never count); nothing to pull -> nothing to do
 #   all       rebuild backend, radar and frontend whatever changed
 #   backend   backend + radar (they share one image)      radar / frontend   that service only
 #   status    print the deployed commit and the containers; changes nothing
@@ -43,7 +43,8 @@ main() {
   # An untracked file in the way (a stray stub left by a container mount) fails here, loudly: remove it and re-run.
   git pull -q --ff-only
   new=$(git rev-parse HEAD)
-  changed=$(git diff --name-only "$old" "$new")
+  # Notes and docs (*.md) rebuild nothing, wherever they live.
+  changed=$(git diff --name-only "$old" "$new" | grep -v '\.md$' || true)
 
   local -a services=()
   case "$want" in

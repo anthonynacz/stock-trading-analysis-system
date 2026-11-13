@@ -55,7 +55,7 @@ Run workflow → `status`. It prints the deployed commit and the containers and 
 - **By hand on the server:** `scripts/deploy.sh [request]`.
 
 What `auto` rebuilds: `backend/` changes → `backend` and `radar` (one image); `frontend/` changes →
-`frontend`; `docker-compose.yml` → all three; anything else (docs, this file) → nothing.
+`frontend`; `docker-compose.yml` → all three; anything else, and any `.md` file wherever it lives → nothing.
 
 ## When it fails
 
