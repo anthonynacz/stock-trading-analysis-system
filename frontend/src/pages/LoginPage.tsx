@@ -2,21 +2,21 @@ import { useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate, type Location } from 'react-router-dom';
 import api, { getApiErrorMessage } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
+import { ErrorBox } from '../components/ui/feedback';
+import { BRAND } from '../utils/theme';
 
 /**
- * Minimal login surface. Two states:
- *
- * 1. LEGACY_MODE backend → no login required; this page just shows a notice
- *    and redirects to dashboard.
- * 2. JWT mode + DEV_TOKEN_ENABLED → mints a short-lived HS256 dev token
- *    via POST /api/dev/token. This is a temporary scaffold; the real
- *    Supabase / Clerk / Auth0 flow replaces this once a provider is picked.
+ * Owner sign-in: username and password checked by POST /api/auth/login against the
+ * values kept in the server's .env. The token it returns is stored by AuthContext.
+ * A real identity provider would replace the form body and keep the
+ * setToken -> refresh -> navigate flow.
  */
 export default function LoginPage() {
   const { user, token, legacyMode, setToken, refresh } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,78 +24,84 @@ export default function LoginPage() {
   const fromLoc = (location.state as { from?: Location } | null)?.from;
   const from = fromLoc ? `${fromLoc.pathname}${fromLoc.search}${fromLoc.hash}` : '/';
 
-  // Bounce only when truly signed in (real token). The LEGACY_MODE-resolved
-  // legacy admin still lets the user reach this page to switch identity.
+  // Bounce only when truly signed in (a token is held). In legacy mode the page stays reachable.
   if (user && token) {
     return <Navigate to={from} replace />;
   }
 
-  const handleDevLogin = async (e: React.FormEvent) => {
+  const ready = username.trim() !== '' && password !== '';
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    if (!ready) return;
     setSubmitting(true);
     setError(null);
     try {
-      const res = await api.post<{ access_token: string }>('/dev/token', {
-        email: email.trim(),
+      const res = await api.post<{ access_token: string }>('/auth/login', {
+        username: username.trim(),
+        password,
       });
       setToken(res.data.access_token);
       await refresh();
       navigate(from, { replace: true });
     } catch (e) {
+      setPassword('');
       setError(getApiErrorMessage(e, 'Sign-in failed'));
     } finally {
       setSubmitting(false);
     }
   };
 
+  const inputClass =
+    'mt-1 w-full bg-page border border-border rounded px-3 py-2 text-sm text-text-primary focus:border-accent-500';
+  const labelClass = 'text-[11px] uppercase tracking-wider text-text-secondary';
+
   return (
     <div className="min-h-screen bg-page text-text-primary flex items-center justify-center px-4">
       <div className="w-full max-w-sm bg-card border border-border rounded-lg p-6 space-y-5">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight mb-1">Sign in to Vela</h1>
-          <p className="text-xs text-text-secondary leading-snug">
-            Auth provider integration (Supabase / Clerk / Auth0) lands in a follow-up.
-            This page is a dev-token fallback for local testing; ask the backend to
-            enable <code className="font-mono text-text-primary">DEV_TOKEN_ENABLED</code>.
-          </p>
-        </div>
+        <h1 className="text-xl font-bold tracking-tight">Sign in to {BRAND}</h1>
 
-        <form onSubmit={handleDevLogin} className="space-y-3">
+        <form onSubmit={handleLogin} className="space-y-3">
           <label className="block">
-            <span className="text-[11px] uppercase tracking-wider text-text-secondary">Email</span>
+            <span className={labelClass}>Username</span>
             <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              autoComplete="email"
+              type="text"
+              name="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              autoFocus
               required
-              className="mt-1 w-full bg-page border border-border rounded px-3 py-2 text-sm text-text-primary focus:border-accent-500"
+              className={inputClass}
+            />
+          </label>
+          <label className="block">
+            <span className={labelClass}>Password</span>
+            <input
+              type="password"
+              name="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+              className={inputClass}
             />
           </label>
 
-          {error && (
-            <p className="text-xs text-red-400 bg-red-900/20 border border-red-900/40 rounded px-2 py-1.5">
-              {error}
-            </p>
-          )}
+          {error && <ErrorBox message={error} size="xs" />}
 
-          <button
-            type="submit"
-            disabled={submitting || !email.trim()}
-            className="w-full py-2 rounded-md text-sm font-semibold bg-accent-600 hover:bg-accent-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {submitting ? 'Signing in…' : 'Continue with dev token'}
+          <button type="submit" disabled={submitting || !ready} className="btn-primary w-full justify-center py-2 text-sm">
+            {submitting ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
 
         {legacyMode && (
           <p className="text-[11px] text-amber-300 bg-amber-900/15 border border-amber-500/25 rounded px-2.5 py-2">
-            <span className="font-semibold">Legacy mode is on.</span> If you don't sign in
-            here, the <Link to="/" className="text-accent-400 hover:underline">dashboard</Link> opens
-            as the legacy admin. Sign in above to switch to a real user (e.g.{' '}
-            <code className="font-mono">anthony@vela.io</code>).
+            <span className="font-semibold">The site is open.</span> The server runs in legacy mode,
+            so the <Link to="/" className="text-accent-400 hover:underline">dashboard</Link> opens
+            without signing in.
           </p>
         )}
       </div>

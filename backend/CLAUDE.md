@@ -61,11 +61,13 @@ FMP_API_KEY=         # Financial Modeling Prep (Starter $22/mo, 300 req/min) —
 DATABASE_URL=postgresql+asyncpg://edgeflow:<password>@db:5432/edgeflow  # Docker internal
 
 # Auth / multi-tenancy
-LEGACY_MODE=true                      # default; bypasses JWT, returns legacy admin user
+LEGACY_MODE=true                      # default = open site; false closes it behind the site login (auth/CLAUDE.md)
+SITE_USERNAME=                        # owner sign-in, server .env only
+SITE_PASSWORD=
 PUBLIC_APP_URL=                       # optional; portal base URL for deep links in Discord alerts (e.g. http://204.168.198.65:3000)
 LEGACY_USER_EMAIL=anthonynacouzy@gmail.com  # owner of all pre-retrofit rows
 JWT_JWKS_URL=                         # OIDC JWKS endpoint (Supabase / Clerk / Auth0)
-JWT_HS256_SECRET=                     # HS256 shared secret (dev / simple flows)
+JWT_HS256_SECRET=                     # HS256 secret; signs the site-login tokens (long and random, .env only)
 JWT_ALGORITHMS=RS256,HS256            # comma-separated; matches the verifier's path
 JWT_AUDIENCE=                         # optional aud claim check
 JWT_ISSUER=                           # optional iss claim check

@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     JWT_AUDIENCE: str = ""
     JWT_ISSUER: str = ""
 
+    # Site login (auth/site_login.py): the one owner account. With LEGACY_MODE off, every request
+    # needs a token from POST /api/auth/login. Set both, plus JWT_HS256_SECRET, in the server's .env.
+    SITE_USERNAME: str = ""
+    SITE_PASSWORD: str = ""
+
     # Enables POST /api/dev/token (mints a short-lived HS256 JWT). Dev only.
     DEV_TOKEN_ENABLED: bool = False
 

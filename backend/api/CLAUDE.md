@@ -5,6 +5,7 @@ All routes in `routes.py`. User-owned endpoints (positions, research, deep-optio
 ```
 GET  /api/me                           # Current user (id, email, role, provider, legacy_mode)
 GET  /api/me/entitlements              # Tier + feature flags + monthly quotas + credit balances
+POST /api/auth/login                   # Owner sign-in { username, password } -> 30-day bearer token (auth/CLAUDE.md); the only open route when LEGACY_MODE is off
 POST /api/dev/token                    # Mint dev HS256 JWT { email } (gated by DEV_TOKEN_ENABLED)
 GET  /api/watchlist                    # Active watchlist with status tags; ?date= for historical
 GET  /api/watchlist/history            # Historical snapshots; ?ticker=&days= (no portal consumer)

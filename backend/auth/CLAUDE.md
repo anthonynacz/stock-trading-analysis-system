@@ -2,7 +2,22 @@
 
 ## Multi-tenancy & Auth
 
-**`LEGACY_MODE` (default `True`).** Bypasses all JWT verification; every authenticated route receives the legacy admin user (`role=ADMIN`, email from `LEGACY_USER_EMAIL`). Frontend works without a login screen. **This is the current default** — flip to `False` only when frontend auth integration is wired to a real provider.
+**`LEGACY_MODE` (default `True`) means the site is open.** Every request resolves to the legacy admin user (`role=ADMIN`, email from `LEGACY_USER_EMAIL`) with no login. Fine for local development; on a public server set it to `false`.
+
+**Site login (`backend/auth/site_login.py`), the way to close the site.** One owner account whose username and password live only in the server's `.env`:
+```
+LEGACY_MODE=false
+SITE_USERNAME=<name>
+SITE_PASSWORD=<long password>
+JWT_HS256_SECRET=<48+ random characters>   # python -c "import secrets; print(secrets.token_urlsafe(48))"
+DEV_TOKEN_ENABLED=false
+```
+- `POST /api/auth/login {username, password}` returns a 30-day HS256 token (`sub = site-owner`). `get_current_user` maps that token to the legacy admin, so every existing row stays the owner's and no user row is created.
+- **The gate:** with `LEGACY_MODE` off, the `site_gate` HTTP middleware (registered in `main.py`) answers 401 to every request without a valid token, including routes that declare no auth dependency, `/docs` and `/`. Only `/api/auth/login` is open. A new public route (a webhook) must be added to `OPEN_PATHS`.
+- Failed sign-ins: 8 per client address per 15 minutes, then 429 (in memory; requests through the frontend's nginx share one address).
+- Changing `JWT_HS256_SECRET` signs everyone out. Changing the password does not revoke tokens already issued.
+- `docker-compose.yml` holds no auth values: they come from `.env`. Missing values leave the defaults, i.e. an open site.
+- The site is served over plain HTTP, so the password and token cross the network unencrypted until TLS is added.
 
 **Provider-agnostic JWT verifier** (`backend/auth/middleware.py`). Configure ONE of:
 - `JWT_JWKS_URL` — for OIDC providers (Supabase Auth / Clerk / Auth0). Verifier fetches the JWKS, validates signature + issuer + audience.
@@ -42,4 +57,4 @@ Service: `backend/services/entitlements.py`. The SaaS gatekeeper. Every gated ro
 
 ## Maintaining this file
 
-Update this file when LEGACY_MODE behavior changes, a new JWT provider gets wired in, tier definitions/quotas change, new features are added to the gated list, or new error semantics (`QuotaExceeded` / `FeatureLocked`) appear. Full rules in the root `CLAUDE.md` § Maintaining these files. Surface what you changed in your reply.
+Update this file when LEGACY_MODE or site-login behavior changes, a new JWT provider gets wired in, tier definitions/quotas change, new features are added to the gated list, or new error semantics (`QuotaExceeded` / `FeatureLocked`) appear. Full rules in the root `CLAUDE.md` § Maintaining these files. Surface what you changed in your reply.

@@ -1,12 +1,13 @@
 """EdgeFlow API routes."""
 
+import asyncio
 import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from io import BytesIO
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import Date, cast, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -109,7 +110,7 @@ router = APIRouter(prefix="/api")
 
 # ── Auth (current user, dev token) ──────────────────────────────────────────
 
-from auth import get_current_user, mint_dev_token  # noqa: E402
+from auth import get_current_user, mint_dev_token, site_login  # noqa: E402
 from db.models import User  # noqa: E402
 from config import settings  # noqa: E402
 
@@ -223,6 +224,27 @@ async def update_my_preferences(
     pref = await ensure_preferences(db, user)
     pref = await validate_and_merge(db, user, payload or {}, pref)
     return {"preferences": serialize_preferences(pref)}
+
+
+@router.post("/auth/login")
+async def site_login_route(payload: dict, request: Request):
+    """Owner sign-in with the username and password kept in the server's .env. Answers with a
+    bearer token that resolves to the legacy admin."""
+    if not site_login.configured():
+        raise HTTPException(status_code=503, detail="Sign-in is not configured on the server")
+    client = request.client.host if request.client else "unknown"
+    if site_login.throttle.blocked(client):
+        raise HTTPException(status_code=429, detail="Too many failed sign-ins. Try again in 15 minutes.")
+    username = str((payload or {}).get("username") or "")
+    password = str((payload or {}).get("password") or "")
+    if not site_login.credentials_ok(username, password):
+        site_login.throttle.fail(client)
+        logger.warning("Failed sign-in from %s", client)
+        await asyncio.sleep(0.5)
+        raise HTTPException(status_code=401, detail="Wrong username or password")
+    site_login.throttle.clear(client)
+    token, expires_in = site_login.mint_site_token()
+    return {"access_token": token, "token_type": "Bearer", "expires_in": expires_in}
 
 
 @router.post("/dev/token")

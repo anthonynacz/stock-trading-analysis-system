@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router
+from auth.site_login import configured as site_login_configured, site_gate
+from config import settings
 from db.init_db import init_db
 from services.scheduler import start_scheduler, shutdown_scheduler
 
@@ -19,6 +21,11 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not settings.LEGACY_MODE and not site_login_configured() and not settings.JWT_JWKS_URL:
+        logging.getLogger(__name__).warning(
+            "LEGACY_MODE is off but no sign-in is configured (SITE_USERNAME, SITE_PASSWORD, "
+            "JWT_HS256_SECRET): every request will be refused"
+        )
     await init_db()
     # Pre-load FinBERT in a thread so it's ready before the first pipeline run
     import asyncio
@@ -34,6 +41,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# Registered before CORS so CORS stays outermost and a 401 from the gate still carries its headers.
+app.middleware("http")(site_gate)
 
 app.add_middleware(
     CORSMiddleware,

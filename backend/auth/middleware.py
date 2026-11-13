@@ -183,6 +183,18 @@ async def _user_from_claims(db: AsyncSession, claims: dict) -> User:
     return user
 
 
+async def _user_from_token(db: AsyncSession, token: str) -> User:
+    """Verify a bearer token and resolve its user. A site-login token (auth/site_login.py) is the
+    owner signing in with the master password: it resolves to the legacy admin. Such a token only
+    verifies on the HS256 path, so an outside identity provider cannot issue one."""
+    from auth.site_login import SITE_SUBJECT
+
+    claims = _verify_jwt(token)
+    if claims.get("sub") == SITE_SUBJECT and not settings.JWT_JWKS_URL:
+        return await _legacy_user(db)
+    return await _user_from_claims(db, claims)
+
+
 # ── FastAPI dependencies ────────────────────────────────────────────────────
 
 async def get_current_user(
@@ -199,8 +211,7 @@ async def get_current_user(
       3. Otherwise, raise 401.
     """
     if credentials is not None and credentials.credentials:
-        claims = _verify_jwt(credentials.credentials)
-        return await _user_from_claims(db, claims)
+        return await _user_from_token(db, credentials.credentials)
 
     if settings.LEGACY_MODE:
         return await _legacy_user(db)
@@ -220,7 +231,6 @@ async def get_optional_user(
     if credentials is None or not credentials.credentials:
         return None
     try:
-        claims = _verify_jwt(credentials.credentials)
-        return await _user_from_claims(db, claims)
+        return await _user_from_token(db, credentials.credentials)
     except HTTPException:
         return None
