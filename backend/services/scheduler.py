@@ -514,6 +514,21 @@ def start_scheduler() -> None:
         day_of_week="fri", hour=17, minute=30, id="weekly_multibagger_scan",
     )
 
+    # Quant layer (backend/quant/, display only), each job a subprocess with a timeout, logged as
+    # quant_<job> in pipeline_run_log; NYSE holidays skipped (services/quant_runner.py). The scheduler's
+    # timezone is US/Eastern, so these hours are ET whatever the container's clock says.
+    # Chains at 15:40 ET: Yahoo option quotes have bid/ask from ~09:46 and are empty after hours.
+    from services.quant_runner import run_quant_close, run_quant_job
+    scheduler.add_job(
+        run_quant_job, "cron", args=["chains"],
+        hour=15, minute=40, day_of_week=weekdays, id="quant_chains",
+    )
+    # Bars, then the forecast, after the close.
+    scheduler.add_job(
+        run_quant_close, "cron",
+        hour=17, minute=5, day_of_week=weekdays, id="quant_close",
+    )
+
     scheduler.start()
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
 

@@ -22,6 +22,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -1161,3 +1162,107 @@ class RadarTableMetric(Base):
     archived_rows: Mapped[Optional[int]] = mapped_column(BigInteger)
     purged_rows: Mapped[Optional[int]] = mapped_column(BigInteger)
     rows_after: Mapped[Optional[int]] = mapped_column(BigInteger)
+
+
+# ── Quant layer (backend/quant/, display only) ──────────────────────────────
+# Written only by quant/store.py. Nothing here feeds conviction scores, the radar engine or any verdict.
+
+_QUANT_JSON = JSON().with_variant(JSONB(), "postgresql")
+
+
+class QuantDailyBar(Base):
+    """One completed daily session of one ticker. OHLC and close are split-adjusted as the vendor sent them
+    on the last fetch; adj_close also carries dividends. A split or dividend re-scales the vendor's history,
+    so quant/bars.py re-fetches a ticker whole when re-read bars no longer match the stored ones."""
+
+    __tablename__ = "quant_daily_bars"
+    __table_args__ = (
+        Index("ix_quant_daily_bars_date", "bar_date"),
+    )
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    bar_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    open: Mapped[float] = mapped_column(Float, nullable=False)
+    high: Mapped[float] = mapped_column(Float, nullable=False)
+    low: Mapped[float] = mapped_column(Float, nullable=False)
+    close: Mapped[float] = mapped_column(Float, nullable=False)
+    adj_close: Mapped[Optional[float]] = mapped_column(Float)
+    volume: Mapped[Optional[int]] = mapped_column(BigInteger)
+    source: Mapped[str] = mapped_column(String(8), nullable=False)  # fmp, yahoo
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class QuantChainSnapshot(Base):
+    """Per-strike option quotes of one expiry, taken once a session (~15:40 ET) because they cannot be bought
+    back later. `contracts` is columnar: {"strike": [...], "side": ["C"|"P", ...], "bid", "ask", "last", "iv",
+    "volume", "oi"} (parallel arrays, one entry per contract). atm_iv / forward are derived at write time
+    (put-call parity forward, Black-76 ATM IV; quant/iv.py)."""
+
+    __tablename__ = "quant_chain_snapshots"
+    __table_args__ = (
+        Index("ix_quant_chain_snapshots_date", "snapshot_date"),
+    )
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    snapshot_date: Mapped[date] = mapped_column(Date, primary_key=True)    # ET session date
+    expiry: Mapped[date] = mapped_column(Date, primary_key=True)
+    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    underlying_price: Mapped[Optional[float]] = mapped_column(Float)
+    dte: Mapped[int] = mapped_column(Integer, nullable=False)
+    n_contracts: Mapped[int] = mapped_column(Integer, nullable=False)
+    atm_iv: Mapped[Optional[float]] = mapped_column(Float)
+    forward: Mapped[Optional[float]] = mapped_column(Float)
+    iv_method: Mapped[Optional[str]] = mapped_column(String(20))
+    earnings_date: Mapped[Optional[date]] = mapped_column(Date)   # Yahoo quote's next earnings date (no timing)
+    contracts: Mapped[dict] = mapped_column(_QUANT_JSON, nullable=False)
+
+
+class QuantModelRun(Base):
+    """Every fit and evaluation of a quant model, so the number of things tried is on record."""
+
+    __tablename__ = "quant_model_runs"
+    __table_args__ = (
+        Index("ix_quant_model_runs_kind_created", "kind", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)     # fit, evaluation
+    model: Mapped[str] = mapped_column(String(40), nullable=False)
+    version: Mapped[str] = mapped_column(String(40), nullable=False)
+    params: Mapped[Optional[dict]] = mapped_column(_QUANT_JSON)
+    window_start: Mapped[Optional[date]] = mapped_column(Date)
+    window_end: Mapped[Optional[date]] = mapped_column(Date)
+    n_obs: Mapped[Optional[int]] = mapped_column(Integer)
+    n_tickers: Mapped[Optional[int]] = mapped_column(Integer)
+    metrics: Mapped[Optional[dict]] = mapped_column(_QUANT_JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class QuantVolForecast(Base):
+    """A volatility forecast for one ticker at the close of `as_of_date`, with the ~30-day implied vol it is
+    compared with and the relative reading (quant/reading.py). Display only."""
+
+    __tablename__ = "quant_vol_forecasts"
+    __table_args__ = (
+        Index("ix_quant_vol_forecasts_date", "as_of_date"),
+    )
+
+    ticker: Mapped[str] = mapped_column(String(16), primary_key=True)
+    as_of_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    model_version: Mapped[str] = mapped_column(String(40), primary_key=True)
+    horizon: Mapped[int] = mapped_column(Integer, primary_key=True)       # trading days
+    price: Mapped[Optional[float]] = mapped_column(Float)
+    forecast_vol: Mapped[float] = mapped_column(Float, nullable=False)    # annualised
+    realized_vol_21d: Mapped[Optional[float]] = mapped_column(Float)      # annualised, same estimator
+    implied_vol_30d: Mapped[Optional[float]] = mapped_column(Float)
+    iv_source: Mapped[Optional[str]] = mapped_column(String(24))          # chain_cm30, radar_iv30, options_snapshot_atm
+    iv_detail: Mapped[Optional[dict]] = mapped_column(_QUANT_JSON)
+    iv_to_forecast: Mapped[Optional[float]] = mapped_column(Float)
+    ratio_pctl: Mapped[Optional[float]] = mapped_column(Float)
+    reading: Mapped[str] = mapped_column(String(24), nullable=False)
+    reading_basis: Mapped[Optional[str]] = mapped_column(String(24))
+    earnings_in_horizon: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    earnings_date: Mapped[Optional[date]] = mapped_column(Date)
+    flags: Mapped[Optional[list]] = mapped_column(_QUANT_JSON)
+    model_run_id: Mapped[Optional[int]] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

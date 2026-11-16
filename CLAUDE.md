@@ -34,6 +34,7 @@ agenticanalysis/
 - **`backend/utils/CLAUDE.md`** — FinBERT, data source fallback chains, yfinance sanitization, geopolitical, greeks, IV history
 - **`frontend/CLAUDE.md`** — auth/provider hierarchy, dashboard layout, pages, design system
 - **`backend/radar/CLAUDE.md`** — Momentum Radar working notes: rules for changing it, what was measured, traps
+- **`backend/quant/CLAUDE.md`** — Quant layer: volatility forecast vs implied vol, what was measured, traps
 - **`docs/deploy.md`** — the push-to-deploy workflow, its one-time setup, and what a cloud session needs
 
 ## Deployment
@@ -98,6 +99,15 @@ A 5-minute racing-stocks scanner, `backend/radar/`. It was ported from the daily
 - **Put side + entry verdict (2026-10-16):** `radar/options.py` stores both sides of the chosen expiry under `sides.call` / `sides.put` (`side_metrics`: ATM quote, delta, Black-Scholes time decay $/day per contract, `spread_move_pct` = stock move that only pays the spread, near-the-money OI/volume, liquidity grade); the legacy call fields stay. The frontend trades up moves with calls and down moves with puts (`optionSide.ts`), and `verdict.ts` gives each member / heating / trending name a Favorable / Caution / Avoid verdict with one plain sentence (spread and liquidity first, then IV crush / earnings / rich IV, momentum state, last hour, DTE <= 3). Rules-based checklist, labelled as not advice; thresholds follow the options P&L backtest (spread <= 10% ~ break-even, > 15% loses).
 - **Movers view (2026-11-11):** `radar/movers.py`, a display-only list of plain percentage moves (today and over 3 / 5 / 10 / 20 sessions) with multi-day setups, written into the snapshot as `movers`; their option metrics ride along in `radar/options.py`, including `swing`, the cost of an at-the-money contract 2 weeks to a month out. Details and the study behind the setups: `backend/radar/CLAUDE.md`.
 - **Option metrics:** after each successful scan the worker runs `python -m radar.options` (subprocess) for members and warming-up names: Yahoo v7 option chain of the first expiry ≥ 7 DTE, stored one row per ticker in `radar_option_metrics` (pruned after 7 days). Display/filters only; the engine never reads it.
+
+## Quant layer (`backend/quant/`, display only)
+
+Daily bars, per-strike option chain snapshots, and a HAR volatility forecast compared with ~30-day implied vol
+("options rich / fair / cheap", relative to a reference distribution, not advice). Writes only `quant_*`
+tables; never feeds conviction, radar or verdicts. Jobs run as subprocesses from the backend's APScheduler
+(chains 15:40 ET, bars + forecast 17:05 ET). Backfill + evaluation, on the server:
+`docker compose exec backend sh -c "python -m quant.run bars && python -m quant.evaluate && python -m quant.run forecast"`.
+Rules and measurements: `backend/quant/CLAUDE.md`.
 
 ## Maintaining these files
 

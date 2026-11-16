@@ -125,6 +125,10 @@ Separate universe + separate signal stack in `services/multibagger_scanner.py`, 
 - **Engine and parameters:** a deterministic state machine; `radar/config.py` PARAMS. Changing a signal parameter means bumping `params_version`, and the Knowledge RadarTab mirrors the values.
 - **Alerts:** after each tick the worker calls `services.alerts.dispatch_radar_entries()` for ENTER events past `radar_runtime.alert_cursor`. The dedup key is `radar_entry:{event_id}`, the tier is the same as news_spike, and the periodic alerts scan never sends these.
 
+## Quant jobs (display only)
+
+`services/quant_runner.py` runs `python -m quant.run <job>` as a subprocess with a timeout (`quant.config.JOB_TIMEOUT_S`), logged as phase `quant_<job>` in `pipeline_run_log` (meta `result`), one run per job at a time. Cron (ET): `quant_chains` 15:40 weekdays (skipped unless the regular session is open, so early-close days skip it), `quant_close` 17:05 weekdays (bars, then forecast). Scheduled runs skip NYSE holidays; `POST /api/quant/run/{job}` skips no check. Model and rules: `backend/quant/CLAUDE.md`.
+
 ## Sector Universe
 
 8 sectors, ~195 names in `universe_stocks`: the hidden candidate / sector dictionary (no UI page since 2026-10-23; the `/api/universe` endpoints remain). Besides rotation and rotate-out replacements it maps ticker → company for news relevance and ticker → sector for geopolitical signals, rec sector labels, the news industry filter and report names. Seeded from `config.SECTORS` on first init. Active watchlist is max 60 (12 per sector). Sectors: AI/Semiconductors, Fintech/Payments, Energy/Commodities, Healthcare/Biotech, Consumer/Cloud/Enterprise, Industrials/Defense, Power/Utilities/Nuclear, Communications/Media.

@@ -8,6 +8,7 @@ pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
 yfinance>=0.2.40
 httpx>=0.28.0
+numpy>=1.26
 aiohttp>=3.11.0
 beautifulsoup4>=4.12.0
 pytz>=2024.1

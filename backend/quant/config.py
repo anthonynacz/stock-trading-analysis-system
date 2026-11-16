@@ -66,8 +66,8 @@ ESTIMATOR = {
 HAR = {
     "horizon": 21,               # target: mean daily variance over the next 21 sessions
     "lags": (1, 5, 21),          # daily / weekly / monthly averages of the daily variance
-    # Pooled (one regression across tickers) or per-ticker. Decided by measurement (quant/CLAUDE.md): pooled
-    # had the lower out-of-sample QLIKE in the 2026-11-16 walk-forward.
+    # Pooled (one regression across tickers) or per-ticker. Decided by measurement (quant/CLAUDE.md): pooled had
+    # the lower out-of-sample QLIKE overall on 2026-11-16 (per-ticker was better in calm years, broke down in 2020).
     "pooled": True,
     "min_obs_ticker": 500,       # per-ticker fit needs this many complete samples, else pooled is used
     "min_bars_forecast": 63,     # a ticker with fewer valid bars gets no forecast

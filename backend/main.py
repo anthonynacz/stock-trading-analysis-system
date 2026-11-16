@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.quant_routes import router as quant_router
 from api.routes import router
 from db.init_db import init_db
 from services.scheduler import start_scheduler, shutdown_scheduler
@@ -44,6 +45,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(quant_router)
 
 
 @app.get("/")

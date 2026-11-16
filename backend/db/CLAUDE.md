@@ -14,6 +14,10 @@ PostgreSQL 16. `db/models.py` is the source of truth; Alembic owns schema migrat
 - **Writers:** `radar/store.py` and `radar/housekeeping.py` only.
 - **Migration:** `d6e2a4c8b1f9`.
 
+**Quant** (shared, no `user_id`, display only): `quant_daily_bars` (PK ticker+date), `quant_chain_snapshots` (PK ticker+ET date+expiry, columnar JSONB `contracts`), `quant_model_runs` (every fit / evaluation), `quant_vol_forecasts` (PK ticker+as_of+model_version+horizon).
+- **Writer:** `quant/store.py` only. JSON columns are JSONB on Postgres (`JSON().with_variant`), JSON on SQLite tests.
+- **Migration:** `e4a7c1d9b235` (idempotent `CREATE TABLE IF NOT EXISTS`, like the radar ones).
+
 ## Alembic Workflow
 
 Container's `entrypoint.sh` runs `alembic upgrade head` before uvicorn starts, so the DB is always at the latest revision when the app boots. Migrations live in `backend/alembic/versions/`. The baseline (`5de04647a468_baseline_schema.py`) delegates to `Base.metadata.create_all` — subsequent migrations are autogen diffs against `db/models.py`.

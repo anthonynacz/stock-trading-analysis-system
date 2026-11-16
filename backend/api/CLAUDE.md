@@ -79,6 +79,12 @@ POST /api/charts/query                 # Run chart query — { dataset, spec } �
 - `GET /api/radar/events?days=&ticker=`, `GET /api/radar/ticker/{ticker}?session=`, `GET /api/radar/health`.
 - `POST /api/radar/housekeeping?mode=dry-run|apply`: admin only; returns 202 or 409 (already running) or 503 (backup dir missing).
 
+## Quant (`api/quant_routes.py`, included in `main.py`)
+- `GET /api/quant/vol`: latest forecast per ticker → `{as_of, model_version, disclaimer, rows:[{ticker, sector, price, forecast_vol, realized_vol_21d, implied_vol_30d, iv_source, iv_to_forecast, ratio_pctl, reading, reading_basis, earnings_in_horizon, earnings_date, flags}]}`.
+- `GET /api/quant/vol/{ticker}?days=365`: `{ticker, sector, model_version, disclaimer, rows:[{as_of, ...same fields}]}` (current model version only; 422 bad ticker).
+- `GET /api/quant/status`: coverage (bars, chains, forecasts), last run per job, `running`, latest evaluation scorecard, model run counts.
+- `POST /api/quant/run/{job}` (`bars|chains|forecast`): admin only; 202, 403, 404 unknown job, 409 running.
+
 ## Maintaining this file
 
 Update this file every time a route is added, removed, renamed, or has its method / query params / body shape changed. Keep the one-line descriptions concise — anything longer belongs in route docstrings or the relevant service file. Full rules in the root `CLAUDE.md` § Maintaining these files. Surface what you changed in your reply.

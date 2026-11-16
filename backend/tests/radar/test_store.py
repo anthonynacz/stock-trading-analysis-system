@@ -1005,7 +1005,8 @@ def test_migration_is_the_single_head_after_recommendation_outcomes() -> None:
     # Later non-radar migrations stack on top; the chain must keep a single head.
     assert scripts.get_revision("c9e4b7a2d5f1").down_revision == HISTORY_REVISION
     assert scripts.get_revision("d1f6a3c8e502").down_revision == "c9e4b7a2d5f1"      # radar_runtime.extended
-    assert scripts.get_heads() == ["d1f6a3c8e502"]
+    assert scripts.get_revision("e4a7c1d9b235").down_revision == "d1f6a3c8e502"      # quant tables
+    assert scripts.get_heads() == ["e4a7c1d9b235"]
 
 
 def test_session_tickers_lists_every_name_with_rows_or_events_in_the_session(radar_store):
