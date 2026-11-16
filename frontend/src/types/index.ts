@@ -1353,3 +1353,103 @@ export interface RadarNoData {
 }
 
 export type RadarResponse = RadarSnapshot | RadarNoData;
+
+// ── Quant layer (/api/quant, backend/api/quant_routes.py). Volatilities are annualised fractions (0.28 = 28%).
+
+export type QuantReading = 'rich' | 'fair' | 'cheap' | 'insufficient history' | 'not comparable' | 'no implied vol';
+export type QuantReadingBasis = 'own_history' | 'cross_section' | 'earnings_in_horizon' | 'none';
+export type QuantIvSource = 'chain_cm30' | 'radar_iv30' | 'options_snapshot_atm';
+export type QuantJob = 'bars' | 'chains' | 'forecast';
+
+export interface QuantVolFields {
+  price: number | null;
+  forecast_vol: number | null;
+  realized_vol_21d: number | null;
+  implied_vol_30d: number | null;
+  iv_source: QuantIvSource | string | null;
+  /** implied_vol_30d / forecast_vol. */
+  iv_to_forecast: number | null;
+  /** Percentile (0..1) of the ratio in its reference; null unless rich / fair / cheap. */
+  ratio_pctl: number | null;
+  reading: QuantReading | string;
+  reading_basis: QuantReadingBasis | string | null;
+  earnings_in_horizon: boolean;
+  earnings_date: string | null;
+  flags: string[] | null;
+}
+
+export interface QuantVolRow extends QuantVolFields {
+  ticker: string;
+  sector: string | null;
+}
+
+export interface QuantVolResponse {
+  as_of: string | null;
+  model_version: string | null;
+  disclaimer: string;
+  rows: QuantVolRow[];
+}
+
+export interface QuantVolHistoryRow extends QuantVolFields {
+  as_of: string;
+}
+
+export interface QuantVolHistory {
+  ticker: string;
+  sector: string | null;
+  model_version: string | null;
+  disclaimer: string;
+  rows: QuantVolHistoryRow[];
+}
+
+export interface QuantJobRun {
+  status: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  error_message: string | null;
+  result: Record<string, unknown> | null;
+}
+
+export interface QuantModelScore {
+  qlike: number;
+  rmse_vol: number;
+  qlike_vs_trailing?: number;
+  nw_t_vs_trailing?: number;
+  ticker_win_share?: number | null;
+}
+
+export interface QuantEvaluation {
+  created_at: string | null;
+  model: string | null;
+  version: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  n_obs: number | null;
+  n_tickers: number | null;
+  days: number | null;
+  data_source: string | null;
+  models: Record<string, QuantModelScore> | null;
+  best_har: string | null;
+  har_beats_trailing: boolean | null;
+  estimator_to_close_close: number | null;
+}
+
+export interface QuantStatus {
+  model: { name: string; version: string; horizon: number; pooled: boolean };
+  bars: { tickers: number; first_date: string | null; last_date: string | null; rows: number };
+  chains: {
+    tickers: number;
+    days_collected: number;
+    first_date: string | null;
+    last_date: string | null;
+    rows: number;
+    tickers_last_day: number;
+  };
+  forecasts: { tickers: number; days: number; first_date: string | null; last_date: string | null };
+  jobs: Record<QuantJob, QuantJobRun | null>;
+  running: Record<QuantJob, boolean>;
+  evaluation: QuantEvaluation | null;
+  model_runs: Record<string, number>;
+  disclaimer: string;
+}

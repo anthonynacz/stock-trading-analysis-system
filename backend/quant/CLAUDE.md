@@ -16,6 +16,8 @@ any verdict, and the API labels every reading "not advice". Writes only the `qua
 - `forecast.py` → `quant_vol_forecasts`, each fit → `quant_model_runs` (kind `fit`).
 - `evaluate.py` → scorecard printed, recorded as kind `evaluation`.
 - Jobs: `python -m quant.run bars|chains|forecast`, scheduled by `services/quant_runner.py`.
+  After the close job it also re-runs the evaluation when the scorecard is missing, for another
+  `MODEL_VERSION`, or older than `EVALUATION_MAX_AGE_DAYS` (30); logged as `quant_evaluate`.
 
 ## Rules
 
@@ -28,7 +30,7 @@ any verdict, and the API labels every reading "not advice". Writes only the `qua
   IV / forecast with the ticker's own earlier ratios (60+), else today's cross-section of 30-day-IV names
   (30+), else "insufficient history". Earnings inside the horizon: "not comparable".
 - **IV source is always recorded** (`iv_source`): `chain_cm30` > `radar_iv30` > `options_snapshot_atm`
-  (nearest expiry, flagged `iv_not_30d`). The cross-section reference uses only the first two.
+  (the call nearest the money across expiries, not a 30-day value; flagged `iv_not_30d`). The cross-section reference uses only the first two.
 
 ## What was measured
 

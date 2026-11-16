@@ -5,7 +5,7 @@
 2. For each ticker whose last bar is the run's as-of session: forecast the mean variance of the next 21 sessions
    (annualised), the trailing 21-session realised vol (same estimator), and the ~30-day implied vol:
    chain_cm30 (that day's quant_chain_snapshots), else radar_iv30 (radar_option_metrics iv_30d_pct), else
-   options_snapshot_atm (options_snapshots.atm_iv, nearest expiry: flagged iv_not_30d).
+   options_snapshot_atm (options_snapshots.atm_iv, the call nearest the money across the stored expiries, not a 30-day value: flagged iv_not_30d).
 3. Earnings inside the horizon (earnings_calendar, else the Yahoo quote's date stored with the chain snapshot)
    are flagged and make the reading "not comparable".
 4. The reading (quant/reading.py) compares IV / forecast with the ticker's own earlier ratios, else today's

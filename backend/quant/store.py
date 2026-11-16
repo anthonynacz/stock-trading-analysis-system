@@ -288,7 +288,7 @@ class QuantStore:
         return out
 
     def options_snapshot_iv(self, tickers: Iterable[str], since: datetime) -> dict[str, dict]:
-        """{ticker: {"iv", "as_of"}}: the latest options_snapshots.atm_iv since `since` (nearest expiry, not 30d)."""
+        """{ticker: {"iv", "as_of"}}: the latest options_snapshots.atm_iv since `since` (call nearest the money across expiries, not 30d)."""
         q = (select(OptionsSnapshot.ticker, OptionsSnapshot.snapshot_time, OptionsSnapshot.atm_iv)
              .where(OptionsSnapshot.ticker.in_(list(tickers)), OptionsSnapshot.snapshot_time >= since,
                     OptionsSnapshot.atm_iv.is_not(None))

@@ -51,7 +51,7 @@ cd frontend && npm run build                # tsc + vite build (what the Dockerf
 
 ## Dashboard Layout
 
-The app uses react-router-dom with routes: `/` (Dashboard), `/research` (Research), `/options-lab` (Options Lab), `/scanner` (Scanner), `/industries` (Industries), `/charts` (Charts), `/positions` (Positions), `/performance` (Performance), `/schedule` (Schedule), `/settings` (Settings), `/knowledge` (Knowledge), `/login` (public). A top nav bar (`AppNav`) links all protected pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
+The app uses react-router-dom with routes: `/` (Dashboard), `/research` (Research), `/options-lab` (Options Lab), `/scanner` (Scanner), `/industries` (Industries), `/charts` (Charts), `/positions` (Positions), `/performance` (Performance), `/quant` (Volatility, under More), `/schedule` (Schedule), `/settings` (Settings), `/knowledge` (Knowledge), `/login` (public). A top nav bar (`AppNav`) links all protected pages. Nginx SPA fallback (`try_files $uri $uri/ /index.html`) handles client-side routing.
 
 The Dashboard has the following sections (recommendations are the primary view; the watchlist is a secondary, collapsed section):
 1. **StatusBar** — Date stepper (left/right arrows to navigate pipeline days), refresh button, system status
@@ -88,7 +88,7 @@ Recommendation outcome analytics at `/performance` (backed by `GET /api/outcomes
 
 ## Knowledge Page
 
-Documentation page at `/knowledge`. Tabs (`?tab=` keys, deep-linkable): guide, signals, classification, watchlist, strikes, optionslab, strategies, pipeline — one lazy file each under `pages/knowledge/`, rendered by `KnowledgePage.tsx` via a `TAB_COMPONENTS` map. Strategies hosts the interactive expiration-payoff SVG. Content constants (`WATCHLIST_LIMITS` = the rotation rules of `backend/config.py`, `IV_BUCKETS`, `DTE_BUCKETS` in `pages/knowledge/shared.tsx`, signal points in `SignalsTab.tsx`) mirror `backend/services/CLAUDE.md` — update both when limits, thresholds, or signal points change. Trading Guide includes daily workflow, signal quality for weeklies, 8 scenario playbooks, risk management rules, feature usage tips, and quick decision matrix.
+Documentation page at `/knowledge`. Tabs (`?tab=` keys, deep-linkable): guide, signals, classification, watchlist, strikes, optionslab, strategies, radar, quant, pipeline — one lazy file each under `pages/knowledge/`, rendered by `KnowledgePage.tsx` via a `TAB_COMPONENTS` map. Strategies hosts the interactive expiration-payoff SVG. Content constants (`WATCHLIST_LIMITS` = the rotation rules of `backend/config.py`, `IV_BUCKETS`, `DTE_BUCKETS` in `pages/knowledge/shared.tsx`, signal points in `SignalsTab.tsx`) mirror `backend/services/CLAUDE.md` — update both when limits, thresholds, or signal points change. Trading Guide includes daily workflow, signal quality for weeklies, 8 scenario playbooks, risk management rules, feature usage tips, and quick decision matrix.
 
 ## Settings Page
 
@@ -102,6 +102,12 @@ Documentation page at `/knowledge`. Tabs (`?tab=` keys, deep-linkable): guide, s
 - **Page tools:** `ScanNowButton` (POST /api/radar/scan, polls every 3 s while pending), `OptionFilterBar` + `optionFilters.ts` (option filters, saved in `vela.radar_view`; liquidity / OI / spread read the traded side: calls for up moves, puts for down, via `optionSide.ts`), `VerdictBadge` + `verdict.ts` (Favorable / Caution / Avoid entry checklist per name, pure rules, no advice), `ivPrice.ts` (the IV badge colour = what the option costs to buy now: green cheap <= 1.2x normal, grey fair, amber pricey >= 1.5x or an event in the front week, red expensive >= 2x or earnings before expiry; the day's IV change is plain text read for the direction; the red "IV crushing" warning is for holders, on the exits list only), `ExitWatch` (gauges per member; `exitRules.ts` mirrors `PARAMS.hard_exit` / `PARAMS.hold`), `RadarHistory` (GET /api/radar/history, loaded when opened), `SensitivityPanel` (sliders; GET/PUT /api/radar/settings; the exit thresholds in effect come from `state.sensitivity` via `exitRulesFrom`).
 - **Movers tab:** `MoversView.tsx` + `movers.ts` (pure model). The "Move over" period re-ranks the list on today's or a multi-day move (`moverRows` puts the period's move in `change_pct` and the option side judged in `direction`); setup chips, a multi-day columns toggle, stock filters, its own option filters and the "2-4 wk premium" column (`swingOf`). Chip counts (sectors, setups) are computed with every other filter applied. All of its state lives in `view.mv` / `view.mvSort` / `view.optMovers` inside `vela.radar_view`. Setup labels and their backtest numbers are in `SETUP_META`: keep them in step with `backend/radar/config.py` `MOVERS`.
 - **Mirrored values:** `components/radar/clock.ts` mirrors `backend/radar/calendar_nyse.py` holidays and `RUNTIME` timings, so update both together.
+
+## Quant (Volatility) Page
+`/quant` (lazy `QuantPage.tsx` + `components/quant/*`), nav label "Volatility". Display only: never wire its reading into `verdict.ts`, the radar, Options Lab or conviction.
+- **Data:** `useQuantVol` (GET /api/quant/vol, 10 min) and `useQuantStatus` (GET /api/quant/status, 1 min; 3 s while a job runs or just after an admin start). Vols are annualised fractions: format with `fmtVol` in `quant/model.ts`.
+- **Pieces:** `VolTable` (sortable; phones hide price / last-21d / earnings and put the reading under the ticker), `TickerVolDrawer` (GET /api/quant/vol/{ticker}, Recharts lines, HTML legend), `ModelPanel` (scorecard vs `trailing_21d`, survivorship caveat, coverage, jobs; admin `Run now` = POST /api/quant/run/{job}, 409 shown as "already running"), `EarlyDaysNote`.
+- **Reading colours** are for a buyer: cheap green, fair grey, rich amber; not comparable / insufficient history / no IV are neutral dashed. `READING_CFG` in `quant/model.ts` mirrors `backend/quant/config.py` READING. View (sort, sector, reading) in `localStorage["vela.quant_view"]`.
 
 ## Design System
 

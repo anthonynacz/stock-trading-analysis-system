@@ -54,9 +54,9 @@ def parse_result(stdout: bytes | str) -> dict:
     return {}
 
 
-async def _subprocess(job: str, timeout: float) -> tuple[int | None, dict, str | None]:
+async def _subprocess(job: str, timeout: float, argv: tuple[str, ...] | None = None) -> tuple[int | None, dict, str | None]:
     proc = await asyncio.create_subprocess_exec(
-        sys.executable, "-m", "quant.run", job, cwd=str(BACKEND_DIR),
+        sys.executable, "-m", *(argv or ("quant.run", job)), cwd=str(BACKEND_DIR),
         stdout=asyncio.subprocess.PIPE, stderr=None)      # stderr: the job's logs go to the container log
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -109,6 +109,56 @@ async def run_quant_close() -> None:
     if res.get("status") in ("skipped", "already_running"):
         return
     await run_quant_job("forecast")
+    await run_evaluation_if_stale()
+
+
+def evaluation_is_stale(latest: dict | None, now: datetime) -> bool:
+    """True when the scorecard is missing, belongs to another model version, or is too old."""
+    from quant.config import EVALUATION_MAX_AGE_DAYS, MODEL_VERSION
+
+    if not latest or latest.get("version") != MODEL_VERSION or not latest.get("created_at"):
+        return True
+    created = latest["created_at"]
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return (now - created).days >= EVALUATION_MAX_AGE_DAYS
+
+
+def _latest_evaluation() -> dict | None:
+    from quant.store import QuantStore
+
+    store = QuantStore()
+    try:
+        return store.latest_model_run("evaluation")
+    finally:
+        store.close()
+
+
+async def run_evaluation_if_stale() -> dict:
+    """Re-score the model on the stored bars (`python -m quant.evaluate`) when the scorecard is stale.
+
+    Logged as phase quant_evaluate. Not one of QUANT_JOBS: it has no manual trigger and no run state."""
+    from services.run_log import STATUS_FAILED, STATUS_SUCCESS, record_run_finish, record_run_start
+
+    try:
+        latest = await asyncio.to_thread(_latest_evaluation)
+    except Exception:  # noqa: BLE001 - a failed check must not break the close job
+        logger.exception("quant evaluation check failed")
+        return {"status": "error"}
+    if not evaluation_is_stale(latest, datetime.now(timezone.utc)):
+        return {"status": "skipped", "reason": "evaluation is current"}
+    run_id = await record_run_start(phase="quant_evaluate", meta={"scheduled": True})
+    error: str | None = None
+    try:
+        code, _, error = await _subprocess("evaluate", float(JOB_TIMEOUT_S["evaluate"]), ("quant.evaluate",))
+        if error is None and code != 0:
+            error = f"exit code {code}"
+    except Exception as exc:  # noqa: BLE001 - logged in the run log
+        logger.exception("quant evaluation could not run")
+        error = f"{type(exc).__name__}: {exc}"[:500]
+    await record_run_finish(run_id, status=STATUS_FAILED if error else STATUS_SUCCESS, error_message=error, meta={})
+    logger.info("quant evaluation finished: %s", error or "ok")
+    return {"status": "error", "message": error} if error else {"status": "ok"}
 
 
 def _slim(result: dict) -> dict:

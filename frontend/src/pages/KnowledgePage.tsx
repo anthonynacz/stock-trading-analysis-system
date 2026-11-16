@@ -13,6 +13,7 @@ type Section =
   | 'optionslab'
   | 'strategies'
   | 'radar'
+  | 'quant'
   | 'pipeline';
 
 const TABS: { key: Section; label: string }[] = [
@@ -24,6 +25,7 @@ const TABS: { key: Section; label: string }[] = [
   { key: 'optionslab', label: 'Options Lab' },
   { key: 'strategies', label: 'Strategies' },
   { key: 'radar', label: 'Radar' },
+  { key: 'quant', label: 'Volatility' },
   { key: 'pipeline', label: 'Pipeline & Data' },
 ];
 
@@ -38,6 +40,7 @@ const TAB_COMPONENTS: Record<Section, React.LazyExoticComponent<() => JSX.Elemen
   optionslab: lazy(() => import('./knowledge/OptionsLabTab')),
   strategies: lazy(() => import('./knowledge/StrategiesTab')),
   radar: lazy(() => import('./knowledge/RadarTab')),
+  quant: lazy(() => import('./knowledge/QuantTab')),
   pipeline: lazy(() => import('./knowledge/PipelineTab')),
 };
 

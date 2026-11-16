@@ -22,6 +22,7 @@ const ChartsPage = lazy(() => import('./pages/ChartsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const SchedulePage = lazy(() => import('./pages/SchedulePage'));
 const PerformancePage = lazy(() => import('./pages/PerformancePage'));
+const QuantPage = lazy(() => import('./pages/QuantPage'));
 
 function ProtectedLayout() {
   return (
@@ -55,6 +56,7 @@ function App() {
                 <Route path="/charts" element={<ChartsPage />} />
                 <Route path="/positions" element={<PositionsPage />} />
                 <Route path="/performance" element={<PerformancePage />} />
+                <Route path="/quant" element={<QuantPage />} />
                 <Route path="/knowledge" element={<KnowledgePage />} />
                 <Route path="/schedule" element={<SchedulePage />} />
                 <Route path="/settings" element={<SettingsPage />} />

@@ -16,6 +16,7 @@ const primaryLinks = [
 const moreLinks = [
   { to: '/charts', label: 'Charts' },
   { to: '/performance', label: 'Performance' },
+  { to: '/quant', label: 'Volatility' },
   { to: '/schedule', label: 'Schedule' },
   { to: '/knowledge', label: 'Knowledge' },
 ] as const;

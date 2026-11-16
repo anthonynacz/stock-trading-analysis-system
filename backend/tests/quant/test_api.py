@@ -130,3 +130,19 @@ async def test_runner_logs_success_failure_and_timeout(monkeypatch):
     assert (await quant_runner.run_quant_job("forecast", scheduled=False))["message"].startswith("timeout")
     assert log[1] == ("finish", "SUCCESS", None) and log[3] == ("finish", "FAILED", "no bars")
     assert log[5][1] == "FAILED" and not quant_runner.quant_run_state["forecast"]["running"]
+
+
+def test_evaluation_is_stale_rules():
+    from datetime import datetime, timedelta, timezone
+
+    from quant.config import EVALUATION_MAX_AGE_DAYS, MODEL_VERSION
+    from services.quant_runner import evaluation_is_stale
+
+    now = datetime(2026, 11, 16, 22, 0, tzinfo=timezone.utc)
+    fresh = {"version": MODEL_VERSION, "created_at": now - timedelta(days=EVALUATION_MAX_AGE_DAYS - 1)}
+    assert evaluation_is_stale(None, now)
+    assert not evaluation_is_stale(fresh, now)
+    assert evaluation_is_stale({**fresh, "version": "older-model"}, now)
+    assert evaluation_is_stale({**fresh, "created_at": now - timedelta(days=EVALUATION_MAX_AGE_DAYS)}, now)
+    # a naive timestamp (SQLite) is read as UTC
+    assert not evaluation_is_stale({**fresh, "created_at": (now - timedelta(days=1)).replace(tzinfo=None)}, now)

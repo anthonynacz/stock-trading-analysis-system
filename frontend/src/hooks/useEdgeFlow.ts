@@ -31,9 +31,12 @@ import type {
   Position,
   RotationStatus,
   RadarResponse,
+  QuantStatus,
+  QuantVolResponse,
 } from '../types';
 import { usePolling } from './usePolling';
 import { getRadar } from '../components/radar/radarApi';
+import { getQuantStatus, getQuantVol } from '../components/quant/quantApi';
 import { RADAR_POLL_LIVE_MS, radarPollMs } from '../components/radar/clock';
 
 interface RefetchOptions {
@@ -323,4 +326,19 @@ export function useRadar(): HookResult<RadarResponse> {
     return () => clearInterval(id);
   }, [data]);
   return query;
+}
+
+/** Latest volatility forecast per ticker (`GET /api/quant/vol`); changes once a day, polled every 10 min. */
+export function useQuantVol(): HookResult<QuantVolResponse> {
+  const fetcher = useCallback(() => getQuantVol(), []);
+  return usePolledQuery(fetcher, 'Failed to load the volatility forecasts', { pollMs: 600_000, dedupe: true });
+}
+
+/**
+ * Quant coverage / jobs / scorecard (`GET /api/quant/status`). `fast` (a job running or just started) polls
+ * every 3 s, otherwise every minute.
+ */
+export function useQuantStatus(fast: boolean): HookResult<QuantStatus> {
+  const fetcher = useCallback(() => getQuantStatus(), []);
+  return usePolledQuery(fetcher, 'Failed to load the model status', { pollMs: fast ? 3_000 : 60_000, dedupe: true });
 }

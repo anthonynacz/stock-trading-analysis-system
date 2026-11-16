@@ -93,4 +93,5 @@ READING = {
 
 # ---------------------------------------------------------------- scheduling (services/quant_runner.py)
 
-JOB_TIMEOUT_S = {"bars": 1800, "chains": 1500, "forecast": 900}
+JOB_TIMEOUT_S = {"bars": 1800, "chains": 1500, "forecast": 900, "evaluate": 1800}
+EVALUATION_MAX_AGE_DAYS = 30     # the close job re-scores the model when the last evaluation is older, or for another version
