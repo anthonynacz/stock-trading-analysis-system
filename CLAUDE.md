@@ -105,8 +105,8 @@ A 5-minute racing-stocks scanner, `backend/radar/`. It was ported from the daily
 Daily bars, per-strike option chain snapshots, and a HAR volatility forecast compared with ~30-day implied vol
 ("options rich / fair / cheap", relative to a reference distribution, not advice). Writes only `quant_*`
 tables; never feeds conviction, radar or verdicts. Jobs run as subprocesses from the backend's APScheduler
-(chains 15:40 ET, bars + forecast 17:05 ET). Backfill + evaluation, on the server:
-`docker compose exec backend sh -c "python -m quant.run bars && python -m quant.evaluate && python -m quant.run forecast"`.
+(chains 15:40 ET, bars + forecast 17:05 ET). Backfill + evaluation + forecast: the Deploy workflow's
+`quant-backfill` request, or `scripts/deploy.sh quant-backfill` on the server.
 Rules and measurements: `backend/quant/CLAUDE.md`.
 
 ## Maintaining these files

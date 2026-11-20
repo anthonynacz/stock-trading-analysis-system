@@ -9,10 +9,10 @@ on:
   workflow_dispatch:
     inputs:
       services:
-        description: What to rebuild (auto = what the new commits touched; status changes nothing)
+        description: What to rebuild (auto = what the new commits touched; status changes nothing; quant-backfill rebuilds nothing and fills the quant tables)
         type: choice
         default: auto
-        options: [auto, all, backend, radar, frontend, status]
+        options: [auto, all, backend, radar, frontend, status, quant-backfill]
 
 concurrency:
   group: deploy-production
@@ -24,7 +24,7 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - name: Deploy over SSH
         env:

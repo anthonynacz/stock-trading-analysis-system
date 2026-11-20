@@ -2,13 +2,15 @@
 # Server-side deploy: fast-forward this checkout to origin/main and rebuild the services whose code changed.
 #
 # Run by the GitHub Actions deploy key through an SSH forced command (docs/deploy.md), where the request
-# arrives in SSH_ORIGINAL_COMMAND, or by hand on the server:  scripts/deploy.sh [auto|all|backend|radar|frontend|status]
+# arrives in SSH_ORIGINAL_COMMAND, or by hand on the server:  scripts/deploy.sh [auto|all|backend|radar|frontend|status|quant-backfill]
 #
 #   auto      rebuild what the pulled commits touched (backend/ -> backend + radar, frontend/ -> frontend,
 #             docker-compose.yml -> everything; *.md files never count); nothing to pull -> nothing to do
 #   all       rebuild backend, radar and frontend whatever changed
 #   backend   backend + radar (they share one image)      radar / frontend   that service only
 #   status    print the deployed commit and the containers; changes nothing
+#   quant-backfill   no pull, no rebuild: in the running backend container, fill quant_daily_bars (a 10-year
+#             backfill for tickers without bars), score the model, write the forecasts (backend/quant/CLAUDE.md)
 #
 # The request is checked against that list and nothing else from the caller is ever executed.
 set -euo pipefail
@@ -16,9 +18,9 @@ set -euo pipefail
 main() {
   local want="${SSH_ORIGINAL_COMMAND:-${1:-auto}}"
   case "$want" in
-    auto | all | backend | radar | frontend | status) ;;
+    auto | all | backend | radar | frontend | status | quant-backfill) ;;
     *)
-      echo "deploy: unknown request (use auto, all, backend, radar, frontend or status)" >&2
+      echo "deploy: unknown request (use auto, all, backend, radar, frontend, status or quant-backfill)" >&2
       exit 2
       ;;
   esac
@@ -36,6 +38,16 @@ main() {
   if ! flock -w 600 9; then
     echo "deploy: another deploy is still running" >&2
     exit 1
+  fi
+
+  if [ "$want" = quant-backfill ]; then
+    echo "quant: $(git log --oneline -1)"
+    # Bars must succeed; a failed evaluation is reported and the forecast still runs on the stored bars.
+    docker compose exec -T backend python -m quant.run bars
+    docker compose exec -T backend python -m quant.evaluate || echo "quant: the evaluation failed" >&2
+    docker compose exec -T backend python -m quant.run forecast
+    echo "quant: backfill done"
+    exit 0
   fi
 
   local old new changed
