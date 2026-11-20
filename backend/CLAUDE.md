@@ -58,7 +58,8 @@ asyncio.run(rescore())
 FINNHUB_API_KEY=     # Finnhub (60 calls/min free) — used for news; ratings fallback only
 NEWSAPI_KEY=         # NewsAPI.org (100 calls/day free) — news fallback
 FMP_API_KEY=         # Financial Modeling Prep (Starter $22/mo, 300 req/min) — primary for ratings, earnings, insider trades, news
-DATABASE_URL=postgresql+asyncpg://edgeflow:<password>@db:5432/edgeflow  # Docker internal
+POSTGRES_PASSWORD=   # Postgres password of the `edgeflow` user; required by docker-compose.yml (URL-safe characters only)
+DATABASE_URL=postgresql+asyncpg://edgeflow:<password>@localhost:5432/edgeflow  # only for running outside Docker
 
 # Auth / multi-tenancy
 LEGACY_MODE=true                      # default; bypasses JWT, returns legacy admin user
@@ -75,7 +76,9 @@ DEV_TOKEN_ENABLED=false               # enables POST /api/dev/token — DEV ONLY
 NEWS_FETCH_CONCURRENCY=10             # in-flight per-ticker news fetches inside NewsScanner.scan_news
 ```
 
-For local dev, `.env` at project root with `DATABASE_URL` pointing to `localhost:<port>`. If local PostgreSQL occupies port 5432, map Docker db to another port (e.g., `5433:5432` in docker-compose.yml).
+**Database credentials live only in `.env`** (gitignored; template in `.env.example`). `docker-compose.yml` reads `POSTGRES_PASSWORD` from it for the `db` service and builds the `DATABASE_URL` of `backend` and `radar` from it (host `db`), overriding any `DATABASE_URL` in `.env`; compose refuses to start when it is missing. Never write a real password into a compose file. Changing the password of an existing database takes an `ALTER USER` as well (`docs/deploy.md` § Rotating the database password).
+
+For running the backend outside Docker, `.env` at project root with `DATABASE_URL` pointing to `localhost:<port>`. If local PostgreSQL occupies port 5432, map Docker db to another port (e.g., `5433:5432` in docker-compose.yml).
 
 ## Async SQLAlchemy Gotchas
 

@@ -57,11 +57,48 @@ Run workflow → `status`. It prints the deployed commit and the containers and 
 What `auto` rebuilds: `backend/` changes → `backend` and `radar` (one image); `frontend/` changes →
 `frontend`; `docker-compose.yml` → all three; anything else, and any `.md` file wherever it lives → nothing.
 
+## Server `.env`
+
+`/root/edgeflow/.env` is not in git and must hold `POSTGRES_PASSWORD` (plus the API keys). `docker-compose.yml`
+takes the database password from it; without it `docker compose` stops with
+`required variable POSTGRES_PASSWORD is missing a value` and the running containers are left as they are.
+
+### Rotating the database password
+
+Postgres only reads `POSTGRES_PASSWORD` when the data volume is first created, so a rotation changes it in
+two places: inside the database, then in `.env`. On the server, in `/root/edgeflow`:
+
+```bash
+NEW=$(openssl rand -hex 24)
+```
+
+```bash
+docker compose exec -T db psql -U edgeflow -d edgeflow -v ON_ERROR_STOP=1 -c "ALTER USER edgeflow PASSWORD '$NEW'"
+```
+
+```bash
+cp .env .env.bak && chmod 600 .env .env.bak && sed -i '/^POSTGRES_PASSWORD=/d' .env && echo "POSTGRES_PASSWORD=$NEW" >> .env
+```
+
+```bash
+docker compose up -d backend radar && unset NEW
+```
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8000/api/radar/health
+```
+
+Between the `ALTER USER` and the restart, open connections keep working and new ones fail, so run the steps
+back to back (outside market hours: the `radar` worker restarts, and `db` is recreated for a few seconds
+because its environment changed; the data volume is untouched). Delete `.env.bak` once the health check
+answers. Hex passwords are URL-safe, which the `DATABASE_URL` built in `docker-compose.yml` needs.
+
 ## When it fails
 
 - **"untracked working tree files would be overwritten":** a stray file sits where a new tracked file
   should go (typically an empty stub left by `docker compose run -v <file>:/app/...`). Delete it on the
   server and run the workflow again.
+- **"required variable POSTGRES_PASSWORD is missing a value":** add it to the server's `.env` (above).
 - **"the backend does not answer":** the containers were rebuilt but the API is not up after 3 minutes.
   `docker compose logs --tail=200 backend` on the server shows why (a failed migration is the usual cause).
 - **Deploys during market hours** restart the `radar` worker. It resumes from its stored state; the scan
