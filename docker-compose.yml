@@ -1,4 +1,5 @@
 # The Postgres password comes from POSTGRES_PASSWORD in .env (never committed; see .env.example).
+# So does the JWT signing secret (JWT_HS256_SECRET).
 # Compose refuses to start without it. Keep it URL-safe (letters, digits, - _ . ~): it is placed
 # as-is in the DATABASE_URL of backend and radar, which overrides any DATABASE_URL in .env.
 services:
@@ -31,7 +32,7 @@ services:
       # let you log in via the /login page in development.
       LEGACY_MODE: "true"
       DEV_TOKEN_ENABLED: "true"
-      JWT_HS256_SECRET: "vela-dev-secret-rotate-before-production"
+      JWT_HS256_SECRET: ${JWT_HS256_SECRET:?set JWT_HS256_SECRET in .env (see .env.example)}
       JWT_ISSUER: "vela-dev"
       # Persist the HuggingFace/FinBERT cache (see volume below) so the ~500MB
       # model isn't re-downloaded on every container restart — a cold load can

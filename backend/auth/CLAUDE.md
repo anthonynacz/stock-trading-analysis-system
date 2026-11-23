@@ -6,7 +6,7 @@
 
 **Provider-agnostic JWT verifier** (`backend/auth/middleware.py`). Configure ONE of:
 - `JWT_JWKS_URL` — for OIDC providers (Supabase Auth / Clerk / Auth0). Verifier fetches the JWKS, validates signature + issuer + audience.
-- `JWT_HS256_SECRET` — for HS256-signed tokens (dev / simple flows).
+- `JWT_HS256_SECRET` — for HS256-signed tokens (dev / simple flows). Comes from `.env` only (`docker-compose.yml` requires it and holds no value); changing it invalidates every token already issued.
 
 **`get_current_user` FastAPI dependency.** Either returns the legacy admin (LEGACY_MODE) or validates `Authorization: Bearer <jwt>` and upserts a `User` row keyed by `(provider=iss, provider_user_id=sub)`. Email-based linking only happens for users with no `provider_user_id` (i.e., the legacy admin first time it logs in via real auth). **Cross-tenant access returns 404, not 403** — it doesn't leak the existence of other users' rows. Every authenticated request idempotently calls `ensure_subscription` (cheap SELECT when row exists) so pre-retrofit users self-heal.
 

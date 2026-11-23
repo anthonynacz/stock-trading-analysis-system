@@ -66,7 +66,7 @@ LEGACY_MODE=true                      # default; bypasses JWT, returns legacy ad
 PUBLIC_APP_URL=                       # optional; portal base URL for deep links in Discord alerts (e.g. http://204.168.198.65:3000)
 LEGACY_USER_EMAIL=anthonynacouzy@gmail.com  # owner of all pre-retrofit rows
 JWT_JWKS_URL=                         # OIDC JWKS endpoint (Supabase / Clerk / Auth0)
-JWT_HS256_SECRET=                     # HS256 shared secret (dev / simple flows)
+JWT_HS256_SECRET=                     # HS256 signing secret; required by docker-compose.yml, lives only in .env
 JWT_ALGORITHMS=RS256,HS256            # comma-separated; matches the verifier's path
 JWT_AUDIENCE=                         # optional aud claim check
 JWT_ISSUER=                           # optional iss claim check
@@ -76,7 +76,7 @@ DEV_TOKEN_ENABLED=false               # enables POST /api/dev/token — DEV ONLY
 NEWS_FETCH_CONCURRENCY=10             # in-flight per-ticker news fetches inside NewsScanner.scan_news
 ```
 
-**Database credentials live only in `.env`** (gitignored; template in `.env.example`). `docker-compose.yml` reads `POSTGRES_PASSWORD` from it for the `db` service and builds the `DATABASE_URL` of `backend` and `radar` from it (host `db`), overriding any `DATABASE_URL` in `.env`; compose refuses to start when it is missing. Never write a real password into a compose file. Changing the password of an existing database takes an `ALTER USER` as well (`docs/deploy.md` § Rotating the database password).
+**Database credentials and the JWT secret live only in `.env`** (gitignored; template in `.env.example`). `docker-compose.yml` reads `POSTGRES_PASSWORD` from it for the `db` service and builds the `DATABASE_URL` of `backend` and `radar` from it (host `db`), overriding any `DATABASE_URL` in `.env`; compose refuses to start when it or `JWT_HS256_SECRET` is missing. Never write a real password into a compose file. Changing the password of an existing database takes an `ALTER USER` as well (`docs/deploy.md` § Rotating the database password).
 
 For running the backend outside Docker, `.env` at project root with `DATABASE_URL` pointing to `localhost:<port>`. If local PostgreSQL occupies port 5432, map Docker db to another port (e.g., `5433:5432` in docker-compose.yml).
 
