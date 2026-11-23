@@ -12,7 +12,7 @@ on:
         description: What to rebuild (auto = what the new commits touched; status changes nothing; quant-backfill rebuilds nothing and fills the quant tables)
         type: choice
         default: auto
-        options: [auto, all, backend, radar, frontend, status, quant-backfill]
+        options: [auto, all, backend, radar, frontend, gate, status, quant-backfill]
 
 concurrency:
   group: deploy-production

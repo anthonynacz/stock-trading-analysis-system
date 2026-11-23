@@ -2,12 +2,14 @@
 # Server-side deploy: fast-forward this checkout to origin/main and rebuild the services whose code changed.
 #
 # Run by the GitHub Actions deploy key through an SSH forced command (docs/deploy.md), where the request
-# arrives in SSH_ORIGINAL_COMMAND, or by hand on the server:  scripts/deploy.sh [auto|all|backend|radar|frontend|status|quant-backfill]
+# arrives in SSH_ORIGINAL_COMMAND, or by hand on the server:  scripts/deploy.sh [auto|all|backend|radar|frontend|gate|status|quant-backfill]
 #
 #   auto      rebuild what the pulled commits touched (backend/ -> backend + radar, frontend/ -> frontend,
 #             docker-compose.yml -> everything; *.md files never count); nothing to pull -> nothing to do
 #   all       rebuild backend, radar and frontend whatever changed
 #   backend   backend + radar (they share one image)      radar / frontend   that service only
+#   gate      restart the password gate only (gate/Caddyfile, docs/deploy.md); it also restarts with all,
+#             and with auto when gate/ or docker-compose.yml changed. Skipped unless .env enables it.
 #   status    print the deployed commit and the containers; changes nothing
 #   quant-backfill   no pull, no rebuild: in the running backend container, fill quant_daily_bars (a 10-year
 #             backfill for tickers without bars), score the model, write the forecasts (backend/quant/CLAUDE.md)
@@ -18,9 +20,9 @@ set -euo pipefail
 main() {
   local want="${SSH_ORIGINAL_COMMAND:-${1:-auto}}"
   case "$want" in
-    auto | all | backend | radar | frontend | status | quant-backfill) ;;
+    auto | all | backend | radar | frontend | gate | status | quant-backfill) ;;
     *)
-      echo "deploy: unknown request (use auto, all, backend, radar, frontend, status or quant-backfill)" >&2
+      echo "deploy: unknown request (use auto, all, backend, radar, frontend, gate, status or quant-backfill)" >&2
       exit 2
       ;;
   esac
@@ -58,6 +60,18 @@ main() {
   # Notes and docs (*.md) rebuild nothing, wherever they live.
   changed=$(git diff --name-only "$old" "$new" | grep -v '\.md$' || true)
 
+  # The password gate runs only where .env enables its compose profile (the server).
+  local gate=no
+  if grep -Eq '^COMPOSE_PROFILES=.*gate' .env 2> /dev/null; then
+    case "$want" in
+      all | gate) gate=yes ;;
+      auto) if grep -Eq '^(gate/|docker-compose\.yml$)' <<< "$changed"; then gate=yes; fi ;;
+    esac
+  elif [ "$want" = gate ]; then
+    echo "deploy: the gate is not enabled here (COMPOSE_PROFILES=gate is not in .env)" >&2
+    exit 1
+  fi
+
   local -a services=()
   case "$want" in
     all) services=(backend radar frontend) ;;
@@ -75,13 +89,19 @@ main() {
   esac
 
   echo "deploy: $(git log --oneline -1)"
-  if [ "${#services[@]}" -eq 0 ]; then
+  if [ "${#services[@]}" -eq 0 ] && [ "$gate" = no ]; then
     echo "deploy: no service code changed (${old:0:7} -> ${new:0:7}); nothing rebuilt"
     exit 0
   fi
 
-  echo "deploy: rebuilding ${services[*]}"
-  docker compose up -d --build "${services[@]}"
+  if [ "${#services[@]}" -gt 0 ]; then
+    echo "deploy: rebuilding ${services[*]}"
+    docker compose up -d --build "${services[@]}"
+  fi
+  if [ "$gate" = yes ]; then
+    echo "deploy: restarting the password gate"
+    docker compose up -d --force-recreate gate
+  fi
 
   # The backend applies migrations before it listens: give it time. Any HTTP answer below 500 means it is up.
   local code=000 i
@@ -100,6 +120,23 @@ main() {
     echo "deploy: the frontend does not answer (HTTP $code) after the rebuild" >&2
     docker compose ps
     exit 1
+  fi
+  if [ "$gate" = yes ]; then
+    # The gate must answer on the site's own name, over HTTPS, and ask for the password (401).
+    local site
+    site=$(grep -m1 '^SITE_ADDRESS=' .env | cut -d= -f2- || true)
+    code=000
+    for i in $(seq 1 15); do
+      code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' --resolve "$site:443:127.0.0.1" "https://$site/" || true)
+      if [ "$code" = 401 ]; then break; fi
+      sleep 4
+    done
+    if [ "$code" != 401 ]; then
+      echo "deploy: the password gate does not ask for a password on https://$site/ (HTTP $code)" >&2
+      docker compose logs --tail=20 gate >&2 || true
+      exit 1
+    fi
+    echo "deploy: the password gate is up on https://$site/"
   fi
   docker compose ps --format '{{.Name}} {{.Status}}'
   echo "deploy: done, ${new:0:7} is live"

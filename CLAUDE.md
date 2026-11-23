@@ -60,6 +60,11 @@ scripts/deploy.sh all        # rebuild backend, radar and frontend whatever chan
 ```
 The backend's `entrypoint.sh` runs `alembic upgrade head` before uvicorn starts, so DB migrations apply automatically on container restart — no manual step needed. The frontend Dockerfile is multi-stage and bakes the compiled bundle in at build time, so a rebuild (not just a restart) is required for any frontend change to be visible.
 
+### Password gate
+The `gate` compose service (Caddy, `gate/Caddyfile`) puts HTTPS and one username/password in front of the
+whole site. It runs only where `.env` has `COMPOSE_PROFILES=gate` (the server); the login is set with
+`scripts/gate-user.sh`. Details: `docs/deploy.md` § Password gate.
+
 ### Useful server-side commands
 ```bash
 docker compose ps                       # Check container status
