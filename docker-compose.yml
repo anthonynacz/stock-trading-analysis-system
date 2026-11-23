@@ -81,7 +81,25 @@ services:
     depends_on:
       - backend
 
+  # Password gate (gate/Caddyfile): HTTPS and one username/password in front of the whole site.
+  # Off unless COMPOSE_PROFILES=gate is in .env (the server has it; local dev does not need it).
+  gate:
+    profiles: ["gate"]
+    restart: unless-stopped
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-}
+    volumes:
+      - ./gate:/etc/caddy:ro
+      - gate_data:/data
+    depends_on:
+      - frontend
+
 volumes:
   pgdata:
   hf_cache:
   radar_backups:
+  gate_data:

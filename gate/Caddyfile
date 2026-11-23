@@ -1,0 +1,14 @@
+# Password gate in front of the whole site (docs/deploy.md § Password gate).
+# One site, HTTPS with an automatic certificate, one username and password for everything.
+# users.caddy holds "<username> <bcrypt hash>" and is not in git: scripts/gate-user.sh writes it.
+# Without it Caddy refuses to start, so the site is never served unlocked.
+{$SITE_ADDRESS:localhost} {
+	basic_auth {
+		import users.caddy
+	}
+	# The frontend's nginx serves the app and forwards /api to the backend. The gate's own
+	# credentials stop here: the backend must not see them as a login attempt.
+	reverse_proxy frontend:80 {
+		header_up -Authorization
+	}
+}

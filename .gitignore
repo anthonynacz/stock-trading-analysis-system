@@ -13,3 +13,6 @@ resources/
 bash.exe.stackdump
 tmp_*.json
 frontend/tmp_*.json
+
+# Password gate login (username + bcrypt hash), written by scripts/gate-user.sh
+gate/users.caddy

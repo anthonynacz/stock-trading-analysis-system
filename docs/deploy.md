@@ -51,12 +51,12 @@ Run workflow → `status`. It prints the deployed commit and the containers and 
 
 - **Normal case:** push to `main`. The run log shows what was rebuilt and ends with `deploy: done, <commit> is live`.
 - **By hand from GitHub:** Actions → Deploy → Run workflow, and pick `auto`, `all`, `backend`, `radar`,
-  `frontend`, `status` or `quant-backfill` (no rebuild: fills the quant price store in the running backend,
+  `frontend`, `gate`, `status` or `quant-backfill` (no rebuild: fills the quant price store in the running backend,
   scores the model and writes the forecasts).
 - **By hand on the server:** `scripts/deploy.sh [request]`.
 
 What `auto` rebuilds: `backend/` changes → `backend` and `radar` (one image); `frontend/` changes →
-`frontend`; `docker-compose.yml` → all three; anything else, and any `.md` file wherever it lives → nothing.
+`frontend`; `gate/` → the password gate; `docker-compose.yml` → all of them; anything else, and any `.md` file wherever it lives → nothing.
 
 ## Server `.env`
 
@@ -65,6 +65,28 @@ takes the database password from it; without it `docker compose` stops with
 `required variable POSTGRES_PASSWORD is missing a value` and the running containers are left as they are.
 `JWT_HS256_SECRET` signs login tokens: generate it with `openssl rand -hex 32`; replacing it only signs
 everyone out (tokens last an hour).
+
+## Password gate
+
+The `gate` service (Caddy, `gate/Caddyfile`) serves the whole site over HTTPS behind one username and
+password (HTTP basic auth). It forwards everything to the frontend, whose nginx passes `/api` to the backend.
+It is a compose profile, so it only runs where `.env` enables it:
+
+```text
+COMPOSE_PROFILES=gate
+SITE_ADDRESS=<host name of the site, no http://>
+```
+
+- **Host name:** a name that resolves to the server, with ports 80 and 443 open (Caddy needs both to get
+  its certificate). Without a domain, `<the server address with dashes>.sslip.io` works.
+- **Login:** `scripts/gate-user.sh <username>` asks for the password, stores only its bcrypt hash in
+  `gate/users.caddy` (not in git) and restarts the gate. Run it again to change the login.
+- **No login file, no site:** Caddy refuses to start without `gate/users.caddy`.
+- **Deploys:** `scripts/deploy.sh gate` restarts it; `all`, and `auto` when `gate/` or `docker-compose.yml`
+  changed, do too, then check that `https://<SITE_ADDRESS>/` asks for the password.
+- **The app's own login page does not work behind the gate:** a browser sends either the gate's
+  credentials or the app's token, not both, and the gate drops the header before the backend. Fine while
+  `LEGACY_MODE` is on; real accounts (`backend/auth/CLAUDE.md`) replace the gate, they do not sit behind it.
 
 ### Rotating the database password
 
@@ -102,6 +124,9 @@ answers. Hex passwords are URL-safe, which the `DATABASE_URL` built in `docker-c
   should go (typically an empty stub left by `docker compose run -v <file>:/app/...`). Delete it on the
   server and run the workflow again.
 - **"required variable POSTGRES_PASSWORD (or JWT_HS256_SECRET) is missing a value":** add it to the server's `.env` (above).
+- **"the password gate does not ask for a password":** the run prints the gate's last log lines. A
+  certificate error means the host name does not point to the server or port 80/443 is closed; "File to
+  import not found" means `scripts/gate-user.sh` was never run.
 - **"the backend does not answer":** the containers were rebuilt but the API is not up after 3 minutes.
   `docker compose logs --tail=200 backend` on the server shows why (a failed migration is the usual cause).
 - **Deploys during market hours** restart the `radar` worker. It resumes from its stored state; the scan
