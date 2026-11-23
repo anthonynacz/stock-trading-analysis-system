@@ -60,9 +60,11 @@ What `auto` rebuilds: `backend/` changes → `backend` and `radar` (one image); 
 
 ## Server `.env`
 
-`/root/edgeflow/.env` is not in git and must hold `POSTGRES_PASSWORD` (plus the API keys). `docker-compose.yml`
+`/root/edgeflow/.env` is not in git and must hold `POSTGRES_PASSWORD` and `JWT_HS256_SECRET` (plus the API keys). `docker-compose.yml`
 takes the database password from it; without it `docker compose` stops with
 `required variable POSTGRES_PASSWORD is missing a value` and the running containers are left as they are.
+`JWT_HS256_SECRET` signs login tokens: generate it with `openssl rand -hex 32`; replacing it only signs
+everyone out (tokens last an hour).
 
 ### Rotating the database password
 
@@ -99,7 +101,7 @@ answers. Hex passwords are URL-safe, which the `DATABASE_URL` built in `docker-c
 - **"untracked working tree files would be overwritten":** a stray file sits where a new tracked file
   should go (typically an empty stub left by `docker compose run -v <file>:/app/...`). Delete it on the
   server and run the workflow again.
-- **"required variable POSTGRES_PASSWORD is missing a value":** add it to the server's `.env` (above).
+- **"required variable POSTGRES_PASSWORD (or JWT_HS256_SECRET) is missing a value":** add it to the server's `.env` (above).
 - **"the backend does not answer":** the containers were rebuilt but the API is not up after 3 minutes.
   `docker compose logs --tail=200 backend` on the server shows why (a failed migration is the usual cause).
 - **Deploys during market hours** restart the `radar` worker. It resumes from its stored state; the scan
