@@ -1,3 +1,6 @@
+# The Postgres password comes from POSTGRES_PASSWORD in .env (never committed; see .env.example).
+# Compose refuses to start without it. Keep it URL-safe (letters, digits, - _ . ~): it is placed
+# as-is in the DATABASE_URL of backend and radar, which overrides any DATABASE_URL in .env.
 services:
   db:
     restart: unless-stopped
@@ -5,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: edgeflow
       POSTGRES_USER: edgeflow
-      POSTGRES_PASSWORD: avppVVR4NcnSagQzqa-LIDCZNjacTbz6
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -20,7 +23,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://edgeflow:avppVVR4NcnSagQzqa-LIDCZNjacTbz6@db:5432/edgeflow
+      DATABASE_URL: postgresql+asyncpg://edgeflow:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}@db:5432/edgeflow
       # Auth — LEGACY_MODE stays on so anonymous browsing still resolves
       # to the legacy admin. With the middleware now JWT-preferred, a
       # signed-in user gets routed by their token while the LEGACY_MODE
@@ -57,7 +60,7 @@ services:
     build: ./backend
     command: ["python", "-m", "radar.worker"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://edgeflow:avppVVR4NcnSagQzqa-LIDCZNjacTbz6@db:5432/edgeflow
+      DATABASE_URL: postgresql+asyncpg://edgeflow:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}@db:5432/edgeflow
       RADAR_BACKUP_DIR: /backups/radar
     env_file:
       - .env

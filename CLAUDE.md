@@ -21,7 +21,7 @@ agenticanalysis/
 ├── frontend/        # React 18 + TypeScript, Vite, Tailwind — see frontend/CLAUDE.md
 ├── docker-compose.yml             # postgres:16 + backend + frontend
 ├── docker-compose.auth-test.yml   # Override layering JWT mode env vars for smoke tests
-└── .env                           # API keys (FMP, Finnhub, NewsAPI, DATABASE_URL, JWT_*, LEGACY_*)
+└── .env                           # Not in git: POSTGRES_PASSWORD (required by compose), API keys (FMP, Finnhub, NewsAPI), JWT_*, LEGACY_*
 ```
 
 ## Nested CLAUDE.md index
