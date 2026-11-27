@@ -26,8 +26,9 @@ const READINGS: Row[] = [
   },
   {
     name: 'Not comparable',
-    meaning: 'Earnings fall inside the next 21 sessions. The expected earnings jump is in the option price, so no reading.',
-    rule: 'Earnings date inside the window',
+    meaning:
+      'Earnings fall inside the next 21 sessions, or the price is pinned (a cash shell before its merger, a pending cash deal, a cash fund). The option price includes something the forecast cannot, so no reading.',
+    rule: 'Earnings date inside the window, or a pinned price',
   },
   {
     name: 'Not enough history',
@@ -151,8 +152,11 @@ export default function QuantTab() {
           <li>
             <span className="text-text-primary font-semibold">Not settled:</span> on the server&rsquo;s own price data
             (a different vendor and more names) the error scores came out much higher, most of all for the naive guess,
-            and the model&rsquo;s lead over it was within noise. Why is not known yet; until a test on that data agrees, read the forecast as one
-            model&rsquo;s estimate, not as a proven edge.
+            and the model&rsquo;s lead over it was within noise. Re-run on free price data with the same kind of names, most
+            of that gap came from cash shells: before a merger the ticker is a trust pinned near $10, and its quiet
+            history makes every forecast far too low once the real company trades. Since model har-gk-3 that history is
+            left out (and missing days and unadjusted splits are handled); until a test on the server&rsquo;s data agrees,
+            read the forecast as one model&rsquo;s estimate, not as a proven edge.
           </li>
           <li>
             <span className="text-text-primary font-semibold">Survivorship:</span> every test uses names listed today.
