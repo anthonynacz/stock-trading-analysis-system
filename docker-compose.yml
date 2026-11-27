@@ -21,8 +21,9 @@ services:
   backend:
     restart: unless-stopped
     build: ./backend
+    # Published on localhost only: the public way in is the password gate (or a local browser in dev).
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://edgeflow:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}@db:5432/edgeflow
       # Auth — LEGACY_MODE stays on so anonymous browsing still resolves
@@ -77,7 +78,7 @@ services:
     restart: unless-stopped
     build: ./frontend
     ports:
-      - "3000:80"
+      - "127.0.0.1:3000:80"
     depends_on:
       - backend
 

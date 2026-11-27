@@ -39,9 +39,9 @@ agenticanalysis/
 
 ## Deployment
 
-Production is deployed on a Hetzner VPS at `204.168.198.65`. Services are exposed as:
-- **Frontend**: http://204.168.198.65:3000
-- **Backend API**: http://204.168.198.65:8000
+Production is deployed on a Hetzner VPS at `204.168.198.65`. The only public way in is the password gate,
+`https://204-168-198-65.sslip.io` (the API is under `/api` there). The frontend (3000) and backend (8000) ports
+are published on the server's localhost only.
 
 Project lives at `/root/edgeflow` on the server. Git remote is `origin = https://github.com/anthonynacz/stock-trading-analysis-system.git`. The server's local branch is `master` but tracks `origin/main` (local dev pushes `master:main`, so prod pulls `main`).
 

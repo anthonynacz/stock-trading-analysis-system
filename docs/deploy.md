@@ -82,6 +82,9 @@ SITE_ADDRESS=<host name of the site, no http://>
   its certificate). Without a domain, `<the server address with dashes>.sslip.io` works.
 - **Login:** `scripts/gate-user.sh <username>` asks for the password, stores only its bcrypt hash in
   `gate/users.caddy` (not in git) and restarts the gate. Run it again to change the login.
+- **Nothing else is public:** `docker-compose.yml` publishes the frontend (3000) and backend (8000) on
+  127.0.0.1 only, so the gate cannot be bypassed. Docker's published ports ignore `ufw`, which is why the
+  binding, not a firewall rule, closes them. On the server itself `curl http://localhost:8000/...` still works.
 - **No login file, no site:** Caddy refuses to start without `gate/users.caddy`.
 - **Deploys:** `scripts/deploy.sh gate` restarts it; `all`, and `auto` when `gate/` or `docker-compose.yml`
   changed, do too, then check that `https://<SITE_ADDRESS>/` asks for the password.

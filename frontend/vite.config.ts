@@ -6,7 +6,11 @@ export default defineConfig(({ mode }) => {
   // .env.prodapi) point the /api proxy at the deployed backend so UI changes
   // can be checked against real data without running the Docker stack.
   const env = loadEnv(mode, process.cwd(), '')
+  // The deployed site sits behind the password gate: put its login in the untracked
+  // frontend/.env.prodapi.local as API_PROXY_AUTH=user:password (no VITE_ prefix, so it never
+  // reaches browser code).
   const apiTarget = env.VITE_API_PROXY || 'http://localhost:8000'
+  const apiAuth = env.API_PROXY_AUTH
 
   return {
     plugins: [react()],
@@ -16,6 +20,7 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: apiTarget,
           changeOrigin: true,
+          ...(apiAuth ? { auth: apiAuth } : {}),
         },
       },
     },

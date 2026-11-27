@@ -30,7 +30,7 @@ src/
 
 ```bash
 cd frontend && npm install && npm run dev   # local dev server (proxies /api to localhost:8000)
-cd frontend && npm run dev:prodapi          # proxy /api to the Hetzner backend via .env.prodapi (VITE_API_PROXY)
+cd frontend && npm run dev:prodapi          # proxy /api to the deployed site via .env.prodapi; its gate login goes in the untracked .env.prodapi.local as API_PROXY_AUTH=user:password
 cd frontend && npx tsc --noEmit             # type check
 cd frontend && npm run build                # tsc + vite build (what the Dockerfile runs)
 ```
