@@ -103,8 +103,8 @@ def _rule_counts(panel: dict[str, Series]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {
         "no_trade_missing": {"bars_removed": 0, "tickers": 0},
         "gaps": {"sessions_inserted": 0, "bars_removed": 0, "tickers": 0},
-        "splits": {"repaired": 0, "adj_only": 0, "adj_confirmed": 0, "ambiguous_missing": 0, "tickers": 0,
-                   "events": {}},
+        "splits": {"repaired": 0, "adj_only": 0, "adj_confirmed": 0, "ambiguous_missing": 0, "left": 0,
+                   "special_dividends": 0, "tickers": 0, "events": {}},
         "shell": {"bars_removed": 0, "tickers": 0, "first_usable": {}},
     }
     for t, s in panel.items():
@@ -116,7 +116,8 @@ def _rule_counts(panel: dict[str, Series]) -> dict[str, dict[str, Any]]:
             out["gaps"]["sessions_inserted"] += ci.get("inserted", 0)
             out["gaps"]["bars_removed"] += ci.get("post_gap", 0)
             out["gaps"]["tickers"] += 1
-        ev = [e for e in ci.get("split_events", []) if e["kind"] != "adj_confirmed"]
+        out["splits"]["special_dividends"] += ci.get("special_dividends", 0)
+        ev = list(ci.get("split_events", []))
         for e in ci.get("split_events", []):
             key = "ambiguous_missing" if e["kind"] == "ambiguous" else e["kind"]
             out["splits"][key] += 1
@@ -468,9 +469,10 @@ def format_scorecard(card: dict) -> str:
                          f"after one without an overnight return, {g['tickers']} tickers ({oos('gaps')} OOS ticker-days)")
         if "splits" in br:
             sp = br["splits"]
-            lines.append(f"    split defects: {sp['repaired']} repaired, {sp['adj_only']} adj-only jumps ignored, "
-                         f"{sp['ambiguous_missing']} ambiguous days missing ({sp['adj_confirmed']} split / special "
-                         f"dividend jumps already corrected by adj_close), {sp['tickers']} tickers "
+            lines.append(f"    split defects: {sp['repaired']} repaired, {sp['adj_only']} adj-only split jumps ignored, "
+                         f"{sp['ambiguous_missing']} ambiguous days missing, {sp['left']} ratio-sized news-day moves "
+                         f"left, {sp['adj_confirmed']} splits already corrected by adj_close, "
+                         f"{sp['special_dividends']} special dividends left to the correction; {sp['tickers']} tickers "
                          f"({oos('splits')} OOS ticker-days)")
             for t, evs in sorted(sp.get("events", {}).items()):
                 lines.append(f"      {t}: " + ", ".join(f"{e['date']} {e['kind']}"

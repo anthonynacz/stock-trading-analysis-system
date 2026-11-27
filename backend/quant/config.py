@@ -85,19 +85,28 @@ ESTIMATOR = {
     # split) or +ln k (1:k reverse). Only that day's overnight return is wrong (Garman-Klass is within one bar),
     # so the repair is to that number alone. Seen in the FMP bars of BMNR, QXO, SMMT, LUNR, MARA, APLD, and
     # adj_close / OHLC disagreeing around QXO, RIOT, WULF, TPL (2026-11-27 audit). Per day t, m = ln(O_t/C_{t-1})
-    # raw, df = the log change of adj_close / close:
-    # - |df| > factor_jump with prices continuous (|m|, |close move| <= tol): adj_close jumped, the prices did
-    #   not: the jump is not a dividend; the raw overnight return is used (repaired, `adj_only`).
-    # - |df| > factor_jump and the open carries it (|m + df| <= tol, range of the day < |df| - tol): a split
-    #   or special dividend adjusted in adj_close only; the dividend correction is already right (`adj_confirmed`,
-    #   counted, unchanged).
-    # - |df| > factor_jump otherwise (the bar mixes units, or the two series disagree): ambiguous.
-    # - |df| <= factor_jump and |m| within ratio_tol of ln k (k in `ratios`): both series moved by a split
-    #   ratio. Repaired (m - sign(m) ln k) only when all of: the level persists (median close of the `window`
-    #   sessions after vs before moved by m within persist_tol: not a bad print that reverts), the split day and
-    #   the day before each have a range under calm_range (not a news day), and share volume moved the other way
-    #   by at least half of ln k (split shares; needs volume on both sides). Otherwise ambiguous.
+    # raw, df = the log change of adj_close / close (cleaning.split_days):
+    # - |df| a split ratio (within ratio_tol of ln k) and the open did not move (|m| <= tol): adj_close carries a
+    #   split the prices do not; the raw overnight return is used (`adj_only`, repaired).
+    # - |df| a split ratio and the open carries it (|m + df| <= tol, the day's range under |df| - tol, so the
+    #   bar is in one unit): the dividend correction already takes it out (`adj_confirmed`, unchanged).
+    # - |df| a split ratio otherwise (the bar mixes units, or the two series disagree): `ambiguous`.
+    # - factor_jump < |df| below a split ratio: a special dividend (QXO 2020-01-06 / 2020-12-18 / 2024-06-05,
+    #   RIOT 2017-10-12, WULF 2021-12-14 are paid distributions in Yahoo's events): unchanged, counted.
+    # - |df| <= factor_jump and |m| within ratio_tol of ln k (k in `ratios`): both series moved by a split ratio.
+    #   Repaired (m - sign(m) ln k) only when all of: the level persists (median close of the `window` sessions
+    #   after vs before moved by m within persist_tol: a split is a permanent change of unit), the split day and
+    #   the day before each have a range under calm_range (a split day is an ordinary day in the new unit), and
+    #   share volume moved the other way by at least half of ln k (needs volume on both sides). When the level
+    #   persists but the rest does not, or the move is undone by the next / previous overnight return (a one-day
+    #   print), `ambiguous`. A ratio-sized move whose level did not hold is not a split and is `left` unchanged
+    #   (GME / AMC in January 2021 opened at 2x / 4x the previous close).
     # Ambiguous days: the day's variance is missing (no invented correction), counted and listed.
+    # Revised twice on 2026-11-27, both times on detections, never on the scorecard: (1) before any scorecard, the
+    # first draft treated every non-split-sized factor jump as ambiguous (that deleted paid special dividends)
+    # and every unexplained ratio move as ambiguous (that deleted the GME / AMC squeeze days); (2) after the
+    # first Yahoo scorecard, when a planted unadjusted 1:4 split on a wild MARA day (2017-10-30) was left as
+    # genuine: "left" now needs the level not to persist, and a one-day print is ambiguous.
     "splits": {"ratios": (2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 100), "ratio_tol": 0.03,
                "factor_jump": 0.10, "tol": 0.05, "window": 10, "persist_tol": 0.15, "calm_range": 0.15},
     # (har-gk-3) Shell history. Defect: before a SPAC merger the ticker's bars are a blank-check trust's (cash in
@@ -110,12 +119,18 @@ ESTIMATOR = {
     # later in life, e.g. a cash takeover, is the same company and its end is genuine volatility), at least
     # pinned_share of the sessions from there to L are pinned (one regime, not a bond fund drifting in and out),
     # and at least min_after sessions follow L (it left the regime for good; bond / cash funds and a shell still
-    # waiting stay whole). The HAR lag window (21 sessions, MIN_VALID_SHARE) is the burn-in after L.
+    # waiting stay whole), and at least min_pinned sessions are pinned (a trust lives for months: one quiet month at
+    # listing is not a shell). The HAR lag window (21 sessions, MIN_VALID_SHARE) is the burn-in after L.
+    # Revised once (2026-11-27) after the detection pass on real shell bars (Yahoo NAMS / QBTS / RGTI) and before
+    # any scorecard was run: the trust's price stays within +/- 1% for months, but bid-ask bounce on a ~$10 price
+    # gives this estimator 5-20% vol, not the ~2% of the final months, so vol_line 0.05 -> 0.25 (the band is the
+    # defining property); the 2021 SPAC boom kept shells off trust value for up to ~4 months after listing, so
+    # start_within 63 -> 126; min_pinned added (RGTI was cut on a single pinned session).
     # Live: a ticker pinned in its last `window` sessions gets the flag `pinned_price` and the reading
     # "not comparable" (a trust, a pending deal or a cash fund: the risk is the regime ending, which the options
     # price and the forecast cannot).
-    "shell": {"window": 21, "band": 0.03, "vol_line": 0.05, "start_within": 63, "pinned_share": 0.75,
-              "min_after": 126},
+    "shell": {"window": 21, "band": 0.03, "vol_line": 0.25, "start_within": 126, "pinned_share": 0.75,
+              "min_after": 126, "min_pinned": 63},
 }
 HAR = {
     "horizon": 21,               # target: mean daily variance over the next 21 sessions

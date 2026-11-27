@@ -94,16 +94,18 @@ def split_days(o, h, l, c, adj_c, volume, cfg: dict) -> dict[str, Any]:
 
     Returns {"on": overnight return to use where finite (NaN: no change), "cc": the same for the close-to-close
     return, "missing": days whose variance is missing (ambiguous), "events": [{i, kind, ratio, m, df}]}; kinds:
-    repaired (both series moved by a split ratio, evidence unambiguous), adj_only (adj_close jumped, prices
-    did not: raw return used), adj_confirmed (the dividend correction already takes the jump out; unchanged),
-    ambiguous (variance missing)."""
+    repaired (both series moved by a split ratio, evidence unambiguous), adj_only (adj_close jumped by a split
+    ratio, the open did not: raw return used), adj_confirmed (the dividend correction already takes the jump out;
+    unchanged), left (a ratio-sized move whose level did not hold and that is not a one-day print: not a split,
+    unchanged), ambiguous (variance missing); plus
+    "special_dividends", the count of dividend-sized factor jumps left to the correction."""
     o, h, l, c = map(_a, (o, h, l, c))
     n = len(c)
     out_on, out_cc = np.full(n, np.nan), np.full(n, np.nan)
     missing = np.zeros(n, dtype=bool)
     events: list[dict] = []
     if n < 2:
-        return {"on": out_on, "cc": out_cc, "missing": missing, "events": events}
+        return {"on": out_on, "cc": out_cc, "missing": missing, "events": events, "special_dividends": 0}
     a = _a(adj_c) if adj_c is not None else np.full(n, np.nan)
     vol = _a(volume) if volume is not None else np.full(n, np.nan)
     ok = valid_bars(o, h, l, c)
@@ -118,47 +120,56 @@ def split_days(o, h, l, c, adj_c, volume, cfg: dict) -> dict[str, Any]:
         rng = np.log(np.maximum.reduce([h, o, c]) / np.minimum.reduce([l, o, c]))
     ratios, rtol, fj, tol = cfg["ratios"], float(cfg["ratio_tol"]), float(cfg["factor_jump"]), float(cfg["tol"])
     w, ptol, calm = int(cfg["window"]), float(cfg["persist_tol"]), float(cfg["calm_range"])
+    n_div = 0
     for i in range(1, n):
         if not (ok[i] and ok[i - 1]) or not np.isfinite(m[i]):
             continue
         dfi = df[i]
         if np.isfinite(dfi) and abs(dfi) > fj:
-            if abs(m[i]) <= tol and abs(dc[i]) <= tol:
+            kf = _split_ratio(dfi, ratios, rtol)
+            if kf is None:                       # a special dividend: the correction stands
+                n_div += 1
+                continue
+            if abs(m[i]) <= tol:
                 kind = "adj_only"
-                out_on[i], out_cc[i] = m[i], dc[i]
+                out_on[i] = m[i]
+                if np.isfinite(dc[i]):
+                    out_cc[i] = dc[i]
             elif abs(m[i] + dfi) <= tol and rng[i] < abs(dfi) - tol:
                 kind = "adj_confirmed"
             else:
                 kind = "ambiguous"
                 missing[i] = True
-            events.append({"i": i, "kind": kind, "ratio": _split_ratio(dfi, ratios, rtol),
-                           "m": round(float(m[i]), 4), "df": round(float(dfi), 4)})
+            events.append({"i": i, "kind": kind, "ratio": kf, "m": round(float(m[i]), 4), "df": round(float(dfi), 4)})
             continue
         k = _split_ratio(m[i], ratios, rtol)
         if k is None:
             continue
         s = math.copysign(math.log(k), m[i])
+        quiet = bool(np.isfinite(rng[i]) and np.isfinite(rng[i - 1]) and rng[i] < calm and rng[i - 1] < calm)
         lo, hi = max(0, i - w), min(n, i + w)
         before, after = _median(c[lo:i]), _median(c[i:hi])
-        persist = (i - lo == w and hi - i == w and np.isfinite(before) and np.isfinite(after)
-                   and abs(math.log(after / before) - m[i]) <= ptol)
-        quiet = np.isfinite(rng[i]) and np.isfinite(rng[i - 1]) and rng[i] < calm and rng[i - 1] < calm
+        persist = bool(i - lo == w and hi - i == w and np.isfinite(before) and np.isfinite(after)
+                       and abs(math.log(after / before) - m[i]) <= ptol)
         vb, va = _median(vol[lo:i]), _median(vol[i:hi])
-        shares = (np.isfinite(vb) and np.isfinite(va) and -math.copysign(1.0, m[i]) * math.log(va / vb)
-                  >= 0.5 * math.log(k))
+        shares = bool(np.isfinite(vb) and np.isfinite(va)
+                      and -math.copysign(1.0, m[i]) * math.log(va / vb) >= 0.5 * math.log(k))
         corr = dfi if np.isfinite(dfi) else 0.0
-        if persist and quiet and shares:
+        reverts = any(0 <= j < n and np.isfinite(m[j]) and abs(m[j] + m[i]) <= rtol for j in (i - 1, i + 1))
+        if quiet and persist and shares:
             kind = "repaired"
             out_on[i] = m[i] - s + corr
             if np.isfinite(dc[i]):
                 out_cc[i] = dc[i] - s + corr
-        else:
+        elif persist or reverts:
             kind = "ambiguous"
             missing[i] = True
+        else:
+            kind = "left"
         events.append({"i": i, "kind": kind, "ratio": k, "m": round(float(m[i]), 4),
                        "df": None if not np.isfinite(dfi) else round(float(dfi), 4),
-                       "evidence": {"persist": bool(persist), "quiet": bool(quiet), "shares": bool(shares)}})
-    return {"on": out_on, "cc": out_cc, "missing": missing, "events": events}
+                       "evidence": {"quiet": quiet, "persist": persist, "shares": shares, "reverts": bool(reverts)}})
+    return {"on": out_on, "cc": out_cc, "missing": missing, "events": events, "special_dividends": n_div}
 
 
 # ---------------------------------------------------------------- shell history
@@ -206,6 +217,8 @@ def shell_end(pinned: np.ndarray, cfg: dict) -> int:
     if not len(idx):
         return -1
     p0, last = int(idx[0]), int(idx[-1])
+    if len(idx) < int(cfg.get("min_pinned", 1)):
+        return -1
     if p0 - int(cfg["window"]) + 1 > int(cfg["start_within"]):
         return -1
     if len(pinned) - 1 - last < int(cfg["min_after"]):
@@ -237,6 +250,7 @@ def variance_series(o, h, l, c, adj_c=None, volume=None, est: dict | None = None
         on = np.where(np.isfinite(sp["on"]), sp["on"], on)
         cc = np.where(np.isfinite(sp["cc"]), sp["cc"], cc)
         info["split_events"] = sp["events"]
+        info["special_dividends"] = sp["special_dividends"]
     v = gk + np.where(np.isfinite(on), on * on, 0.0)
     v = np.where(np.isfinite(gk), np.maximum(v, floor), np.nan)
     if est.get("gaps") and n > 1:
