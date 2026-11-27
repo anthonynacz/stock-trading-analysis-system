@@ -3,9 +3,11 @@
 `run_iv_capture` (cron, 15:00 ET on trading days) measures IV30 / front IV /
 HV20 / HV60 for the active watchlist, open positions, recent research
 tickers and the Radar universe, one row per ticker per day. Quotes are live
-then, so the quality gate in utils/iv_measure.py keeps junk out. The pipeline
-and Research read the latest row through `score_for_ticker`; a ticker with
-no recent row is measured on demand (no reading outside market hours).
+then, so the quality gate in utils/iv_measure.py keeps junk out. A scheduled
+run needs the regular session open (holidays, weekends and early-close days
+skip it) and stops at the close. The pipeline and Research read the latest
+row through `score_for_ticker`; a ticker with no recent row is measured on
+demand, during the regular session only (otherwise the score is "IV unknown").
 """
 
 from __future__ import annotations
@@ -36,6 +38,14 @@ RESEARCH_LOOKBACK_DAYS = 30
 
 def et_today() -> date:
     return datetime.now(cal.ET).date()
+
+
+def capture_skip_reason(now: datetime) -> str | None:
+    """Why a capture at `now` would read stale quotes, else None (the regular session is open)."""
+    if not cal.is_trading_day(now.astimezone(cal.ET).date()):
+        return "not a trading day"
+    phase, _ = cal.phase_at(now)
+    return None if phase == "regular" else "regular session closed"
 
 
 def measure(client: DataSourceClient, ticker: str, today: date) -> dict | None:
@@ -91,23 +101,28 @@ async def iv_universe(session: AsyncSession) -> list[str]:
     return sorted(tickers)
 
 
-async def run_iv_capture(tickers: list[str] | None = None) -> dict[str, Any]:
+async def run_iv_capture(tickers: list[str] | None = None, *, scheduled: bool = True) -> dict[str, Any]:
     """Cron entry point: one iv_daily row per ticker with a clean reading today."""
     from services.run_log import STATUS_FAILED, STATUS_SUCCESS, record_run_finish, record_run_start
 
     today = et_today()
-    if not cal.is_trading_day(today):
-        return {"skipped": "not a trading day"}
-    run_id = await record_run_start(phase="iv_capture", user_id=None)
-    summary: dict[str, Any] = {"tickers": 0, "stored": 0, "no_reading": 0, "errors": 0}
+    reason = capture_skip_reason(datetime.now(timezone.utc))
+    if reason and scheduled:
+        logger.info("iv capture skipped: %s", reason)
+        return {"skipped": reason}
+    run_id = await record_run_start(phase="iv_capture", user_id=None, meta={"scheduled": scheduled})
+    summary: dict[str, Any] = {"tickers": 0, "stored": 0, "no_reading": 0, "errors": 0, "after_close": 0}
     client = DataSourceClient()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     error: str | None = None
     session = async_session()
     try:
         names = tickers or await iv_universe(session)
         summary["tickers"] = len(names)
-        for ticker in names:
+        for i, ticker in enumerate(names):
+            if scheduled and capture_skip_reason(datetime.now(timezone.utc)):
+                summary["after_close"] = len(names) - i     # quotes go stale at the close: stop
+                break
             try:
                 row = await loop.run_in_executor(None, measure, client, ticker, today)
             except Exception:
@@ -188,8 +203,8 @@ async def score_for_ticker(
                               IvDaily.day >= today - timedelta(days=MAX_AGE_DAYS))
         .order_by(IvDaily.day.desc()).limit(1)
     )).scalar_one_or_none()
-    if row is None and measure_if_missing:
-        loop = asyncio.get_event_loop()
+    if row is None and measure_if_missing and capture_skip_reason(datetime.now(timezone.utc)) is None:
+        loop = asyncio.get_running_loop()
         try:
             fresh = await loop.run_in_executor(None, measure, client, ticker, today)
         except Exception:

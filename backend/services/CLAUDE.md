@@ -24,8 +24,8 @@ The daily workflow runs as a phased pipeline orchestrated by APScheduler in `sch
 
 ## IV cost score (daily capture + rules)
 
-`services/iv_collector.py` runs the `iv_capture` cron at 15:00 ET on trading days (`radar.calendar_nyse`), during the session so quotes are live.
-- **Universe:** the watchlist, open positions, research tickers of the last 30 days and the Radar universe (`radar/universe.py`), about 550 tickers and about 25 minutes of yfinance calls.
+`services/iv_collector.py` runs the `iv_capture` cron at 15:00 ET, only while the regular session is open (`capture_skip_reason`: holidays, weekends and early-close days skip it; the loop stops at the close, counted as `after_close`). An on-demand reading (`score_for_ticker`) is also taken only during the session.
+- **Universe:** the watchlist, open positions, research tickers of the last 30 days and the Radar universe (`radar/universe.py`), about 550 tickers and about 25 minutes of yfinance calls (blocking calls in the default executor, one at a time). It shares Yahoo with the quant chains job at 15:40 ET and the radar worker's 5-minute chains: a capture running past 15:40 overlaps the quant job.
 - **Output:** one `iv_daily` row each (IV30, front IV, HV20, HV60), logged to `pipeline_run_log` as phase `iv_capture`.
 - **Rules that read the score** (`utils/iv_score.py`, design in `docs/iv-score-design.md`):
   - Options Lab IV bucket: from the score number (LOW < 35, HIGH ≥ 60), not the event-floored label, because the matrix branches on earnings itself.
