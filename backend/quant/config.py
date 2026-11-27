@@ -83,8 +83,10 @@ ESTIMATOR = {
     "gaps": {"ref_share": 0.5},
     # (har-gk-3) Split defects: a split the vendor did not adjust shows as one overnight return of -ln k (a k:1
     # split) or +ln k (1:k reverse). Only that day's overnight return is wrong (Garman-Klass is within one bar),
-    # so the repair is to that number alone. Seen in the FMP bars of BMNR, QXO, SMMT, LUNR, MARA, APLD, and
-    # adj_close / OHLC disagreeing around QXO, RIOT, WULF, TPL (2026-11-27 audit). Per day t, m = ln(O_t/C_{t-1})
+    # so the repair is to that number alone. Flagged in the FMP bars of BMNR, QXO, SMMT, LUNR, MARA, APLD, with
+    # adj_close / OHLC disagreeing around QXO, RIOT, WULF, TPL (2026-11-27 audit); most of those are genuine moves
+    # and paid distributions (Yahoo has them too: quant/CLAUDE.md, traps), so the rule demands evidence and works
+    # on the overnight return, where a split acts. Per day t, m = ln(O_t/C_{t-1})
     # raw, df = the log change of adj_close / close (cleaning.split_days):
     # - |df| a split ratio (within ratio_tol of ln k) and the open did not move (|m| <= tol): adj_close carries a
     #   split the prices do not; the raw overnight return is used (`adj_only`, repaired).
@@ -106,7 +108,8 @@ ESTIMATOR = {
     # first draft treated every non-split-sized factor jump as ambiguous (that deleted paid special dividends)
     # and every unexplained ratio move as ambiguous (that deleted the GME / AMC squeeze days); (2) after the
     # first Yahoo scorecard, when a planted unadjusted 1:4 split on a wild MARA day (2017-10-30) was left as
-    # genuine: "left" now needs the level not to persist, and a one-day print is ambiguous.
+    # genuine: "left" now needs the level not to persist, and a one-day print is ambiguous (no detection on the
+    # Yahoo bars changed).
     "splits": {"ratios": (2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 100), "ratio_tol": 0.03,
                "factor_jump": 0.10, "tol": 0.05, "window": 10, "persist_tol": 0.15, "calm_range": 0.15},
     # (har-gk-3) Shell history. Defect: before a SPAC merger the ticker's bars are a blank-check trust's (cash in
