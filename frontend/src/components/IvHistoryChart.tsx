@@ -45,7 +45,7 @@ export function IvHistoryChart({ ticker, medianPct }: { ticker: string; medianPc
   return (
     <div className="h-40">
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -18 }}>
+        <LineChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -8 }}>
           <CartesianGrid stroke="#21262d" strokeDasharray="3 3" />
           <XAxis dataKey="label" tick={TICK} axisLine={AXIS_LINE} tickLine={false} minTickGap={24} />
           <YAxis tick={TICK} axisLine={AXIS_LINE} tickLine={false} unit="%" width={44} />

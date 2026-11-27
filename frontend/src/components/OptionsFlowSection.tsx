@@ -65,7 +65,7 @@ export function OptionsFlowSection({ data }: { data: OptionsFlowData }) {
     <div className="space-y-1.5">
       <h4 className="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Options Flow</h4>
       <div className="flex justify-between items-start text-xs gap-2">
-        <span className="text-text-secondary pt-px" title="What options cost to buy now: IV against its own history and the stock's realised moves">
+        <span className="text-text-secondary pt-px whitespace-nowrap shrink-0" title="What options cost to buy now: IV against its own history and the stock's realised moves">
           IV cost
         </span>
         <div className="text-right">
