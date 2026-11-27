@@ -51,8 +51,9 @@ Run workflow → `status`. It prints the deployed commit and the containers and 
 
 - **Normal case:** push to `main`. The run log shows what was rebuilt and ends with `deploy: done, <commit> is live`.
 - **By hand from GitHub:** Actions → Deploy → Run workflow, and pick `auto`, `all`, `backend`, `radar`,
-  `frontend`, `gate`, `status` or `quant-backfill` (no rebuild: fills the quant price store in the running backend,
-  scores the model and writes the forecasts).
+  `frontend`, `gate`, `status`, `quant-backfill` (no rebuild: fills the quant price store in the running backend,
+  scores the model and writes the forecasts) or `quant-audit` (changes nothing: prints the audit of the stored
+  daily bars and the scorecard with its per-ticker breakdown, `--no-record`; output lands in the public run log).
 - **By hand on the server:** `scripts/deploy.sh [request]`.
 
 What `auto` rebuilds: `backend/` changes → `backend` and `radar` (one image); `frontend/` changes →

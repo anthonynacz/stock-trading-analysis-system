@@ -138,17 +138,18 @@ class QuantStore:
             return self._upsert(conn, _BARS, rows, ("ticker", "bar_date"))
 
     def load_bars(self, tickers: Iterable[str] | None = None, since: date | None = None) -> dict[str, dict[str, list]]:
-        """{ticker: {"date", "open", "high", "low", "close", "adj_close", "volume"}} ascending."""
+        """{ticker: {"date", "open", "high", "low", "close", "adj_close", "volume", "source"}} ascending."""
         q = select(_BARS.c.ticker, _BARS.c.bar_date, _BARS.c.open, _BARS.c.high, _BARS.c.low, _BARS.c.close,
-                   _BARS.c.adj_close, _BARS.c.volume).order_by(_BARS.c.ticker, _BARS.c.bar_date)
+                   _BARS.c.adj_close, _BARS.c.volume, _BARS.c.source).order_by(_BARS.c.ticker, _BARS.c.bar_date)
         if tickers is not None:
             q = q.where(_BARS.c.ticker.in_(list(tickers)))
         if since is not None:
             q = q.where(_BARS.c.bar_date >= since)
         out: dict[str, dict[str, list]] = {}
         with self.engine.connect() as conn:
-            for t, d, o, h, l, c, a, v in conn.execute(q):
-                r = out.setdefault(t, {k: [] for k in ("date", "open", "high", "low", "close", "adj_close", "volume")})
+            for t, d, o, h, l, c, a, v, src in conn.execute(q):
+                r = out.setdefault(t, {k: [] for k in ("date", "open", "high", "low", "close", "adj_close", "volume",
+                                                       "source")})
                 r["date"].append(d.isoformat())
                 r["open"].append(o)
                 r["high"].append(h)
@@ -156,6 +157,7 @@ class QuantStore:
                 r["close"].append(c)
                 r["adj_close"].append(a if a is not None else float("nan"))
                 r["volume"].append(v)
+                r["source"].append(src)
         return out
 
     # ------------------------------------------------------------ chain snapshots

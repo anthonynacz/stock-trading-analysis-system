@@ -79,12 +79,18 @@ def _job_view(row: dict | None) -> dict | None:
 def _evaluation_view(run: dict | None) -> dict | None:
     if not run:
         return None
+    from quant.evaluate import verdict     # lazy, like the store: a broken quant package cannot stop the API
+
     m = run.get("metrics") or {}
     return {"created_at": run.get("created_at"), "model": run.get("model"), "version": run.get("version"),
             "window_start": run.get("window_start"), "window_end": run.get("window_end"),
             "n_obs": run.get("n_obs"), "n_tickers": run.get("n_tickers"), "days": m.get("days"),
-            "data_source": m.get("data_source"), "models": m.get("models"), "best_har": m.get("best_har"),
-            "har_beats_trailing": m.get("har_beats_trailing"),
+            "data_source": m.get("data_source"), "models": m.get("models"),
+            # Recomputed from `models` so a scorecard recorded before the three-state verdict reads the same way:
+            # har_verdict better_significant | lower_not_significant | not_better; har_beats_trailing is true only
+            # for better_significant (before 2026-11-27 it meant "lower QLIKE", significant or not).
+            **verdict(m),
+            "cleaning": m.get("cleaning"),
             "estimator_to_close_close": m.get("estimator_to_close_close")}
 
 

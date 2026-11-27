@@ -106,7 +106,7 @@ Documentation page at `/knowledge`. Tabs (`?tab=` keys, deep-linkable): guide, s
 ## Quant (Volatility) Page
 `/quant` (lazy `QuantPage.tsx` + `components/quant/*`), nav label "Volatility". Display only: never wire its reading into `verdict.ts`, the radar, Options Lab or conviction.
 - **Data:** `useQuantVol` (GET /api/quant/vol, 10 min) and `useQuantStatus` (GET /api/quant/status, 1 min; 3 s while a job runs or just after an admin start). Vols are annualised fractions: format with `fmtVol` in `quant/model.ts`.
-- **Pieces:** `VolTable` (sortable; phones hide price / last-21d / earnings and put the reading under the ticker), `TickerVolDrawer` (GET /api/quant/vol/{ticker}, Recharts lines, HTML legend), `ModelPanel` (scorecard vs `trailing_21d`, survivorship caveat, coverage, jobs; admin `Run now` = POST /api/quant/run/{job}, 409 shown as "already running"), `EarlyDaysNote`.
+- **Pieces:** `VolTable` (sortable; phones hide price / last-21d / earnings and put the reading under the ticker), `TickerVolDrawer` (GET /api/quant/vol/{ticker}, Recharts lines, HTML legend), `ModelPanel` (scorecard vs `trailing_21d` with the three-state `har_verdict`, a note when the long-run mean beats HAR, the cleaning counts; survivorship caveat, coverage, jobs; admin `Run now` = POST /api/quant/run/{job}, 409 shown as "already running"), `EarlyDaysNote`.
 - **Reading colours** are for a buyer: cheap green, fair grey, rich amber; not comparable / insufficient history / no IV are neutral dashed. `READING_CFG` in `quant/model.ts` mirrors `backend/quant/config.py` READING. View (sort, sector, reading) in `localStorage["vela.quant_view"]`.
 
 ## Design System

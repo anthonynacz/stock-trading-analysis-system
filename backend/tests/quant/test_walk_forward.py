@@ -95,7 +95,9 @@ def test_run_scorecard_shape_on_synthetic_data():
     # 30 intraday steps: the sampled high / low miss much of the range (scale well under 1).
     assert 0.5 < card["estimator_to_close_close"] < 1.0
     text = evaluate.format_scorecard(card)
-    assert "trailing_21d" in text and "beats trailing" in text
+    assert "trailing_21d" in text and "against trailing" in text and "per-ticker QLIKE" in text
+    assert card["har_verdict"] in ("better_significant", "lower_not_significant", "not_better")
+    assert card["har_beats_trailing"] == (card["har_verdict"] == "better_significant")
 
 
 def test_csv_round_trip(tmp_path):

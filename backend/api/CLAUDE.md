@@ -82,7 +82,7 @@ POST /api/charts/query                 # Run chart query — { dataset, spec } �
 ## Quant (`api/quant_routes.py`, included in `main.py`)
 - `GET /api/quant/vol`: latest forecast per ticker → `{as_of, model_version, disclaimer, rows:[{ticker, sector, price, forecast_vol, realized_vol_21d, implied_vol_30d, iv_source, iv_to_forecast, ratio_pctl, reading, reading_basis, earnings_in_horizon, earnings_date, flags}]}`.
 - `GET /api/quant/vol/{ticker}?days=365`: `{ticker, sector, model_version, disclaimer, rows:[{as_of, ...same fields}]}` (current model version only; 422 bad ticker).
-- `GET /api/quant/status`: coverage (bars, chains, forecasts), last run per job, `running`, latest evaluation scorecard, model run counts.
+- `GET /api/quant/status`: coverage (bars, chains, forecasts), last run per job, `running`, latest evaluation scorecard, model run counts. The `evaluation` block carries `har_verdict` (`better_significant` | `lower_not_significant` | `not_better`), `har_beats_trailing` (true only for `better_significant`), `har_lower_qlike`, `har_t_vs_trailing`, `long_run_beats_har` and `cleaning`, recomputed from `models` for older scorecards.
 - `POST /api/quant/run/{job}` (`bars|chains|forecast`): admin only; 202, 403, 404 unknown job, 409 running.
 
 ## Maintaining this file

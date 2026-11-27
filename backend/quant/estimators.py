@@ -57,28 +57,50 @@ def parkinson(h, l) -> np.ndarray:
 
 
 def adjustment_factor(c, adj_c) -> np.ndarray:
-    """adj_close / close: changes only across ex-dividend dates (both series are split-adjusted)."""
+    """adj_close / close: changes only across ex-dividend dates (both series are split-adjusted). NaN where
+    adj_close is missing or invalid (not 1.0: an old row's factor is far from 1 after years of dividends, so a
+    1.0 stand-in would read as a jump of the whole accumulated adjustment)."""
     c = _arr(c)
     if adj_c is None:
         return np.ones_like(c)
     a = _arr(adj_c)
     with np.errstate(invalid="ignore", divide="ignore"):
         f = a / c
-    return np.where(np.isfinite(f) & (f > 0), f, 1.0)
+    return np.where(np.isfinite(f) & (f > 0), f, np.nan)
 
 
 def overnight_returns(o, c, adj_c=None) -> np.ndarray:
     """ln(O_t / C_{t-1}) + ln(f_t / f_{t-1}), f = adj_close / close: the dividend paid at the open of an ex-date
-    is added back, so it is not counted as a price move. NaN for the first row and next to invalid prices."""
+    is added back, so it is not counted as a price move. Where either day's factor is unknown (adj_close
+    missing) the correction is left out (a dividend is < 1-2% of the price; a made-up factor can be 40%).
+    NaN for the first row and next to invalid prices."""
     o, c = _arr(o), _arr(c)
     f = adjustment_factor(c, adj_c)
     out = np.full(o.shape, np.nan)
     if len(o) < 2:
         return out
     with np.errstate(invalid="ignore", divide="ignore"):
-        r = np.log(o[1:] / c[:-1]) + np.log(f[1:] / f[:-1])
+        corr = np.log(f[1:] / f[:-1])
+        r = np.log(o[1:] / c[:-1]) + np.where(np.isfinite(corr), corr, 0.0)
     out[1:] = np.where(np.isfinite(r), r, np.nan)
     return out
+
+
+def no_trade_bars(o, h, l, c, volume=None) -> np.ndarray:
+    """Bars that carry no price information: O = H = L = C and either no volume (0) or the same close as the
+    session before (a vendor repeating the last price: pre-listing / SPAC-shell rows, halts, stale feeds).
+    A missing volume alone does not count: then only the repeated close does."""
+    o, h, l, c = map(_arr, (o, h, l, c))
+    flat = (o == h) & (h == l) & (l == c)
+    same = np.zeros(len(c), dtype=bool)
+    if len(c) > 1:
+        same[1:] = c[1:] == c[:-1]
+    if volume is not None:
+        v = np.asarray([np.nan if x is None else x for x in volume], dtype=np.float64)
+        zero = v == 0
+    else:
+        zero = np.zeros(len(c), dtype=bool)
+    return flat & (zero | same)
 
 
 def close_to_close_returns(c, adj_c=None) -> np.ndarray:
@@ -91,13 +113,17 @@ def close_to_close_returns(c, adj_c=None) -> np.ndarray:
     return out
 
 
-def daily_variance(o, h, l, c, adj_c=None, floor: float = 1e-8) -> np.ndarray:
-    """The model's daily variance: overnight^2 + Garman-Klass, floored at `floor`. NaN where the bar is invalid;
-    the first row (no previous close) is the Garman-Klass part alone."""
+def daily_variance(o, h, l, c, adj_c=None, floor: float = 1e-8, volume=None,
+                   no_trade_missing: bool = False) -> np.ndarray:
+    """The model's daily variance: overnight^2 + Garman-Klass, floored at `floor`. NaN where the bar is invalid
+    and, with no_trade_missing, on no-trade bars (`no_trade_bars`: missing, not zero variance); the first row
+    (no previous close) is the Garman-Klass part alone."""
     gk = garman_klass(o, h, l, c)
     on = overnight_returns(o, c, adj_c)
     v = gk + np.where(np.isfinite(on), on * on, 0.0)
     v = np.where(np.isfinite(gk), np.maximum(v, floor), np.nan)
+    if no_trade_missing:
+        v = np.where(no_trade_bars(o, h, l, c, volume), np.nan, v)
     return v
 
 

@@ -31,8 +31,8 @@ from typing import Any
 import numpy as np
 
 from . import har
-from .config import ESTIMATOR, EVAL, HAR, MODEL_NAME, MODEL_VERSION, TRADING_DAYS
-from .estimators import close_to_close_returns, daily_variance
+from .config import BREAKDOWN, ESTIMATOR, EVAL, HAR, MODEL_NAME, MODEL_VERSION, TRADING_DAYS, VERDICT_T
+from .estimators import close_to_close_returns, daily_variance, no_trade_bars
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,11 @@ class Series:
     long_run: np.ndarray     # expanding mean variance
 
 
-def make_series(ticker: str, dates, o, h, l, c, adj_c=None, cfg: dict = HAR, est: dict = ESTIMATOR) -> Series:
+def make_series(ticker: str, dates, o, h, l, c, adj_c=None, cfg: dict = HAR, est: dict = ESTIMATOR,
+                volume=None) -> Series:
     dates = np.asarray(dates, dtype="datetime64[D]")
-    v = daily_variance(o, h, l, c, adj_c, floor=float(est["floor"]))
+    v = daily_variance(o, h, l, c, adj_c, floor=float(est["floor"]), volume=volume,
+                       no_trade_missing=bool(est.get("no_trade_missing", False)))
     hzn = int(cfg["horizon"])
     X = har.features(v, tuple(cfg["lags"]), float(est["floor"]))
     y = har.target(v, hzn, float(est["floor"]))
@@ -68,13 +70,49 @@ def make_series(ticker: str, dates, o, h, l, c, adj_c=None, cfg: dict = HAR, est
     return Series(ticker, dates, v, X, y, rv, har.rolling_mean(v, 21), long_run)
 
 
-def panel_from_rows(rows: dict[str, dict[str, Any]], cfg: dict = HAR) -> dict[str, Series]:
-    """{ticker: {"date": [...], "open": [...], ...}} -> {ticker: Series} (tickers under 2 horizons are dropped)."""
+def panel_from_rows(rows: dict[str, dict[str, Any]], cfg: dict = HAR, est: dict = ESTIMATOR) -> dict[str, Series]:
+    """{ticker: {"date": [...], "open": [...], ...}} -> {ticker: Series} (tickers under 2 horizons are dropped).
+    The forecast job builds its panel here too, so a cleaning rule in ESTIMATOR applies to both alike."""
     out = {}
     for t, r in rows.items():
         if len(r["date"]) < 2 * int(cfg["horizon"]):
             continue
-        out[t] = make_series(t, r["date"], r["open"], r["high"], r["low"], r["close"], r.get("adj_close"), cfg)
+        out[t] = make_series(t, r["date"], r["open"], r["high"], r["low"], r["close"], r.get("adj_close"), cfg,
+                             est, r.get("volume"))
+    return out
+
+
+def _eligible(s: Series, first: np.datetime64) -> int:
+    """Ticker-days the walk-forward can score from `first` on (the same mask as walk_forward)."""
+    m = (s.dates >= first) & np.isfinite(s.rv) & np.all(np.isfinite(s.X), axis=1) & np.isfinite(s.trailing) \
+        & np.isfinite(s.long_run)
+    return int(m.sum())
+
+
+def cleaning_report(rows: dict[str, dict[str, Any]], panel: dict[str, Series], cfg: dict = HAR,
+                    est: dict = ESTIMATOR, ev: dict = EVAL) -> dict[str, Any]:
+    """What the ESTIMATOR cleaning rules did: bars treated as missing, tickers affected, and how many
+    out-of-sample ticker-days the evaluation lost or gained against the same bars without the rules."""
+    rules = [k for k in ("no_trade_missing",) if est.get(k)]
+    removed, affected, adj_missing = 0, 0, 0
+    for t in panel:
+        r = rows[t]
+        a = np.asarray([np.nan if x is None else x for x in r.get("adj_close") or []], dtype=np.float64)
+        if len(a) and np.isfinite(a).any():
+            adj_missing += int((~np.isfinite(a)).sum())
+        if rules:
+            k = int(no_trade_bars(r["open"], r["high"], r["low"], r["close"], r.get("volume")).sum())
+            removed += k
+            affected += int(k > 0)
+    out = {"rules": rules, "bars_removed": removed, "tickers_affected": affected, "adj_missing_rows": adj_missing}
+    if rules and panel:
+        master = np.unique(np.concatenate([s.dates for s in panel.values()]))
+        if len(master) > int(ev["min_train_days"]):
+            first = master[int(ev["min_train_days"])]
+            raw = panel_from_rows({t: rows[t] for t in panel}, cfg, {**est, **{k: False for k in rules}})
+            with_rules = sum(_eligible(s, first) for s in panel.values())
+            without = sum(_eligible(s, first) for s in raw.values())
+            out["oos_ticker_days_removed"] = int(without - with_rules)
     return out
 
 
@@ -194,6 +232,104 @@ def scorecard(res: dict[str, Any], ev: dict = EVAL) -> dict[str, Any]:
             "oos_first": str(uniq_dates[0]), "oos_last": str(uniq_dates[-1]), "models": models}
 
 
+def _trimmed_mean(x: np.ndarray, share: float) -> float:
+    x = np.sort(np.asarray(x, dtype=np.float64))
+    k = int(len(x) * share)
+    return float(x[k:len(x) - k].mean()) if len(x) > 2 * k else float("nan")
+
+
+def _tickers_for_share(per_ticker_sum: np.ndarray, share: float) -> int:
+    """Fewest tickers whose summed loss reaches `share` of the total."""
+    s = np.sort(np.asarray(per_ticker_sum, dtype=np.float64))[::-1]
+    tot = s.sum()
+    if tot <= 0:
+        return 0
+    return int(np.searchsorted(np.cumsum(s) / tot, share) + 1)
+
+
+def breakdown(res: dict[str, Any], top: int = BREAKDOWN["top_tickers"], top_days: int = BREAKDOWN["top_days"],
+              trim: float = BREAKDOWN["trim"]) -> dict[str, Any]:
+    """Where the QLIKE comes from: per model, the median and trimmed mean of the per-ticker mean QLIKE and how
+    many tickers hold 50% / 90% of the total loss; the worst tickers (by the baseline's loss) with every model's
+    mean and share; the worst single ticker-days of the baseline and of each HAR variant, with the forecast and
+    the realised target (a near-zero forecast shows here)."""
+    n = len(res.get("rv", []))
+    if not n:
+        return {}
+    rv = res["rv"].astype(np.float64)
+    tick = np.asarray(res["ticker"])
+    names, inv = np.unique(tick, return_inverse=True)
+    cnt = np.bincount(inv)
+    out: dict[str, Any] = {"models": {}}
+    q_by: dict[str, np.ndarray] = {}
+    for m in MODELS:
+        q = qlike(rv, res[m].astype(np.float64))
+        q_by[m] = q
+        tsum = np.bincount(inv, weights=q)
+        tmean = tsum / cnt
+        out["models"][m] = {"ticker_median": round(float(np.median(tmean)), 4),
+                            "ticker_trimmed_mean": round(_trimmed_mean(tmean, trim), 4),
+                            "tickers_for_50pct": _tickers_for_share(tsum, 0.5),
+                            "tickers_for_90pct": _tickers_for_share(tsum, 0.9)}
+    base_sum = np.bincount(inv, weights=q_by[BASELINE])
+    order = np.argsort(-base_sum)[:top]
+    worst = []
+    for i in order:
+        row = {"ticker": str(names[i]), "n": int(cnt[i])}
+        for m in MODELS:
+            tsum_m = float(np.bincount(inv, weights=q_by[m])[i])
+            row[m] = round(tsum_m / cnt[i], 4)
+            row[f"{m}_share"] = round(tsum_m / float(q_by[m].sum()), 4) if q_by[m].sum() > 0 else None
+        worst.append(row)
+    out["worst_tickers"] = worst
+    days = []
+    for m in (BASELINE, "har_pooled", "har_ticker"):
+        if m not in q_by:
+            continue
+        k = top_days if m == BASELINE else max(1, top_days // 2)
+        for j in np.argsort(-q_by[m])[:k]:
+            days.append({"model": m, "ticker": str(tick[j]), "date": str(res["date"][j]),
+                         "forecast_var": float(f"{float(res[m][j]):.4g}"), "target_var": float(f"{rv[j]:.4g}"),
+                         "forecast_vol": round(math.sqrt(float(res[m][j]) * TRADING_DAYS), 4),
+                         "target_vol": round(math.sqrt(rv[j] * TRADING_DAYS), 4), "qlike": round(float(q_by[m][j]), 2)})
+    out["worst_days"] = days
+    return out
+
+
+def verdict(card: dict[str, Any], t_crit: float = VERDICT_T) -> dict[str, Any]:
+    """Three-state verdict of the best HAR variant against the trailing baseline, from a scorecard's models block:
+    better_significant (lower QLIKE and Newey-West t < -t_crit), lower_not_significant (lower QLIKE, t not
+    below -t_crit or unknown), not_better (QLIKE not lower). Also whether the long-run mean, a naive baseline,
+    has a lower QLIKE than that HAR variant. Works on old recorded scorecards (only `models` is needed)."""
+    models = card.get("models") or {}
+    harm = {m: models[m]["qlike"] for m in ("har_pooled", "har_ticker") if m in models and models[m].get("qlike") is not None}
+    best = card.get("best_har") if card.get("best_har") in harm else min(harm, key=harm.get, default=None)
+    base = models.get(BASELINE, {}).get("qlike")
+    if best is None or base is None:
+        return {"best_har": best, "har_verdict": None, "har_beats_trailing": None, "har_lower_qlike": None,
+                "har_t_vs_trailing": None, "long_run_beats_har": None}
+    t = models[best].get("nw_t_vs_trailing")
+    lower = harm[best] < base
+    if not lower:
+        state = "not_better"
+    elif t is not None and isinstance(t, (int, float)) and math.isfinite(t) and t < -t_crit:
+        state = "better_significant"
+    else:
+        state = "lower_not_significant"
+    lr = models.get("long_run_mean", {}).get("qlike")
+    return {"best_har": best, "har_verdict": state, "har_beats_trailing": state == "better_significant",
+            "har_lower_qlike": bool(lower), "har_t_vs_trailing": t,
+            "long_run_beats_har": (lr < harm[best]) if lr is not None else None}
+
+
+VERDICT_TEXT = {
+    "better_significant": "YES: lower QLIKE than trailing 21-day realised vol, beyond noise (NW t < -2)",
+    "lower_not_significant": "NOT ESTABLISHED: lower QLIKE than trailing 21-day realised vol, but not "
+                             "distinguishable from noise (NW t not below -2)",
+    "not_better": "NO: QLIKE not lower than trailing 21-day realised vol",
+}
+
+
 def estimator_bias(panel: dict[str, Series], adj: dict[str, np.ndarray] | None = None) -> float | None:
     """mean(daily estimator) / mean(squared close-to-close return), pooled: 1.0 means the range-based estimator
     has the same scale as close-to-close variance."""
@@ -215,10 +351,10 @@ def run(rows: dict[str, dict[str, Any]], cfg: dict = HAR, ev: dict = EVAL) -> di
     cc = {t: close_to_close_returns(r["close"], r.get("adj_close")) for t, r in rows.items() if t in panel}
     card["estimator_to_close_close"] = estimator_bias(panel, cc)
     harm = {m: card["models"].get(m, {}).get("qlike") for m in ("har_pooled", "har_ticker")}
-    best = min((m for m in harm if harm[m] is not None), key=lambda m: harm[m], default=None)
-    card["best_har"] = best
-    if best and card["models"].get(BASELINE):
-        card["har_beats_trailing"] = card["models"][best]["qlike"] < card["models"][BASELINE]["qlike"]
+    card["best_har"] = min((m for m in harm if harm[m] is not None), key=lambda m: harm[m], default=None)
+    card.update(verdict(card))
+    card["breakdown"] = breakdown(res)
+    card["cleaning"] = cleaning_report(rows, panel, cfg, ESTIMATOR, ev)
     card["refits"] = len(res["refits"])
     first, last = res["refits"][:1], res["refits"][-1:]
     card["refit_coef_first_last"] = [r["coef"] for r in first + last]
@@ -228,15 +364,19 @@ def run(rows: dict[str, dict[str, Any]], cfg: dict = HAR, ev: dict = EVAL) -> di
 # ---------------------------------------------------------------- I/O
 
 def rows_from_csv(path: str) -> dict[str, dict[str, list]]:
+    """CSV (ticker,date,open,high,low,close,adj_close[,volume][,source]) -> the same shape as QuantStore.load_bars."""
     out: dict[str, dict[str, list]] = {}
     with open(path, newline="") as fh:
         for r in csv.DictReader(fh):
-            d = out.setdefault(r["ticker"].upper(), {k: [] for k in
-                                                     ("date", "open", "high", "low", "close", "adj_close")})
+            d = out.setdefault(r["ticker"].upper(), {k: [] for k in ("date", "open", "high", "low", "close",
+                                                                     "adj_close", "volume", "source")})
             d["date"].append(r["date"][:10])
             for k in ("open", "high", "low", "close", "adj_close"):
                 val = r.get(k)
                 d[k].append(float(val) if val not in (None, "", "nan") else np.nan)
+            vol = r.get("volume")
+            d["volume"].append(int(float(vol)) if vol not in (None, "", "nan") else None)
+            d["source"].append(r.get("source") or "csv")
     for d in out.values():          # ascending by date
         order = np.argsort(np.asarray(d["date"], dtype="datetime64[D]"))
         for k in d:
@@ -257,10 +397,35 @@ def format_scorecard(card: dict) -> str:
                      f"{e.get('qlike_vs_trailing', 1.0):>13.3f}{(e.get('nw_t_vs_trailing') or 0.0):>8.2f}"
                      f"{(e.get('ticker_win_share') if e.get('ticker_win_share') is not None else float('nan')):>13.2f}")
     lines.append("")
-    verdict = card.get("har_beats_trailing")
-    lines.append(f"  best HAR variant: {card.get('best_har')}; beats trailing 21-day realised vol out of sample: "
-                 f"{'YES' if verdict else 'NO' if verdict is not None else 'n/a'}")
+    state = card.get("har_verdict")
+    lines.append(f"  best HAR variant: {card.get('best_har')}; against trailing 21-day realised vol out of sample: "
+                 f"{VERDICT_TEXT.get(state, 'n/a')}")
+    if card.get("long_run_beats_har"):
+        lines.append("  NOTE: the long-run mean (a naive baseline) has a lower QLIKE than the best HAR variant")
     lines.append("  (lower is better; NW t < -2: the model's QLIKE is lower than trailing's beyond noise)")
+    cl = card.get("cleaning") or {}
+    if cl:
+        lines.append(f"  cleaning ({', '.join(cl.get('rules', []))}): {cl.get('bars_removed', 0)} bars treated as "
+                     f"missing in {cl.get('tickers_affected', 0)} tickers, {cl.get('oos_ticker_days_removed', 0)} "
+                     f"out-of-sample ticker-days dropped for every model; {cl.get('adj_missing_rows', 0)} rows "
+                     f"without adj_close (no dividend correction on those days)")
+    bd = card.get("breakdown") or {}
+    if bd:
+        lines += ["", "  per-ticker QLIKE (each ticker's mean):",
+                  f"  {'model':<15}{'median':>9}{'trim mean':>11}{'tickers for 50%':>17}{'for 90%':>9}"]
+        for m, e in bd["models"].items():
+            lines.append(f"  {m:<15}{e['ticker_median']:>9.4f}{e['ticker_trimmed_mean']:>11.4f}"
+                         f"{e['tickers_for_50pct']:>17}{e['tickers_for_90pct']:>9}")
+        lines += ["", f"  worst tickers by {BASELINE} loss (mean QLIKE, share of that model's total loss):",
+                  f"  {'ticker':<8}{'n':>6}" + "".join(f"{m:>22}" for m in MODELS)]
+        for w in bd["worst_tickers"]:
+            lines.append(f"  {w['ticker']:<8}{w['n']:>6}" + "".join(
+                f"{w[m]:>12.3f} ({(w[m + '_share'] or 0) * 100:>5.1f}%)" for m in MODELS))
+        lines += ["", "  worst ticker-days (forecast vs realised 21-session target, annualised vol):"]
+        for d in bd["worst_days"]:
+            lines.append(f"  {d['model']:<13}{d['ticker']:<8}{d['date']}  forecast {d['forecast_vol']:.4f} "
+                         f"(var {d['forecast_var']:.3g})  target {d['target_vol']:.4f} (var {d['target_var']:.3g})"
+                         f"  QLIKE {d['qlike']:.1f}")
     return "\n".join(lines)
 
 

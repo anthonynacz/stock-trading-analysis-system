@@ -139,22 +139,29 @@ export default function QuantTab() {
       <div>
         <SectionHeading
           title="What was measured"
-          blurb="Out-of-sample test before shipping: 56 large US stocks and ETFs, daily data Nov 2018 to Oct 2026, about 111,000 ticker-days. Every forecast used only data available on its date."
+          blurb="Out-of-sample tests: every forecast used only data available on its date, scored against the naive guess (last 21 sessions carried forward). The tests so far do not agree, so the model's edge is not established."
         />
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-          <StatTile label="Error vs naive guess" value="≈ 23% lower" sub="QLIKE 0.286 vs 0.373" />
-          <StatTile label="Typical miss" value="12.8 pts" sub="vs 14.9 for the naive guess" />
-          <StatTile label="Beat it in" value="every year" sub="2018–2026, incl. 2020" />
+          <StatTile label="Yahoo bars, 56 names" value="≈ 23% lower error" sub="QLIKE 0.286 vs 0.373, t −3.6 (Nov 2026)" />
+          <StatTile label="Yahoo bars, 180 names" value="≈ 22% lower error" sub="QLIKE 0.303 vs 0.390, t −3.7 (Nov 2026)" />
+          <StatTile label="This server's bars, 270 names" value="not confirmed" sub="lower error, but not beyond luck; long-run average lower still" />
           <StatTile label="Model" value="HAR" sub="fitted across all stocks" />
         </div>
         <ul className="list-disc pl-5 space-y-1.5 text-xs text-text-secondary">
           <li>
-            <span className="text-text-primary font-semibold">Survivorship:</span> the 56 names are today&rsquo;s large
-            caps. Companies that failed are missing, which flatters any forecast somewhat.
+            <span className="text-text-primary font-semibold">Not settled:</span> on the server&rsquo;s own price data
+            (a different vendor and more names) the error scores came out much higher, most of all for the naive guess,
+            and the model&rsquo;s lead over it was within noise. Why is not known yet; until a test on that data agrees, read the forecast as one
+            model&rsquo;s estimate, not as a proven edge.
+          </li>
+          <li>
+            <span className="text-text-primary font-semibold">Survivorship:</span> every test uses names listed today.
+            Companies that failed are missing, which flatters any forecast somewhat.
           </li>
           <li>
             The page&rsquo;s &ldquo;How good is this model&rdquo; panel shows the latest scorecard measured on this
-            server&rsquo;s own data, when one has been run.
+            server&rsquo;s own data, with its verdict: better beyond noise, lower but not distinguishable from noise, or
+            not better.
           </li>
           <li>
             A cheap reading does not mean the option will make money: the stock still has to move enough, in the right

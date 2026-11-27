@@ -2,7 +2,7 @@
 # Server-side deploy: fast-forward this checkout to origin/main and rebuild the services whose code changed.
 #
 # Run by the GitHub Actions deploy key through an SSH forced command (docs/deploy.md), where the request
-# arrives in SSH_ORIGINAL_COMMAND, or by hand on the server:  scripts/deploy.sh [auto|all|backend|radar|frontend|gate|status|quant-backfill]
+# arrives in SSH_ORIGINAL_COMMAND, or by hand on the server:  scripts/deploy.sh [auto|all|backend|radar|frontend|gate|status|quant-backfill|quant-audit]
 #
 #   auto      rebuild what the pulled commits touched (backend/ -> backend + radar, frontend/ -> frontend,
 #             docker-compose.yml -> everything; *.md files never count); nothing to pull -> nothing to do
@@ -13,6 +13,8 @@
 #   status    print the deployed commit and the containers; changes nothing
 #   quant-backfill   no pull, no rebuild: in the running backend container, fill quant_daily_bars (a 10-year
 #             backfill for tickers without bars), score the model, write the forecasts (backend/quant/CLAUDE.md)
+#   quant-audit   changes nothing: in the running backend container, audit quant_daily_bars and print the
+#             model's scorecard with its per-ticker breakdown (evaluation with --no-record; nothing written)
 #
 # The request is checked against that list and nothing else from the caller is ever executed.
 set -euo pipefail
@@ -20,14 +22,22 @@ set -euo pipefail
 main() {
   local want="${SSH_ORIGINAL_COMMAND:-${1:-auto}}"
   case "$want" in
-    auto | all | backend | radar | frontend | gate | status | quant-backfill) ;;
+    auto | all | backend | radar | frontend | gate | status | quant-backfill | quant-audit) ;;
     *)
-      echo "deploy: unknown request (use auto, all, backend, radar, frontend, gate, status or quant-backfill)" >&2
+      echo "deploy: unknown request (use auto, all, backend, radar, frontend, gate, status, quant-backfill or quant-audit)" >&2
       exit 2
       ;;
   esac
 
   cd "$(dirname "$(readlink -f "$0")")/.."
+
+  if [ "$want" = quant-audit ]; then
+    # Read-only: no pull, no rebuild, no lock needed, nothing recorded. Runs the code deployed in the container.
+    echo "quant: $(git log --oneline -1)"
+    docker compose exec -T backend python -m quant.audit || echo "quant: the audit failed" >&2
+    docker compose exec -T backend python -m quant.evaluate --no-record || echo "quant: the evaluation failed" >&2
+    exit 0
+  fi
 
   if [ "$want" = status ]; then
     git log --oneline -1

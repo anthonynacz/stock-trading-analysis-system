@@ -56,12 +56,18 @@ IV = {
 # ---------------------------------------------------------------- volatility model
 
 MODEL_NAME = "har_logrv"
-MODEL_VERSION = "har-gk-1"       # bump on any change to ESTIMATOR or HAR
+MODEL_VERSION = "har-gk-2"       # bump on any change to ESTIMATOR or HAR (gk-2: no-trade bars missing, adj fix)
 TRADING_DAYS = 252
 ESTIMATOR = {
     # Daily variance = squared overnight log return (dividend-corrected) + Garman-Klass open-to-close variance.
     "kind": "gk_overnight",
     "floor": 1e-8,               # daily variance floor before logs (a zero-range day; ~0.16% annualised)
+    # Data-cleaning rule (har-gk-2): a no-trade bar (O = H = L = C with volume 0, or with the same close as the
+    # session before; estimators.no_trade_bars) is a vendor repeating a price, not a session with zero variance.
+    # Its variance is missing (NaN), so lag / target windows with too few real sessions (har.MIN_VALID_SHARE) drop
+    # out for every model alike. Seen in real Yahoo bars of SPAC shells and pre-listing rows (302 of 441
+    # zero-range bars in 180 tickers, 2026-11-27); the scorecard reports how many bars it removed.
+    "no_trade_missing": True,
 }
 HAR = {
     "horizon": 21,               # target: mean daily variance over the next 21 sessions
@@ -77,6 +83,31 @@ EVAL = {
     "refit_every": 21,           # walk-forward refit cadence (sessions)
     "long_run_window": 0,        # 0: the long-run-mean baseline uses all history up to t (expanding)
     "nw_lag": 21,                # Newey-West lag for the loss-difference t statistic (targets overlap by 20 days)
+}
+# Verdict of the best HAR variant against trailing_21d: "better_significant" needs a lower QLIKE AND a Newey-West
+# t below -VERDICT_T (about a 5% two-sided test); a lower QLIKE with t above it is "lower_not_significant".
+VERDICT_T = 2.0
+BREAKDOWN = {                    # per-ticker breakdown in the scorecard (kept small: it is recorded as JSON)
+    "top_tickers": 15,           # worst tickers listed, by the baseline's total loss
+    "top_days": 10,              # worst baseline ticker-days listed (half as many per HAR variant)
+    "trim": 0.05,                # trimmed mean of the per-ticker QLIKE drops this share at each end
+}
+
+# ---------------------------------------------------------------- bars audit (python -m quant.audit, read-only)
+
+# Thresholds of the audit's checks. They only decide what the audit reports; nothing here changes the model.
+AUDIT = {
+    "price_tol": 1e-6,           # relative slack before an open / close counts as outside [low, high]
+    "outside_gross": 0.01,       # ... and this far outside (1%) counts as a gross violation
+    "flat_run_min": 5,           # this many identical closes in a row is a stale run
+    "big_return": 0.40,          # |close-to-close log return| above this (a 33% fall / 49% rise) is listed
+    "factor_jump": 0.10,         # |log change| of adj_close / close above this is not a dividend: split-sized
+    "move_match": 0.05,          # a split shows in a price when its log move is within this of the factor jump
+    "near_zero_vol": 0.02,       # a trailing 21-session vol below 2% annualised can blow up QLIKE (see quant/CLAUDE.md)
+    "gap_share": 0.02,           # missing sessions (vs SPY's dates) above this share of the ticker's span
+    "scale_band": (0.6, 1.6),    # the ticker's estimator / close-to-close variance outside this band
+    "top_overnight": 3,          # largest squared overnight returns listed per flagged ticker
+    "max_listed": 60,            # flagged tickers printed (all are in --json)
 }
 
 # ---------------------------------------------------------------- reading (display only)

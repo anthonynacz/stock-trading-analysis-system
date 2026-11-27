@@ -60,8 +60,9 @@ def test_status_panel(store):
                         "close": 1.5, "adj_close": 1.5, "volume": 1, "source": "fmp"}])
     store.record_model_run(kind="evaluation", model="har_logrv", version=MODEL_VERSION, n_obs=10, n_tickers=2,
                            window_start=date(2020, 1, 1), window_end=date(2026, 10, 1),
-                           metrics={"models": {"trailing_21d": {"qlike": 0.37}}, "har_beats_trailing": True,
-                                    "data_source": "csv", "days": 5})
+                           metrics={"models": {"trailing_21d": {"qlike": 0.37},
+                                               "har_pooled": {"qlike": 0.29, "nw_t_vs_trailing": -3.6}},
+                                    "har_beats_trailing": True, "data_source": "csv", "days": 5})
     with store.engine.begin() as conn:
         conn.execute(insert(PipelineRunLog.__table__).values(
             phase="quant_bars", status="SUCCESS", started_at=datetime(2026, 11, 16, 22, 5, tzinfo=timezone.utc),
@@ -72,6 +73,8 @@ def test_status_panel(store):
     assert body["jobs"]["bars"]["status"] == "SUCCESS" and body["jobs"]["bars"]["result"] == {"status": "ok"}
     assert body["jobs"]["chains"] is None
     assert body["evaluation"]["har_beats_trailing"] is True and body["evaluation"]["n_obs"] == 10
+    assert body["evaluation"]["har_verdict"] == "better_significant"
+    assert body["evaluation"]["best_har"] == "har_pooled" and body["evaluation"]["long_run_beats_har"] is None
     assert body["model_runs"] == {"evaluation": 1} and body["model"]["version"] == MODEL_VERSION
     assert set(body["running"]) == {"bars", "chains", "forecast"}
 
@@ -146,3 +149,18 @@ def test_evaluation_is_stale_rules():
     assert evaluation_is_stale({**fresh, "created_at": now - timedelta(days=EVALUATION_MAX_AGE_DAYS)}, now)
     # a naive timestamp (SQLite) is read as UTC
     assert not evaluation_is_stale({**fresh, "created_at": (now - timedelta(days=1)).replace(tzinfo=None)}, now)
+
+
+def test_status_recomputes_the_verdict_of_an_old_scorecard(store):
+    """A scorecard recorded before the three-state verdict (har_beats_trailing meant "lower QLIKE") is read
+    again from its models block: the 2026-11-27 production result is not shown as a win."""
+    store.record_model_run(kind="evaluation", model="har_logrv", version=MODEL_VERSION, n_obs=480778, n_tickers=270,
+                           metrics={"models": {"trailing_21d": {"qlike": 16.2103},
+                                               "long_run_mean": {"qlike": 0.6, "nw_t_vs_trailing": -1.13},
+                                               "har_pooled": {"qlike": 2.62, "nw_t_vs_trailing": -1.14},
+                                               "har_ticker": {"qlike": 2.6334, "nw_t_vs_trailing": -1.13}},
+                                    "best_har": "har_pooled", "har_beats_trailing": True})
+    ev = _client(store, role="USER").get("/api/quant/status").json()["evaluation"]
+    assert ev["har_verdict"] == "lower_not_significant"
+    assert ev["har_beats_trailing"] is False and ev["har_lower_qlike"] is True
+    assert ev["long_run_beats_har"] is True and ev["har_t_vs_trailing"] == -1.14

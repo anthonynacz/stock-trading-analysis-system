@@ -1431,8 +1431,28 @@ export interface QuantEvaluation {
   data_source: string | null;
   models: Record<string, QuantModelScore> | null;
   best_har: string | null;
+  /** Best HAR variant vs trailing_21d. better_significant: lower QLIKE and Newey-West t < -2;
+   *  lower_not_significant: lower QLIKE, t not below -2; not_better: QLIKE not lower. Absent from older backends. */
+  har_verdict?: QuantVerdict | null;
+  /** True only for better_significant (before 2026-11-27 it meant "lower QLIKE", significant or not). */
   har_beats_trailing: boolean | null;
+  har_lower_qlike?: boolean | null;
+  har_t_vs_trailing?: number | null;
+  /** The long-run mean (a naive baseline) has a lower QLIKE than the best HAR variant. */
+  long_run_beats_har?: boolean | null;
+  /** Data-cleaning rules of the estimator and what they removed (null for scorecards recorded before them). */
+  cleaning?: QuantCleaning | null;
   estimator_to_close_close: number | null;
+}
+
+export type QuantVerdict = 'better_significant' | 'lower_not_significant' | 'not_better';
+
+export interface QuantCleaning {
+  rules: string[];
+  bars_removed: number;
+  tickers_affected: number;
+  adj_missing_rows: number;
+  oos_ticker_days_removed?: number;
 }
 
 export interface QuantStatus {

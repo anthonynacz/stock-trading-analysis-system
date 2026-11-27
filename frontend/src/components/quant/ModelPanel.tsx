@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import axios from 'axios';
-import type { QuantEvaluation, QuantJob, QuantJobRun, QuantModelScore, QuantStatus } from '../../types';
+import type { QuantEvaluation, QuantJob, QuantJobRun, QuantModelScore, QuantStatus, QuantVerdict } from '../../types';
 import { getApiErrorMessage } from '../../utils/api';
 import { fmtInt, formatRelativeTime } from '../../utils/format';
 import { Spinner } from '../ui/feedback';
@@ -93,6 +93,23 @@ function ScoreTable({ models, inUse }: { models: Record<string, QuantModelScore>
   );
 }
 
+/** The recorded three-state verdict, else the same rule applied to the scores (an older backend). */
+function verdictOf(ev: QuantEvaluation): QuantVerdict | null {
+  if (ev.har_verdict !== undefined) return ev.har_verdict ?? null;
+  const best = ev.best_har ? ev.models?.[ev.best_har] : undefined;
+  const base = ev.models?.[BASELINE];
+  if (!best || !base) return null;
+  if (!(best.qlike < base.qlike)) return 'not_better';
+  const t = best.nw_t_vs_trailing;
+  return t !== undefined && t !== null && Number.isFinite(t) && t < -2 ? 'better_significant' : 'lower_not_significant';
+}
+
+const VERDICT_HEAD: Record<QuantVerdict, string> = {
+  better_significant: 'Smaller error than the naive baseline out of sample, beyond what luck explains.',
+  lower_not_significant: 'Not established: a smaller error than the naive baseline, but not distinguishable from luck.',
+  not_better: 'Did not beat the naive baseline out of sample.',
+};
+
 function Scorecard({ ev, inUse }: { ev: QuantEvaluation | null; inUse: string }) {
   if (!ev || !ev.models || Object.keys(ev.models).length === 0) {
     return (
@@ -103,8 +120,9 @@ function Scorecard({ ev, inUse }: { ev: QuantEvaluation | null; inUse: string })
           measured evidence here that the model beats the naive guess.
         </p>
         <p className="text-xs">
-          The design was tested before shipping (2026-11, 56 large US stocks and ETFs, 2018–2026): the HAR forecast had a
-          smaller error than the naive baseline. That result is recorded in the project notes, not re-measured on this data.
+          The design was tested before shipping on Yahoo price data (2026-11, 56 large US stocks and ETFs, 2018–2026): the
+          HAR forecast had a smaller error than the naive baseline on that sample. That result is recorded in the project
+          notes, not re-measured on this data, and is not proof that it holds here.
         </p>
       </div>
     );
@@ -112,19 +130,21 @@ function Scorecard({ ev, inUse }: { ev: QuantEvaluation | null; inUse: string })
   const used = ev.models[inUse] ? inUse : ev.best_har ?? inUse;
   const m = ev.models[used];
   const base = ev.models[BASELINE];
-  const beats = ev.har_beats_trailing;
+  const verdict = verdictOf(ev);
+  const lr = ev.models.long_run_mean;
+  const bestScore = ev.best_har ? ev.models[ev.best_har] : undefined;
+  const lrBeats = ev.long_run_beats_har ?? (lr && bestScore ? lr.qlike < bestScore.qlike : false);
+  const good = verdict === 'better_significant' && !lrBeats;
   const pctLower = m?.qlike_vs_trailing !== undefined ? Math.round((1 - m.qlike_vs_trailing) * 100) : null;
   const t = m?.nw_t_vs_trailing;
   return (
     <div className="space-y-3">
       <div
         className={`rounded border p-3 text-sm ${
-          beats ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100' : 'border-amber-400/40 bg-amber-500/10 text-amber-100'
+          good ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100' : 'border-amber-400/40 bg-amber-500/10 text-amber-100'
         }`}
       >
-        <span className="font-semibold">
-          {beats ? 'Beat the naive baseline out of sample.' : beats === false ? 'Did not beat the naive baseline out of sample.' : 'No verdict recorded.'}
-        </span>{' '}
+        <span className="font-semibold">{verdict ? VERDICT_HEAD[verdict] : 'No verdict recorded.'}</span>{' '}
         {m && base && pctLower !== null && (
           <>
             {modelName(used)}: {pctLower >= 0 ? `${pctLower}% smaller` : `${-pctLower}% larger`} forecast error than the baseline
@@ -138,6 +158,12 @@ function Scorecard({ ev, inUse }: { ev: QuantEvaluation | null; inUse: string })
             )}
             .
           </>
+        )}
+        {lrBeats && (
+          <p className="mt-1.5">
+            The long-run average, another naive guess, scored a smaller error than the model on the same test, so this
+            result is not evidence that the model adds anything.
+          </p>
         )}
       </div>
       <dl className="grid grid-cols-1 sm:grid-cols-[max-content_1fr] gap-x-4 gap-y-0.5 sm:gap-y-1.5 text-xs">
@@ -160,6 +186,17 @@ function Scorecard({ ev, inUse }: { ev: QuantEvaluation | null; inUse: string })
         </dd>
         <dt className="text-text-secondary">Data</dt>
         <dd className="text-text-primary">{SOURCE_TEXT[ev.data_source ?? ''] ?? ev.data_source ?? '—'}</dd>
+        {ev.cleaning && ev.cleaning.rules.length > 0 && (
+          <>
+            <dt className="text-text-secondary">Cleaning</dt>
+            <dd className="text-text-primary">
+              {fmtInt(ev.cleaning.bars_removed)} no-trade price bars (a repeated price, no trading) in{' '}
+              {fmtInt(ev.cleaning.tickers_affected)} tickers counted as missing, not as zero volatility
+              {ev.cleaning.oos_ticker_days_removed !== undefined &&
+                `; ${fmtInt(ev.cleaning.oos_ticker_days_removed)} ticker-days left out of the test for every forecast alike`}
+            </dd>
+          </>
+        )}
         <dt className="text-text-secondary">Scored</dt>
         <dd className="text-text-primary">
           {fmtDate(ev.created_at)} · model {ev.version ?? '—'}

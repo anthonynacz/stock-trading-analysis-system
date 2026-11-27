@@ -111,7 +111,8 @@ Daily bars, per-strike option chain snapshots, and a HAR volatility forecast com
 ("options rich / fair / cheap", relative to a reference distribution, not advice). Writes only `quant_*`
 tables; never feeds conviction, radar or verdicts. Jobs run as subprocesses from the backend's APScheduler
 (chains 15:40 ET, bars + forecast 17:05 ET). Backfill + evaluation + forecast: the Deploy workflow's
-`quant-backfill` request, or `scripts/deploy.sh quant-backfill` on the server.
+`quant-backfill` request, or `scripts/deploy.sh quant-backfill` on the server. Read-only bars audit + scorecard
+breakdown (nothing written): the `quant-audit` request.
 Rules and measurements: `backend/quant/CLAUDE.md`.
 
 ## Maintaining these files
