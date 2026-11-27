@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef } from 'react';
+import { IV_BUCKETS } from './shared';
 
 /* ── Strategies section ─────────────────────────────────────────────────── */
 
@@ -717,6 +718,7 @@ export default function StrategiesTab() {
         <span className="text-text-primary font-semibold">directional bias</span> ×{' '}
         <span className="text-text-primary font-semibold">IV bucket</span> ×{' '}
         <span className="text-text-primary font-semibold">near-earnings flag</span>.
+        The IV bucket comes from the IV cost score: LOW = {IV_BUCKETS.low}, MID = {IV_BUCKETS.mid}, HIGH = {IV_BUCKETS.high}.
         Each card below shows the P&amp;L at expiration for a canonical $100 underlying. Strike lines
         are colored per leg (<span className="text-[#2dd4bf]">calls teal</span>, <span className="text-[#f59e0b]">puts amber</span>); current spot is the blue dashed line.
         <br />

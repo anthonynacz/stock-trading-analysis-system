@@ -26,6 +26,7 @@ from db.models import (
 )
 from services.analyst_tracker import AnalystTracker
 from services.earnings_calendar import EarningsCalendarService
+from services.iv_collector import iv30_change
 from services.news_scanner import NewsScanner
 from services.options_analyzer import OptionsAnalyzer
 from utils.data_sources import DataSourceClient
@@ -43,6 +44,15 @@ LEADING_PRE_POSITION_SIGNALS = frozenset({
     "Smart Money Positioning",
     "Insider Buy Cluster",
 })
+
+
+# Window (days back from the latest clean IV30 reading) for the IV-rising signals.
+IV_CHANGE_DAYS = (4, 8)
+
+
+def _iv_cost(options_snapshot: Any) -> int | None:
+    """The snapshot's IV cost score (utils/iv_score.py), None without a clean IV reading."""
+    return ((getattr(options_snapshot, "iv_score", None) or {}).get("score")) if options_snapshot else None
 
 
 class RecommendationEngine:
@@ -187,8 +197,8 @@ class RecommendationEngine:
         )
 
         # ── 6. Risk level ──────────────────────────────────────────────
-        iv_rank = float(options_snapshot.iv_rank or 0) if options_snapshot else 0.0
-        risk_level = self._determine_risk_level(conviction_score, iv_rank)
+        iv_cost = _iv_cost(options_snapshot)
+        risk_level = self._determine_risk_level(conviction_score, iv_cost)
 
         # ── 7. Target / stop-loss ──────────────────────────────────────
         target_price = stock_data.get("avg_analyst_target")
@@ -205,7 +215,7 @@ class RecommendationEngine:
             suggested_contracts = await self._options_analyzer.select_optimal_contracts(
                 ticker=ticker,
                 direction=direction,
-                iv_rank=iv_rank,
+                iv_cost=iv_cost,
                 current_price=float(current_price) if current_price else 0.0,
                 catalyst_type=catalyst_type,
                 earnings_date=earnings_date,
@@ -223,6 +233,7 @@ class RecommendationEngine:
                 "total_put_volume": options_snapshot.total_put_volume,
                 "unusual_activity": options_snapshot.unusual_activity,
                 "unusual_activity_detail": options_snapshot.unusual_activity_detail,
+                "iv_score": options_snapshot.iv_score,
             }
 
         logger.info(
@@ -449,8 +460,8 @@ class RecommendationEngine:
         )
 
         # ── 6. Risk level ──────────────────────────────────────────────
-        iv_rank = float(options_snapshot.iv_rank or 0) if options_snapshot else 0.0
-        risk_level = self._determine_risk_level(conviction_score, iv_rank)
+        iv_cost = _iv_cost(options_snapshot)
+        risk_level = self._determine_risk_level(conviction_score, iv_cost)
 
         # ── 7. Target / stop-loss ──────────────────────────────────────
         target_price = stock_data.get("avg_analyst_target")
@@ -469,7 +480,7 @@ class RecommendationEngine:
             suggested_contracts = await self._options_analyzer.select_optimal_contracts(
                 ticker=ticker,
                 direction=direction,
-                iv_rank=iv_rank,
+                iv_cost=iv_cost,
                 current_price=float(current_price) if current_price else 0.0,
                 catalyst_type=catalyst_type,
                 earnings_date=earnings_date,
@@ -666,59 +677,6 @@ class RecommendationEngine:
             "bearish_firms": sorted(bearish_firms),
         }
 
-    # ------------------------------------------------------------------
-    # IV rank trajectory (5-day delta)
-    # ------------------------------------------------------------------
-
-    async def _iv_rank_trajectory(self, ticker: str) -> float | None:
-        """Return IV-rank delta over last ~5 days (today - baseline 5d ago).
-
-        Uses the earliest snapshot within the last 7 days (excluding today)
-        as baseline, latest snapshot as current.  Returns None if either
-        missing.
-        """
-        try:
-            now = datetime.now(tz=timezone.utc)
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            window_start = now - timedelta(days=7)
-
-            stmt = (
-                select(OptionsSnapshot.iv_rank, OptionsSnapshot.snapshot_time)
-                .where(
-                    OptionsSnapshot.ticker == ticker,
-                    OptionsSnapshot.snapshot_time >= window_start,
-                    OptionsSnapshot.snapshot_time < today_start,
-                    OptionsSnapshot.iv_rank.isnot(None),
-                )
-                .order_by(OptionsSnapshot.snapshot_time.asc())
-            )
-            result = await self._session.execute(stmt)
-            rows = list(result.all())
-            if not rows:
-                return None
-
-            baseline = float(rows[0][0])
-
-            # Latest (today if present, else most-recent pre-today)
-            latest_stmt = (
-                select(OptionsSnapshot.iv_rank)
-                .where(
-                    OptionsSnapshot.ticker == ticker,
-                    OptionsSnapshot.iv_rank.isnot(None),
-                )
-                .order_by(OptionsSnapshot.snapshot_time.desc())
-                .limit(1)
-            )
-            latest_result = await self._session.execute(latest_stmt)
-            latest_row = latest_result.first()
-            if latest_row is None or latest_row[0] is None:
-                return None
-            latest = float(latest_row[0])
-            return latest - baseline
-        except Exception:
-            logger.exception("_iv_rank_trajectory failed for %s", ticker)
-            return None
-
     async def _rolling_call_volume_3d(self, ticker: str) -> float:
         """Return average call volume over last 3 snapshots (excluding today)."""
         try:
@@ -742,37 +700,6 @@ class RecommendationEngine:
         except Exception:
             logger.exception("_rolling_call_volume_3d failed for %s", ticker)
             return 0.0
-
-    async def _iv_rank_5d_change(self, ticker: str, current_rank: float) -> float | None:
-        """Return the change in iv_rank (in percentage points) over the last 5
-        trading days, or None if no comparable historical row exists.
-
-        Uses options_snapshots history: picks the row closest to 5 trading
-        days ago (within a 4–8 day window to handle weekends / off-days).
-        Returns ``current_rank - prior_rank``.
-        """
-        try:
-            cutoff_min = datetime.now(tz=timezone.utc) - timedelta(days=8)
-            cutoff_max = datetime.now(tz=timezone.utc) - timedelta(days=4)
-            stmt = (
-                select(OptionsSnapshot.iv_rank)
-                .where(
-                    OptionsSnapshot.ticker == ticker,
-                    OptionsSnapshot.iv_rank.isnot(None),
-                    OptionsSnapshot.snapshot_time >= cutoff_min,
-                    OptionsSnapshot.snapshot_time <= cutoff_max,
-                )
-                .order_by(OptionsSnapshot.snapshot_time.desc())
-                .limit(1)
-            )
-            row = (await self._session.execute(stmt)).first()
-            if not row or row[0] is None:
-                return None
-            prior_rank = float(row[0])
-            return current_rank - prior_rank
-        except Exception:
-            logger.exception("_iv_rank_5d_change failed for %s", ticker)
-            return None
 
     async def _latest_deep_options_risks(
         self, ticker: str, max_age_days: int = 7
@@ -1306,7 +1233,7 @@ class RecommendationEngine:
 
         # ── Options signals ─────────────────────────────────────────────
         if options_snapshot:
-            iv_rank = float(options_snapshot.iv_rank or 0)
+            iv_cost = _iv_cost(options_snapshot)
 
             # Compare today's volume against historical average (last 20 days)
             total_call = options_snapshot.total_call_volume or 0
@@ -1322,14 +1249,14 @@ class RecommendationEngine:
                     "detail": f"Call volume {total_call:,} vs 20d avg {hist_avg_call:,.0f} ({total_call / hist_avg_call:.1f}x)",
                 })
 
-            # Smart-Money Positioning (3-day sustained flow + rising IV rank)
+            # Smart-Money Positioning (3-day sustained flow + clean IV30 rising 10%+ in ~5 days)
             rolling_3d_call = await self._rolling_call_volume_3d(ticker)
-            iv_trajectory = await self._iv_rank_trajectory(ticker)
+            iv_trajectory = await iv30_change(self._session, ticker, IV_CHANGE_DAYS)
             if (
                 hist_avg_call > 0
                 and rolling_3d_call >= 2.0 * hist_avg_call
                 and iv_trajectory is not None
-                and iv_trajectory > 10.0
+                and iv_trajectory >= 0.10
             ):
                 score += 12
                 signals.append({
@@ -1337,7 +1264,7 @@ class RecommendationEngine:
                     "points": 12,
                     "detail": (
                         f"3d avg calls {rolling_3d_call:,.0f} ({rolling_3d_call / hist_avg_call:.1f}x) "
-                        f"+ IV rank rising {iv_trajectory:+.0f}pp — institutional accumulation"
+                        f"+ 30-day IV up {iv_trajectory * 100:.0f}% in ~5 days — institutional accumulation"
                     ),
                 })
 
@@ -1370,13 +1297,13 @@ class RecommendationEngine:
                         "detail": f"P/C OI ratio {pc_oi_ratio:.2f} — put-heavy positioning",
                     })
 
-            # IV rank neutralizer
-            if iv_rank > 70:
+            # Rich IV: the IV cost score (utils/iv_score.py) says options are dear to buy
+            if iv_cost is not None and iv_cost >= 70:
                 score -= 10
                 signals.append({
-                    "signal": "High IV Rank",
+                    "signal": "Rich IV",
                     "points": -10,
-                    "detail": f"IV rank {iv_rank:.0f} (>70) — elevated premium risk",
+                    "detail": f"IV cost score {iv_cost} (>= 70) — options are expensive to buy",
                 })
 
         # ── Greek-based signals ────────────────────────────────────────
@@ -1425,27 +1352,24 @@ class RecommendationEngine:
                     "detail": f"Earnings within 7 days + high vega ({vega_pct * 100:.1f}% premium per 1% IV) — expect IV crush post-event",
                 })
 
-            # IV Spike Warning — iv_rank rose sharply over the last 5 trading
+            # IV Spike Warning — the clean 30-day IV rose 25%+ over ~5 trading
             # days. Front-loaded premium accumulation outside an earnings
             # window typically resolves with an event + crush; the signal
             # fires regardless of whether we know the catalyst. Skip when the
             # earnings-keyed IV Crush Risk already fired above so the user
             # doesn't see two near-duplicates.
             if options_snapshot and not (earnings_imminent and vega_pct > 0.08):
-                current_rank = float(options_snapshot.iv_rank or 0)
-                if current_rank > 0:
-                    rank_change = await self._iv_rank_5d_change(ticker, current_rank)
-                    if rank_change is not None and rank_change >= 20:
-                        score -= 12
-                        signals.append({
-                            "signal": "IV Spike Warning",
-                            "points": -12,
-                            "detail": (
-                                f"IV rank rose {rank_change:+.0f}pp over 5 trading days "
-                                f"(now {current_rank:.0f}) — premium building ahead of an "
-                                "unknown catalyst; expect crush on resolution"
-                            ),
-                        })
+                iv_change = await iv30_change(self._session, ticker, IV_CHANGE_DAYS)
+                if iv_change is not None and iv_change >= 0.25:
+                    score -= 12
+                    signals.append({
+                        "signal": "IV Spike Warning",
+                        "points": -12,
+                        "detail": (
+                            f"30-day IV rose {iv_change * 100:.0f}% over ~5 trading days — premium "
+                            "building ahead of an unknown catalyst; expect crush on resolution"
+                        ),
+                    })
 
             # Favorable Theta — low decay with strong conviction
             if near_dte <= 14 and theta_pct < 0.01 and score > 30:
@@ -1812,9 +1736,9 @@ class RecommendationEngine:
     # Risk level
     # ------------------------------------------------------------------
 
-    def _determine_risk_level(self, conviction: float, iv_rank: float) -> str:
-        """Classify risk based on conviction strength and IV rank."""
-        if abs(conviction) >= 60 and iv_rank < 50:
+    def _determine_risk_level(self, conviction: float, iv_cost: int | None) -> str:
+        """Classify risk from conviction strength and the IV cost score (no score: never LOW)."""
+        if abs(conviction) >= 60 and iv_cost is not None and iv_cost < 60:
             return "LOW"
         if abs(conviction) >= 30:
             return "MEDIUM"

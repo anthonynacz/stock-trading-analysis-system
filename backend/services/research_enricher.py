@@ -227,6 +227,8 @@ def _build_context(
     if od:
         options_summary = (
             f"  - Stock price: {od.get('stock_price')}\n"
+            f"  - IV cost: {(od.get('iv_score') or {}).get('label', 'unknown')} "
+            f"({(od.get('iv_score') or {}).get('score', 'n/a')}/100)\n"
             f"  - IV rank: {od.get('iv_rank')}\n"
             f"  - IV percentile: {od.get('iv_percentile')}\n"
             f"  - Put/call ratio: {od.get('put_call_ratio')}\n"

@@ -42,7 +42,7 @@ def test_refresh_appends_a_slim_reading_per_name_with_its_direction(radar_store)
     assert [(h["ticker"], h["direction"]) for h in hist] == [("AAA", "down"), ("BBB", "up")] * 2
     assert hist[0]["as_of"] < hist[2]["as_of"]
     m = hist[0]["metrics"]
-    assert set(m) == set(options.HISTORY_KEYS) | {"iv_risk"}
+    assert set(m) == set(options.HISTORY_KEYS) | {"iv_risk", "iv_label"}
     # The fixture chain quotes calls only: the put side is None, the call side is kept.
     assert m["sides"]["call"]["atm"]["strike"] == 100.0 and m["sides"]["put"] is None
     assert m["iv_risk"] in ("normal", "elevated", "high", "crushing")
@@ -83,10 +83,11 @@ def test_option_class_follows_the_verdict_rules():
 def test_iv_class():
     assert option_lag.iv_class(doc(ivhv=1.1)) == "cheap"
     assert option_lag.iv_class(doc(ivhv=1.3)) == "fair"
-    assert option_lag.iv_class(doc(ivhv=1.6)) == "rich"
+    assert option_lag.iv_class(doc(ivhv=1.6)) == "pricey"
     assert option_lag.iv_class(doc(ivhv=2.1)) == "expensive"
     assert option_lag.iv_class(doc(ivhv=1.1, earnings=True)) == "expensive"
     assert option_lag.iv_class({"iv_pct": None}) is None
+    assert option_lag.iv_class({**doc(ivhv=2.1), "iv_label": "fair"}) == "fair"     # the score wins
 
 
 def test_side_of_uses_puts_for_down_moves_and_old_rows_fall_back_to_calls():

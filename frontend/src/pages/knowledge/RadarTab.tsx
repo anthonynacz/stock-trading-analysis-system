@@ -243,6 +243,51 @@ export default function RadarTab() {
 
       <div>
         <SectionHeading
+          title="The IV badge"
+          blurb="The IV badge on each name is the IV cost score: what it costs to buy an option on that stock now, from 0 to 100. Higher means dearer. It describes the price; it is not a signal to buy or sell."
+        />
+        <ul className="list-disc pl-5 space-y-1.5 text-xs text-text-secondary">
+          <li>
+            <span className="text-text-primary font-semibold">Bands.</span>{' '}
+            <span className="text-emerald-300">Cheap</span> under 35, Fair 35–59,{' '}
+            <span className="text-amber-300">Pricey</span> 60–79, <span className="text-red-300">Expensive</span> 80 and up.
+          </li>
+          <li>
+            <span className="text-text-primary font-semibold">Versus its own history.</span> Is today&apos;s 30-day IV
+            high or low compared with this stock&apos;s own daily readings over the past year?
+          </li>
+          <li>
+            <span className="text-text-primary font-semibold">Versus the stock&apos;s own movement.</span> Is the IV
+            higher than how much the stock has actually moved over the last 20 days? 1.5× scores 60, 2× scores 80.
+          </li>
+          <li>
+            <span className="text-text-primary font-semibold">Confidence dots.</span> ●●● full history and both parts,
+            ●●○ only 20–119 days of history, ●○○ one part only (usually a stock with little IV history yet).
+          </li>
+          <li>
+            <span className="text-text-primary font-semibold">Event priced.</span> When earnings fall before the
+            option&apos;s expiry, or the front expiry&apos;s IV is 1.2× the 30-day IV or more, a tag appears and the
+            label goes up to at least Pricey. The number itself stays the cost now.
+          </li>
+          <li>
+            <span className="text-text-primary font-semibold">IV unknown.</span> The score needs live two-sided option
+            quotes, so outside market hours (or without a clean reading) the badge says IV unknown.
+          </li>
+          <li>
+            <span className="text-text-primary font-semibold">IV crushing</span> is a separate red pill on the exits list.
+            It is for people already holding options: IV is falling fast today, which lowers the value of contracts bought
+            earlier. It is not part of the score.
+          </li>
+          <li>
+            The <span className="text-text-primary font-semibold">IV cost</span> filter (Any / Not expensive / Cheap or
+            fair) and the <span className="text-text-primary font-semibold">Call-friendly</span> preset, which leaves out
+            Expensive names, both read this score. Names without a clean reading pass the filter.
+          </li>
+        </ul>
+      </div>
+
+      <div>
+        <SectionHeading
           title="Intensity is not a probability"
           blurb="Intensity (0 to 100) blends how strong the move's ingredients are right now. It ranks the list and nothing else."
         />

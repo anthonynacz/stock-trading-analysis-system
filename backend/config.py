@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     FMP_API_KEY: str = ""
     FINNHUB_API_KEY: str = ""
     NEWSAPI_KEY: str = ""
+    # EODHD (US stock options EOD, marketplace): only the one-off IV history backfill (services/iv_backfill.py).
+    EODHD_API_KEY: str = ""
 
     # ── Auth / multi-tenancy ────────────────────────────────────────────────
     # When True, all protected routes resolve to the LEGACY_USER_EMAIL admin

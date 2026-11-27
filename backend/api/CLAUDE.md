@@ -23,10 +23,11 @@ GET  /api/news/breaking                # Material headlines (intraday materialit
 GET  /api/catalysts                    # Upcoming earnings (14 days) with fiscal quarter + EPS
 GET  /api/reports/daily                # Download PDF daily report; ?date= (default today)
 GET  /api/options/watchlist/strikes     # Strike recs for all watchlist tickers; ?budget=
-GET  /api/options/{ticker}             # Latest options snapshot
+GET  /api/options/{ticker}             # Latest options snapshot (incl. iv_score, the IV cost score object)
+GET  /api/options/{ticker}/iv-history  # Clean daily IV30 / HV20 from iv_daily, percent, oldest first; ?days=
 GET  /api/options/{ticker}/strikes     # Strike rec for one risk level; ?risk=&budget=
 GET  /api/options/{ticker}/strikes/all # Strike recs for all 3 risk levels; ?budget=
-POST /api/options/deep/{ticker}        # Run expert-level options analysis (greeks, vol structure, strategy, hidden risks)
+POST /api/options/deep/{ticker}        # Run expert-level options analysis (greeks, vol structure, strategy, hidden risks, iv_score)
 GET  /api/options/deep                 # List deep analyses; ?ticker=&limit=&offset=
 GET  /api/options/deep/{id}            # Single deep analysis
 DELETE /api/options/deep/{id}          # Delete a deep analysis
@@ -38,7 +39,7 @@ GET  /api/status                       # Health check, last refresh times
 POST /api/refresh                      # Legacy full pipeline trigger (same as /pipeline/run with no body; no portal consumer)
 POST /api/pipeline/run                 # Start pipeline; body { phases?: string[] } for selective runs
 GET  /api/pipeline/status              # Poll pipeline progress (status, current phase, completed phases)
-POST /api/research/{ticker}            # On-demand full analysis for any ticker (~30-60s)
+POST /api/research/{ticker}            # On-demand full analysis for any ticker (~30-60s); options_data carries iv_score
 GET  /api/research                     # List research results; ?ticker=&limit=&offset=
 GET  /api/research/{id}                # Single research result
 DELETE /api/research/{id}              # Delete research result
@@ -72,7 +73,7 @@ POST /api/charts/query                 # Run chart query â€” { dataset, spec } â
 
 ## Radar
 - `GET /api/radar`: the snapshot state plus `stale`, or `{status:'no_data', stale, message}` before the first scan.
-- `GET /api/radar` also carries `options` (metrics by ticker for members + heating) and `scan_request`.
+- `GET /api/radar` also carries `options` (metrics by ticker for members + heating, each with `iv_score`) and `scan_request`.
 - `POST /api/radar/scan`: any user; 202 pending request, 409 `market_closed` / `already_requested`, 429 `cooldown` (30 s).
 - `GET /api/radar/settings` (saved sensitivity + dials), `PUT /api/radar/settings {levels}`: 202, saves and queues a session recompute (`scan_request.kind = "rebuild"`); 422 invalid, 409 while a scan runs.
 - `GET /api/radar/history?days=&ticker=`: ended stays (EXIT paired with its ENTER by session, ticker, episode), newest first, max 2000.

@@ -33,6 +33,7 @@ from db.models import (
     UniverseStock,
     Watchlist,
 )
+from radar.calendar_nyse import ET
 from radar.store import sync_url
 
 logger = logging.getLogger(__name__)
@@ -291,16 +292,32 @@ class QuantStore:
         return out
 
     def options_snapshot_iv(self, tickers: Iterable[str], since: datetime) -> dict[str, dict]:
-        """{ticker: {"iv", "as_of"}}: the latest options_snapshots.atm_iv since `since` (call nearest the money across expiries, not 30d)."""
-        q = (select(OptionsSnapshot.ticker, OptionsSnapshot.snapshot_time, OptionsSnapshot.atm_iv)
+        """{ticker: {"iv", "as_of", "source"}}: the latest options_snapshots.atm_iv since `since`.
+
+        Snapshots with an `iv_score` (written since the IV cost score, 2026-11) carry the clean IV30 of that
+        day's iv_daily reading (utils/iv_measure.py): source "snapshot_iv30", as of the reading's day, used only
+        when that day is not older than `since`. Older snapshots hold the call nearest the money across expiries,
+        not a 30-day value: source "options_snapshot_atm"."""
+        q = (select(OptionsSnapshot.ticker, OptionsSnapshot.snapshot_time, OptionsSnapshot.atm_iv,
+                    OptionsSnapshot.iv_score)
              .where(OptionsSnapshot.ticker.in_(list(tickers)), OptionsSnapshot.snapshot_time >= since,
                     OptionsSnapshot.atm_iv.is_not(None))
              .order_by(OptionsSnapshot.snapshot_time))
+        since_day = since.astimezone(ET).date()
         out = {}
         with self.engine.connect() as conn:
-            for t, ts, iv in conn.execute(q):
-                if iv is not None and float(iv) > 0:
-                    out[t] = {"iv": float(iv), "as_of": _aware(ts).isoformat()}
+            for t, ts, iv, score in conn.execute(q):
+                if iv is None or float(iv) <= 0:
+                    continue
+                if isinstance(score, dict):
+                    try:
+                        day = date.fromisoformat(str(score.get("as_of")))
+                    except ValueError:
+                        continue
+                    if day >= since_day:
+                        out[t] = {"iv": float(iv), "as_of": day.isoformat(), "source": "snapshot_iv30"}
+                else:
+                    out[t] = {"iv": float(iv), "as_of": _aware(ts).isoformat(), "source": "options_snapshot_atm"}
         return out
 
     # ------------------------------------------------------------ status

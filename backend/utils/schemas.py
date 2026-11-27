@@ -187,6 +187,7 @@ class OptionsSnapshotResponse(BaseModel):
     stock_price: Optional[Decimal] = None
     iv_rank: Optional[Decimal] = None
     iv_percentile: Optional[Decimal] = None
+    iv_score: Optional[dict[str, Any]] = None  # utils/iv_score.py
     put_call_ratio: Optional[Decimal] = None
     total_call_volume: Optional[int] = None
     total_put_volume: Optional[int] = None
@@ -368,6 +369,7 @@ class DeepOptionsAnalysisResponse(BaseModel):
     stock_price: Optional[Decimal] = None
     iv_rank: Optional[Decimal] = None
     iv_percentile: Optional[Decimal] = None
+    iv_score: Optional[dict[str, Any]] = None  # utils/iv_score.py
     directional_bias: Optional[str] = None
     conviction_score: Optional[Decimal] = None
     verdict: Optional[str] = None

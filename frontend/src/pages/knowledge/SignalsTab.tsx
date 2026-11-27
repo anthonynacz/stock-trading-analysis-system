@@ -153,11 +153,11 @@ const SIGNAL_CATEGORIES: SignalCategory[] = [
       { name: 'Unusual Put Volume', points: '-15', detail: 'Put volume > 1.5x 20-day average' },
       { name: 'Bullish OI Skew', points: '+10', detail: 'Put/Call OI ratio < 0.5 — call-heavy positioning' },
       { name: 'Bearish OI Skew', points: '-10', detail: 'Put/Call OI ratio > 1.5 — put-heavy positioning' },
-      { name: 'High IV Rank', points: '-10', detail: 'IV rank > 70 — elevated premium risk' },
+      { name: 'Rich IV', points: '-10', detail: 'IV cost score ≥ 70 — options are expensive to buy' },
       {
         name: 'Smart Money Positioning',
         points: '+12',
-        detail: '3d avg call volume ≥2× 20d avg AND IV rank up >10pp in ~5d — institutional accumulation ahead of a catalyst',
+        detail: '3d avg call volume ≥2× 20d avg AND 30-day IV up 10%+ in ~5 trading days — institutional accumulation ahead of a catalyst',
       },
     ],
   },
@@ -169,7 +169,7 @@ const SIGNAL_CATEGORIES: SignalCategory[] = [
       { name: 'Heavy Theta Decay', points: '-8', detail: 'Near-term ATM theta >3% of premium per day' },
       { name: 'Elevated Theta Decay', points: '-5', detail: 'Near-term ATM theta >2% of premium per day' },
       { name: 'IV Crush Risk', points: '-12', detail: 'Earnings within 7 days AND vega >8% of premium per 1% IV — expect IV crush post-event' },
-      { name: 'IV Spike Warning', points: '-12', detail: 'IV rank rose ≥20pp over the last 5 trading days — premium already inflated' },
+      { name: 'IV Spike Warning', points: '-12', detail: 'Clean 30-day IV rose 25%+ over ~5 trading days — premium already inflated (skipped when IV Crush Risk fires)' },
       {
         name: 'Favorable Theta',
         points: '+5',

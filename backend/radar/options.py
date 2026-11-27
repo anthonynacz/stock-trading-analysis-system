@@ -26,6 +26,8 @@ from datetime import date, datetime, timezone
 from typing import Any, Callable
 
 from utils.greeks import RISK_FREE_RATE
+from utils.iv_measure import atm_expiry_iv, constant_maturity_iv
+from utils.iv_score import iv_score
 
 from . import calendar_nyse as cal
 from .config import MOVERS, OPTIONS
@@ -387,14 +389,18 @@ def ticker_metrics(get_chain: Chains, symbol: str, now: float, baseline: dict | 
     by_expiry = {chosen: chain}          # chains already read, for the swing premium below
     # The ~30-day expiry for the term structure (one more request; skipped when it is the same expiry).
     term = pick_expiry(exps, et_date(now), int(IV["term_dte"]))
+    term_chain = None
     if term is not None and term != chosen and doc.get("price"):
         third = get_chain(symbol, term)
         chains3 = (third or {}).get("options") or []
-        by_expiry[term] = chains3[0] if chains3 else None
-        doc["iv_30d_pct"] = _r(atm_iv(chains3[0] if chains3 else None, doc["price"]), 1)
+        term_chain = chains3[0] if chains3 else None
+        by_expiry[term] = term_chain
+        doc["iv_30d_pct"] = _r(atm_iv(term_chain, doc["price"]), 1)
         doc["iv_30d_expiry"] = exp_date(term).isoformat()
     elif term is not None and term == chosen:
         doc["iv_30d_pct"], doc["iv_30d_expiry"] = doc.get("iv_pct"), doc.get("expiry")
+        term_chain = chain
+    doc["iv_clean"] = clean_iv(chain, term_chain, doc.get("price"), et_date(now))
     # The swing premium: one at-the-money contract 2 weeks to a month out (a request more when that expiry is
     # neither of the two above, which is the usual case for names with weekly options).
     swing = pick_swing_expiry(exps, et_date(now), *params.get("swing_dte", (14, 31)))
@@ -410,6 +416,38 @@ def ticker_metrics(get_chain: Chains, symbol: str, now: float, baseline: dict | 
     front, back = doc.get("iv_pct"), doc.get("iv_30d_pct")
     doc["term_ratio"] = _r(front / back, 2) if front and back else None
     return doc
+
+
+def clean_iv(front: dict | None, term: dict | None, spot: float | None, today: date) -> dict | None:
+    """{iv30_pct, front_pct, front_dte} from the front and ~30-day chains: call/put average at the money,
+    two-sided quotes only, IV30 interpolated in total variance (utils/iv_measure.py). The IV cost score
+    reads it; the call-only iv_pct / iv_30d_pct above stay for the IV change and vega lines."""
+    if not spot:
+        return None
+    points: list[tuple[int, float]] = []
+    for ch in {id(c): c for c in (front, term) if c}.values():
+        dte = (exp_date(int(ch.get("expirationDate") or 0)) - today).days
+        iv = atm_expiry_iv(ch.get("calls") or [], ch.get("puts") or [], spot)
+        if iv is not None:
+            points.append((dte, iv))
+    if not points:
+        return None
+    points.sort()
+    iv30 = constant_maturity_iv(points)
+    return {"iv30_pct": _r(iv30 * 100, 1) if iv30 else None, "front_pct": _r(points[0][1] * 100, 1),
+            "front_dte": points[0][0]}
+
+
+def score_iv(doc: dict, history: list[float]) -> dict | None:
+    """The IV cost score of one metrics document (after add_context set the earnings fields)."""
+    clean = doc.get("iv_clean") or {}
+    iv30, hv = clean.get("iv30_pct"), doc.get("hv_pct")
+    if not iv30:
+        return None
+    earn = doc.get("earnings_date") if doc.get("earnings_before_expiry") else None
+    return iv_score(iv30 / 100, hv / 100 if hv else None, history,
+                    iv_front=clean["front_pct"] / 100 if clean.get("front_pct") else None,
+                    earnings_date=date.fromisoformat(earn) if earn else None, as_of=doc.get("as_of"))
 
 
 def empty_quotes(doc: dict) -> bool:
@@ -533,6 +571,7 @@ HISTORY_KEYS = ("as_of", "price", "has_options", "expiry", "dte", "iv_pct", "hv_
 def history_doc(doc: dict) -> dict:
     out = {k: doc.get(k) for k in HISTORY_KEYS}
     out["iv_risk"] = (doc.get("iv_risk") or {}).get("level")
+    out["iv_label"] = (doc.get("iv_score") or {}).get("label")
     return out
 
 
@@ -642,9 +681,15 @@ def refresh(store: Any, tickers: list[str] | None = None, *, fetch: Fetch | None
                 carry_context(doc, prev[sym])
             elif doc.get("context_source"):
                 doc["context_at"] = stamp
+        try:
+            histories = store.load_iv_histories(list(got), et_date(now))
+        except Exception as e:  # noqa: BLE001 - no history: the score runs on IV vs realised vol alone
+            logger.info("options: iv history unreadable: %s", e)
+            histories = {}
         for sym, doc in got.items():
             carry_iv_first(doc, prev.get(sym), now)
             doc["iv_risk"] = iv_risk(doc, now)
+            doc["iv_score"] = score_iv(doc, histories.get(sym) or [])
         as_of = datetime.fromtimestamp(now, timezone.utc)
         store.put_option_metrics(got, as_of, int(params["keep_days"]))
         try:                                 # the staleness log is a bonus: never fails the refresh

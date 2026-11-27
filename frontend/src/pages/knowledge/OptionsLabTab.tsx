@@ -2,7 +2,7 @@
 
 import { DTE_BUCKETS, IV_BUCKETS } from './shared';
 
-const IV_BUCKET_TEXT = `LOW ${IV_BUCKETS.low}, MID ${IV_BUCKETS.mid}, HIGH ${IV_BUCKETS.high}`;
+const IV_BUCKET_TEXT = `LOW = ${IV_BUCKETS.low}, MID = ${IV_BUCKETS.mid}, HIGH = ${IV_BUCKETS.high}`;
 
 // Mirrors deep_options_analyzer.py `_select_strategy` branches; not a full 3×3×2 grid.
 const VERDICT_MATRIX: { bias: string; bucket: string; earnings: string; verdict: string }[] = [
@@ -131,24 +131,34 @@ const LAB_HEADER_ELEMENTS: LabElement[] = [
       'yfinance prices are stale on weekends and off-hours. If you re-run an analysis Monday morning the whole report can shift because spot finally repriced — the analysis is a snapshot, not a live feed.',
   },
   {
+    name: 'IV Cost Score',
+    values: '0 – 100 · Cheap / Fair / Pricey / Expensive',
+    definition:
+      "One number for what a buyer pays for volatility now. It has two parts, each 50 when normal and higher when options are dearer. Versus its own history: where today's 30-day IV sits in its own clean daily history. Versus the stock's own movement: 30-day IV divided by 20-day realised volatility (1.2× scores 35, 1.5× scores 60, 2.0× scores 80). Bands: Cheap < 35 (green), Fair 35–59 (grey), Pricey 60–79 (amber), Expensive ≥ 80 (red).",
+    effect:
+      `Sets the verdict's IV bucket: ${IV_BUCKET_TEXT}. Long premium strategies (BUY_CALL, BUY_PUT, BUY_STRADDLE) only fire in LOW/MID; short premium (SELL spreads, SELL_IRON_CONDOR) only fire in HIGH. The two parts weigh 50/50 once 120+ days of clean history exist; with 20–119 days the history part weighs less, and with no history the score is IV against realised volatility alone. The dots show confidence: ●●● high (full history plus IV vs realised vol), ●●○ medium (20–119 days), ●○○ low (one part only).`,
+    watchOut:
+      'An "Event priced" tag (earnings before the option\'s expiry, or front-expiry IV at 1.2× the 30-day IV or more) raises the label to at least Pricey; the number itself stays the cost now. The IV is a 30-day at-the-money reading on live two-sided quotes, saved once a day at 15:00 ET; without a clean reading the tile says "IV unknown". Warnings for holders (IV crushing today, earnings just reported) are not part of the score.',
+  },
+  {
     name: 'IV Rank',
     values: '0 – 100',
     definition:
-      'Where current 30-day ATM implied vol sits between its 52-week high and low, expressed 0–100. 0 = at 52-week low, 100 = at 52-week high.',
+      "Where today's 30-day IV sits between the low and the high of its clean daily history (up to 252 trading days), 0–100. 0 = at the low, 100 = at the high. Shown inside the IV cost breakdown as a cross-check only.",
     effect:
-      `Buckets into ${IV_BUCKET_TEXT}. Long premium strategies (BUY_CALL, BUY_PUT, BUY_STRADDLE) only fire in LOW/MID; short premium (SELL spreads, SELL_IRON_CONDOR) only fire in HIGH.`,
+      'No longer picks the strategy. It gives a quick picture of the range next to the percentile, which is the number the score uses.',
     watchOut:
-      'IV rank is range-bound — a stock that never moves can sit at rank 80 on tiny absolute vol. Use alongside expected move percentage to gauge real dollar risk.',
+      'One spike can stretch the range and make today look low. When the percentile is 25+ points above the rank, a single spike stretched the range: trust the percentile.',
   },
   {
     name: 'IV Percentile',
     values: '0 – 100',
     definition:
-      'Percentage of trading days over the last year where IV was below the current reading.',
+      "Share of days in the clean daily history (up to 252 trading days) with 30-day IV at or below today's. Shown inside the IV cost breakdown as a cross-check.",
     effect:
-      "Better than IV rank for distributions with outliers — if one earnings spike sets the 52w high, IV rank understates how elevated today really is. Percentile captures the shape of the distribution.",
+      'Feeds the "Versus its own history" part of the IV cost score. It counts in full only once IV is 20%+ away from its median, so a 1–2 point rise in a tight range does not look extreme.',
     watchOut:
-      'When rank and percentile diverge sharply (e.g. rank 40, percentile 80), there is a recent outlier distorting rank. Treat percentile as the truer "is vol rich or cheap" read.',
+      "If the last 60 days' median is below 0.7× or above 1.4× the window median, the stock's normal level has changed and today is compared with the last 60 days instead. With fewer than 20 days of clean history the percentile is not used.",
   },
 ];
 
@@ -176,18 +186,18 @@ const LAB_STRATEGY_ELEMENTS: LabElement[] = [
   {
     name: 'IV Bucket',
     values: 'LOW / MID / HIGH',
-    definition: `Categorical bin of IV rank: ${IV_BUCKET_TEXT}.`,
+    definition: `The IV cost score number, grouped in three: ${IV_BUCKET_TEXT}. No score counts as MID. The bucket reads the number before the event floor (the strategy rules handle earnings on their own), so an event raises the badge to Pricey without moving the bucket.`,
     effect:
       'Filters which verdicts are eligible. Long premium gets blocked in HIGH IV (paying rich vol); short premium gets blocked in LOW IV (collecting nothing). MID allows directional singles in both directions.',
     watchOut:
-      "The bucket edges are sharp — a rank of 69 vs 70 routes you to completely different strategies. When you are near a boundary, read the rationale to see whether the pick is robust or a coin-flip.",
+      "The bucket edges are sharp — a score of 59 vs 60 routes you to completely different strategies. When you are near a boundary, open the IV cost breakdown and read the rationale to see whether the pick is robust or a coin-flip.",
   },
   {
     name: 'Earnings Tag / Earnings DTE',
     definition:
       'Flag that fires when earnings are within 14 days, with days-to-earnings count. Shown as a purple "Earnings Nd" pill.',
     effect:
-      'Forces the strategy selector to prefer spreads over naked long premium (to limit IV crush) and opens up BUY_STRADDLE when bias is NEUTRAL and IV is LOW. Also triggers the IV_CRUSH hidden risk.',
+      'Forces the strategy selector to prefer spreads over naked long premium (to limit IV crush) and opens up BUY_STRADDLE when bias is NEUTRAL and IV is LOW. Separately, an earnings date before expiry shows as an "Event priced" tag on the IV cost score, which can trigger the IV_CRUSH hidden risk.',
     watchOut:
       'Earnings tag is not "buy the event." Most retail earnings long-premium trades lose to IV crush even when direction is right. If you see this tag, spread structure is nearly always safer than naked calls/puts.',
   },
@@ -204,7 +214,7 @@ const LAB_STRATEGY_ELEMENTS: LabElement[] = [
     name: 'Notes',
     definition: 'Free-text caveats the engine attaches: entry guidance, management rules, profit targets, risks.',
     effect:
-      'Typical notes: "Take profit at 50% max gain," "Close before earnings if IV rank doubles," "Requires $X buying power per spread."',
+      'Typical notes: "Take profit at 50% max gain," "Earnings within 14d — use debit spread to cap IV-crush exposure," "Requires $X buying power per spread."',
     watchOut:
       "Notes are not scored — they are the engine's qualitative commentary. Don't substitute them for reading the Hidden Risks panel; they can miss edge cases the structured risk checks catch.",
   },
@@ -215,7 +225,7 @@ const LAB_HIDDEN_RISKS: LabElement[] = [
     name: 'IV_CRUSH',
     values: 'HIGH',
     definition:
-      'Fires when earnings are within 14 days AND IV rank >60 AND the strategy is long-premium (BUY_*). IV crush uses its own >60 IV-rank threshold, distinct from the HIGH bucket (>=70).',
+      'Fires when an event is priced in (the "Event priced" tag, which also raises the IV cost label to at least Pricey) AND the strategy is long-premium (BUY_*).',
     effect:
       'Post-event IV typically collapses 30–50% overnight. Long ATM premium can lose 15–30% even if the directional thesis plays out and the stock moves in your favor.',
     watchOut:
@@ -239,7 +249,7 @@ const LAB_HIDDEN_RISKS: LabElement[] = [
     effect:
       'A 5-point IV drop would shave ~50% off the premium regardless of direction. Matters most on ATM long options right before a known vol-crush event (earnings, FDA, Fed).',
     watchOut:
-      "Vega cuts both ways — you benefit from IV expansion, hurt by contraction. If IV rank is already high AND vega is high, you are paying peak price for peak vol sensitivity.",
+      "Vega cuts both ways — you benefit from IV expansion, hurt by contraction. If the IV cost is already Pricey or Expensive AND vega is high, you are paying peak price for peak vol sensitivity.",
   },
   {
     name: 'PIN_RISK',
@@ -510,7 +520,7 @@ const LAB_GREEKS_COLUMNS: LabElement[] = [
     effect:
       'Anchors the greeks row — all greeks are computed at the ATM strike, which represents the most liquid / most-used reference contract.',
     watchOut:
-      'On weekends or illiquid names, ATM IV can look absurdly low or high if a single stale quote sneaks through the fallback. Compare to IV rank and neighboring expirations to sanity-check.',
+      'On weekends or illiquid names, ATM IV can look absurdly low or high if a single stale quote sneaks through the fallback. Compare to the 30-day IV in the IV cost breakdown and neighboring expirations to sanity-check.',
   },
   {
     name: 'EM% (Expected Move)',
@@ -546,7 +556,7 @@ export default function OptionsLabTab() {
 
       <LabSubsection
         title="Header & Summary Tiles"
-        description="Top of the detail panel: ticker, directional bias, and the three summary tiles (Price / IV Rank / IV %tile) that drive strategy selection."
+        description="Top of the detail panel: ticker, directional bias, the Price tile and the IV cost tile (with its breakdown below) that drive strategy selection. IV rank and percentile appear inside the breakdown as a cross-check."
         elements={LAB_HEADER_ELEMENTS}
       />
 
@@ -610,7 +620,7 @@ export default function OptionsLabTab() {
       <div className="bg-card border border-border rounded-lg p-4">
         <h3 className="text-sm font-semibold text-text-primary mb-2">How to read the panel in order</h3>
         <ol className="list-decimal pl-5 text-xs text-text-secondary space-y-1.5">
-          <li><strong className="text-text-primary">Start with Bias + IV Rank + IV %tile</strong> — they set the strategy universe.</li>
+          <li><strong className="text-text-primary">Start with Bias + IV cost</strong> — they set the strategy universe.</li>
           <li><strong className="text-text-primary">Read the Verdict and Target DTE</strong> — that is the engine's pick.</li>
           <li><strong className="text-text-primary">Scan Hidden Risks</strong> — a single HIGH risk is often reason enough to decline the trade.</li>
           <li><strong className="text-text-primary">Check Volatility Structure</strong> — is vol priced for an event? Is it contango or backwardation? Does that match the verdict's IV bucket?</li>

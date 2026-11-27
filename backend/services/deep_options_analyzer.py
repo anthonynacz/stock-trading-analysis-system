@@ -11,14 +11,16 @@ import asyncio
 import logging
 import math
 import statistics
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from utils.data_sources import DataSourceClient
 from utils.greeks import RISK_FREE_RATE, compute_greeks, compute_greeks_extended
-from utils.iv_history import compute_iv_rank_and_percentile
+from services.iv_collector import et_today, load_histories, score_for_ticker
+from utils.iv_measure import iv_from_chains, realised_vol
+from utils.iv_score import EVENT_HORIZON_DAYS, iv_score
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,21 @@ def _safe_float(val: Any) -> float | None:
 def _safe_int(val: Any) -> int:
     f = _safe_float(val)
     return int(f) if f is not None else 0
+
+
+def iv_bucket_for(score: dict | None) -> str:
+    """Verdict IV bucket from the IV cost score's number: LOW < 35 (cheap), HIGH >= 60 (pricey or expensive).
+
+    The number, not the label: the label's event floor would count earnings twice, since the strategy
+    matrix already branches on near_earnings.
+    """
+    if not score:
+        return "MID"
+    if score["score"] < 35:
+        return "LOW"
+    if score["score"] >= 60:
+        return "HIGH"
+    return "MID"
 
 
 def _nearest(items: list[dict], key: str, target: float) -> dict | None:
@@ -133,15 +150,9 @@ class DeepOptionsAnalyzer:
         per_exp = [p for p in per_exp if p is not None]
 
         # Phase 2 — global aggregates
-        all_atm_ivs = [p["atm_iv"] for p in per_exp if p.get("atm_iv") is not None]
-        current_atm_iv = all_atm_ivs[0] if all_atm_ivs else None
-        iv_rank, iv_pct, _iv_source = await compute_iv_rank_and_percentile(
-            self._session,
-            ticker,
-            current_atm_iv,
-            chains=chains,
-            spot=spot,
-        )
+        score = await self._iv_score(ticker, chains, spot, today, earnings_date)
+        hist = (score or {}).get("history") or {}
+        iv_rank, iv_pct = hist.get("rank"), hist.get("percentile")
 
         # Phase 3 — vol structure
         vol_structure = self._build_vol_structure(per_exp, spot)
@@ -178,7 +189,7 @@ class DeepOptionsAnalyzer:
         strategy = self._recommend_strategy(
             bias=directional_bias.upper(),
             conviction=conviction_score,
-            iv_rank=iv_rank,
+            iv_score=score,
             per_exp=per_exp,
             spot=spot,
             earnings_dte=earnings_dte,
@@ -188,7 +199,7 @@ class DeepOptionsAnalyzer:
 
         # Phase 8 — hidden risks
         hidden_risks = self._hidden_risks(
-            iv_rank=iv_rank,
+            iv_score=score,
             per_exp=per_exp,
             positioning=positioning,
             liquidity=liquidity,
@@ -199,8 +210,7 @@ class DeepOptionsAnalyzer:
 
         rationale = self._build_rationale(
             bias=directional_bias,
-            iv_rank=iv_rank,
-            iv_pct=iv_pct,
+            iv_score=score,
             vol_structure=vol_structure,
             positioning=positioning,
             strategy=strategy,
@@ -211,6 +221,7 @@ class DeepOptionsAnalyzer:
             "stock_price": spot,
             "iv_rank": iv_rank,
             "iv_percentile": iv_pct,
+            "iv_score": score,
             "directional_bias": directional_bias.upper(),
             "conviction_score": conviction_score,
             "verdict": strategy.get("verdict"),
@@ -222,6 +233,25 @@ class DeepOptionsAnalyzer:
             "hidden_risks": hidden_risks,
             "rationale": rationale,
         }
+
+    async def _iv_score(
+        self, ticker: str, chains: dict, spot: float, today: date, earnings_date: date | None,
+    ) -> dict | None:
+        """Live IV cost score from this chain; the latest clean daily reading when quotes are not live."""
+        live = iv_from_chains(chains, spot, today)
+        if not live["iv30"]:
+            return await score_for_ticker(self._session, self._data_client, ticker)
+        loop = asyncio.get_event_loop()
+        closes = [c for _, c in await loop.run_in_executor(
+            None, self._data_client.get_daily_closes, ticker, "4mo")]
+        history = (await load_histories(self._session, [ticker], et_today()))[ticker]
+        days_to_earnings = (earnings_date - today).days if earnings_date else None
+        in_window = days_to_earnings is not None and 0 <= days_to_earnings <= EVENT_HORIZON_DAYS
+        return iv_score(
+            live["iv30"], realised_vol(closes, 20), history, iv_front=live["iv_front"],
+            hv60=realised_vol(closes, 60), earnings_date=earnings_date if in_window else None,
+            as_of=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%MZ"),
+        )
 
     # ------------------------------------------------------------------
     # Per-expiry analysis
@@ -672,7 +702,7 @@ class DeepOptionsAnalyzer:
         *,
         bias: str,
         conviction: float,
-        iv_rank: float | None,
+        iv_score: dict | None,
         per_exp: list[dict],
         spot: float,
         earnings_dte: int | None,
@@ -680,12 +710,7 @@ class DeepOptionsAnalyzer:
         liquidity: dict,
     ) -> dict:
         """Select one of 8 strategies and pick concrete strikes/expiries."""
-        iv_bucket = "MID"
-        if iv_rank is not None:
-            if iv_rank >= 70:
-                iv_bucket = "HIGH"
-            elif iv_rank < 30:
-                iv_bucket = "LOW"
+        iv_bucket = iv_bucket_for(iv_score)
 
         near_earnings = earnings_dte is not None and 0 <= earnings_dte <= 14
 
@@ -993,7 +1018,7 @@ class DeepOptionsAnalyzer:
     def _hidden_risks(
         self,
         *,
-        iv_rank: float | None,
+        iv_score: dict | None,
         per_exp: list[dict],
         positioning: dict,
         liquidity: dict,
@@ -1007,14 +1032,15 @@ class DeepOptionsAnalyzer:
         is_long_premium = strategy.get("verdict", "").startswith("BUY")
         is_short_premium = strategy.get("verdict", "").startswith("SELL")
 
-        # IV CRUSH — long premium into earnings with elevated IV
-        if near_earnings and iv_rank is not None and iv_rank > 60 and is_long_premium:
+        # IV CRUSH — long premium bought with an event priced in (the event floors the label at pricey)
+        event = (iv_score or {}).get("event")
+        if event and iv_score["label"] in ("pricey", "expensive") and is_long_premium:
             risks.append({
                 "severity": "HIGH",
                 "code": "IV_CRUSH",
-                "title": "IV Crush after earnings",
+                "title": "IV Crush after the event",
                 "detail": (
-                    f"Earnings in {earnings_dte}d with IV rank {iv_rank:.0f}. "
+                    f"{event['note']} IV cost score {iv_score['score']} ({iv_score['label']}). "
                     f"Post-event IV typically collapses 30-50%. "
                     f"Long premium positions can lose 15-30% even if the directional thesis plays out."
                 ),
@@ -1176,16 +1202,14 @@ class DeepOptionsAnalyzer:
         self,
         *,
         bias: str,
-        iv_rank: float | None,
-        iv_pct: float | None,
+        iv_score: dict | None,
         vol_structure: dict,
         positioning: dict,
         strategy: dict,
     ) -> str:
         parts = []
-        iv_str = f"IV rank {iv_rank:.0f}" if iv_rank is not None else "IV rank unavailable"
-        if iv_pct is not None:
-            iv_str += f" (percentile {iv_pct:.0f})"
+        iv_str = (f"IV cost {iv_score['label']} ({iv_score['score']}/100)" if iv_score
+                  else "IV cost unknown (no clean IV reading)")
         parts.append(f"Bias: {bias}. {iv_str}.")
 
         shape = vol_structure.get("term_shape")

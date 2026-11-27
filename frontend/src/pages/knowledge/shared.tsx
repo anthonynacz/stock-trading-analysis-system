@@ -21,8 +21,10 @@ export const WATCHLIST_LIMITS = {
   dropToxic: false,
 } as const;
 
-// IV-rank buckets used by backend/services/deep_options_analyzer.py.
-export const IV_BUCKETS = { low: '<30', mid: '30–69', high: '>=70' } as const;
+// Options Lab verdict IV buckets = the IV cost score number in bands (backend/services/deep_options_analyzer.py
+// iv_bucket_for; bands in backend/utils/iv_score.py). No score counts as MID; the event floor on the label does
+// not move the bucket (the strategy rules handle earnings themselves).
+export const IV_BUCKETS = { low: 'Cheap <35', mid: 'Fair 35–59', high: 'Pricey or Expensive ≥60' } as const;
 
 // DTE spread buckets from deep_options_analyzer.py (up to 8 expirations).
 export const DTE_BUCKETS = '0–7d, 7–21d, 21–45d, 45–90d, 90–180d, 180+d';
@@ -161,9 +163,15 @@ export interface Playbook {
   fields: [label: string, text: ReactNode][];
 }
 
+// The playbook IV pill reads the IV cost score: LOW = Cheap (<35), HIGH = Pricey or Expensive (60+).
 const IV_PILL = {
   LOW: 'bg-green-900/30 text-green-400',
-  HIGH: 'bg-red-900/30 text-red-400',
+  HIGH: 'bg-amber-900/30 text-amber-400',
+} as const;
+
+const IV_PILL_TEXT = {
+  LOW: 'CHEAP IV (<35)',
+  HIGH: 'PRICEY IV (60+)',
 } as const;
 
 const RISK_TEXT = {
@@ -181,7 +189,7 @@ export function PlaybookCard({ badge, iv, risk, note, title, fields }: Playbook)
         ) : (
           <span className={`px-2 py-0.5 rounded text-xs font-bold ${badge.className}`}>{badge.label}</span>
         )}
-        {iv && <span className={`px-2 py-0.5 rounded text-xs font-bold ${IV_PILL[iv]}`}>{iv} IV</span>}
+        {iv && <span className={`px-2 py-0.5 rounded text-xs font-bold ${IV_PILL[iv]}`}>{IV_PILL_TEXT[iv]}</span>}
         {risk && <span className={`text-[10px] font-medium ${RISK_TEXT[risk]}`}>RISK: {risk}</span>}
         {note && <span className="text-[10px] text-text-secondary font-medium">{note}</span>}
       </div>

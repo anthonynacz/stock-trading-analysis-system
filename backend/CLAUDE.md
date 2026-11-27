@@ -57,6 +57,7 @@ asyncio.run(rescore())
 # Data sources
 FINNHUB_API_KEY=     # Finnhub (60 calls/min free) — used for news; ratings fallback only
 NEWSAPI_KEY=         # NewsAPI.org (100 calls/day free) — news fallback
+EODHD_API_KEY=       # EODHD "US Stock Options Data API" marketplace add-on (not a price plan) — only the one-off IV history backfill (services/iv_backfill.py)
 FMP_API_KEY=         # Financial Modeling Prep (Starter $22/mo, 300 req/min) — primary for ratings, earnings, insider trades, news
 POSTGRES_PASSWORD=   # Postgres password of the `edgeflow` user; required by docker-compose.yml (URL-safe characters only)
 DATABASE_URL=postgresql+asyncpg://edgeflow:<password>@localhost:5432/edgeflow  # only for running outside Docker

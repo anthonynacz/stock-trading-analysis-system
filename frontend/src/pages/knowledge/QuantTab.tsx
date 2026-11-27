@@ -131,7 +131,11 @@ export default function QuantTab() {
             days. Close, but not the same snapshot.
           </li>
           <li>
-            <span className="text-text-primary font-semibold">Nearest expiry</span>: short-dated options only. They swing
+            <span className="text-text-primary font-semibold">Daily 30-day reading</span>: the clean 30-day IV taken at
+            15:00 ET for the IV cost score. A 30-day value, but measured a different way and at a different time.
+          </li>
+          <li>
+            <span className="text-text-primary font-semibold">Nearest expiry</span> (older pipeline snapshots only): short-dated options only. They swing
             more than 30-day ones, so the comparison is weak.
           </li>
         </ul>

@@ -54,8 +54,11 @@ any verdict, and the API labels every reading "not advice". Writes only the `qua
 - **The reading is relative.** IV normally exceeds later realised vol (variance risk premium); compare
   IV / forecast with the ticker's own earlier ratios (60+), else today's cross-section of 30-day-IV names
   (30+), else "insufficient history". Earnings inside the horizon or a pinned price: "not comparable".
-- **IV source is always recorded** (`iv_source`): `chain_cm30` > `radar_iv30` > `options_snapshot_atm`
-  (the call nearest the money across expiries, not a 30-day value; flagged `iv_not_30d`). The cross-section reference uses only the first two.
+- **IV source is always recorded** (`iv_source`): `chain_cm30` > `radar_iv30` > `options_snapshots.atm_iv`. Since
+  the IV cost score that column holds the clean IV30 of the day's `iv_daily` reading (`snapshot_iv30`, used only
+  when the reading's day is inside the fallback window); older rows hold the call nearest the money across
+  expiries (`options_snapshot_atm`, not a 30-day value; flagged `iv_not_30d`). The cross-section reference uses
+  only the first two.
 
 ## What was measured
 
@@ -70,6 +73,7 @@ any verdict, and the API labels every reading "not advice". Writes only the `qua
 
 | 2026-11-27 | har-gk-3 rules on Yahoo bars, 207 tickers (the 180 + the server's trouble names, no cash funds), 371k ticker-days | har-gk-2 rules only: trailing 1.323, long-run 0.587, HAR pooled 0.663 (t -1.98): the server's shape, reproduced. Shell rule alone = all rules: 0.418 / 0.451 / 0.318 (t -3.36), per-ticker 0.324 (t -3.87); RMSE vol 0.256 / 0.267 / 0.224; 3,214 bars cut in 12 tickers (NAMS, QBTS, USAR, LUNR, DKNG, ASTS, CHPT, JOBY, AUR, ACHR, SPCE, OKLO; each end within days of the merger vote / announcement). Gaps and splits change nothing on Yahoo bars. With 13 cash / bond funds added: 0.786 / 0.629 / 0.521 (t -1.45) | ships as har-gk-3; HAR beats trailing on operating-company history. Missed shells: CIFR, LCID, RGTI, HIMS, IONQ (pinned share < 75% or < 63 pinned sessions; thresholds not tuned on QLIKE). Cash funds in March 2020 (forecast 0.2-0.4%, realised 11-25%) are genuine and dominate a QLIKE that includes them |
 | 2026-11-27 | FMP-shaped defects planted in those Yahoo bars (unadjusted MARA 1:4 x2, TPL 3:1, NVDA 4:1 with adjusted volume, NVDA adj-only 10:1, 167 missing ONDS / MARA sessions) | all rules: 0.419 / 0.452 / 0.319 vs 0.418 / 0.451 / 0.318 on the clean bars. TPL repaired, NVDA adj-only repaired, NVDA 2021 and MARA 2017 ambiguous (missing), MARA 2019-04-08 missed (an 11% genuine gap on the split day puts it outside ratio_tol) | the rules neutralise planted defects; a split on a day with a big genuine gap is not caught |
+| 2026-11-27 | `quant-audit` on the server with har-gk-3 (FMP bars, 270 tickers, 476k ticker-days) | QLIKE: trailing 0.408, long-run mean 0.442, HAR pooled 0.306 (NW t -3.45, wins on 97% of tickers), per-ticker 0.325 (t -2.79). RMSE vol 0.259 / 0.268 / 0.224 / 0.220. Per-ticker median 0.333 / 0.350 / 0.258 / 0.264. Scale 1.07. Rules: shell 2,431 bars in 11 tickers (NAMS, QBTS, LUNR, AUR, ACHR, JOBY, ASTS, DKNG, NVTS, SMR, USAR); no-trade 1,045 bars; 1,504 missing sessions in 3 tickers; splits 0 repaired, 7 ratio-sized moves left as genuine (BMNR, QXO), 9 special dividends. Worst left: CIFR (Jul-Aug 2021) and RGTI (Feb 2022), shells the rule misses | confirmed on the server's own bars: `better_significant`. The loss is no longer concentrated (75+ tickers hold half of it) |
 
 Caveat: every sample is names listed today (survivorship).
 
