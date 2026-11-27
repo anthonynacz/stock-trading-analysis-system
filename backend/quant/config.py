@@ -56,18 +56,66 @@ IV = {
 # ---------------------------------------------------------------- volatility model
 
 MODEL_NAME = "har_logrv"
-MODEL_VERSION = "har-gk-2"       # bump on any change to ESTIMATOR or HAR (gk-2: no-trade bars missing, adj fix)
+# bump on any change to ESTIMATOR or HAR. gk-2: no-trade bars missing, adj fix. gk-3: missing sessions, split
+# defects and shell history (the three rules below, quant/cleaning.py).
+MODEL_VERSION = "har-gk-3"
 TRADING_DAYS = 252
 ESTIMATOR = {
     # Daily variance = squared overnight log return (dividend-corrected) + Garman-Klass open-to-close variance.
     "kind": "gk_overnight",
     "floor": 1e-8,               # daily variance floor before logs (a zero-range day; ~0.16% annualised)
-    # Data-cleaning rule (har-gk-2): a no-trade bar (O = H = L = C with volume 0, or with the same close as the
-    # session before; estimators.no_trade_bars) is a vendor repeating a price, not a session with zero variance.
-    # Its variance is missing (NaN), so lag / target windows with too few real sessions (har.MIN_VALID_SHARE) drop
-    # out for every model alike. Seen in real Yahoo bars of SPAC shells and pre-listing rows (302 of 441
-    # zero-range bars in 180 tickers, 2026-11-27); the scorecard reports how many bars it removed.
+    # Data-cleaning rules. Each acts in quant/cleaning.variance_series, which the evaluation, the forecast job and
+    # the audit all call, so every model sees the same input; the scorecard's `cleaning` block counts each one.
+    # Thresholds were written down from the defect's definition before their effect on the scorecard was seen.
+    #
+    # (har-gk-2) A no-trade bar (O = H = L = C with volume 0, or with the same close as the session before;
+    # estimators.no_trade_bars) is a vendor repeating a price, not a session with zero variance. Its variance is
+    # missing (NaN), so lag / target windows with too few real sessions (har.MIN_VALID_SHARE) drop out for every
+    # model alike. Seen in real Yahoo bars of SPAC shells and pre-listing rows (302 of 441 zero-range bars in 180
+    # tickers, 2026-11-27).
     "no_trade_missing": True,
+    # (har-gk-3) Missing sessions. Defect: a ticker without bars for days or months (BMNR misses 1,059 sessions,
+    # ONDS 440 in the FMP bars) made the next bar's "overnight" return a multi-session move and let a 21-row window
+    # span months. Each ticker is put on the panel's session calendar (dates that at least `ref_share` of the
+    # tickers trading then have; SPY-free, holiday-free); a missing session is a NaN row, so a window needs
+    # har.MIN_VALID_SHARE real sessions, and the bar after a missing or invalid one has no known overnight
+    # return: its variance is missing too (not Garman-Klass alone, which would understate it).
+    "gaps": {"ref_share": 0.5},
+    # (har-gk-3) Split defects: a split the vendor did not adjust shows as one overnight return of -ln k (a k:1
+    # split) or +ln k (1:k reverse). Only that day's overnight return is wrong (Garman-Klass is within one bar),
+    # so the repair is to that number alone. Seen in the FMP bars of BMNR, QXO, SMMT, LUNR, MARA, APLD, and
+    # adj_close / OHLC disagreeing around QXO, RIOT, WULF, TPL (2026-11-27 audit). Per day t, m = ln(O_t/C_{t-1})
+    # raw, df = the log change of adj_close / close:
+    # - |df| > factor_jump with prices continuous (|m|, |close move| <= tol): adj_close jumped, the prices did
+    #   not: the jump is not a dividend; the raw overnight return is used (repaired, `adj_only`).
+    # - |df| > factor_jump and the open carries it (|m + df| <= tol, range of the day < |df| - tol): a split
+    #   or special dividend adjusted in adj_close only; the dividend correction is already right (`adj_confirmed`,
+    #   counted, unchanged).
+    # - |df| > factor_jump otherwise (the bar mixes units, or the two series disagree): ambiguous.
+    # - |df| <= factor_jump and |m| within ratio_tol of ln k (k in `ratios`): both series moved by a split
+    #   ratio. Repaired (m - sign(m) ln k) only when all of: the level persists (median close of the `window`
+    #   sessions after vs before moved by m within persist_tol: not a bad print that reverts), the split day and
+    #   the day before each have a range under calm_range (not a news day), and share volume moved the other way
+    #   by at least half of ln k (split shares; needs volume on both sides). Otherwise ambiguous.
+    # Ambiguous days: the day's variance is missing (no invented correction), counted and listed.
+    "splits": {"ratios": (2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 100), "ratio_tol": 0.03,
+               "factor_jump": 0.10, "tol": 0.05, "window": 10, "persist_tol": 0.15, "calm_range": 0.15},
+    # (har-gk-3) Shell history. Defect: before a SPAC merger the ticker's bars are a blank-check trust's (cash in
+    # trust, price pinned near $10, ~2% vol), a different security from the operating company that later trades
+    # under the ticker (NAMS, QBTS: 55% of the trailing baseline's total loss on the server, 2026-11-27). A session
+    # is "pinned" when its trailing `window` sessions have every close within +/- band of their median and a
+    # realised vol (this estimator, annualised) under vol_line (or fewer than a quarter of them trade at all).
+    # The rule cuts a ticker's history through its last pinned session L only when all of: the first pinned
+    # session's window starts within start_within sessions of the first bar (start of life only: a pinned regime
+    # later in life, e.g. a cash takeover, is the same company and its end is genuine volatility), at least
+    # pinned_share of the sessions from there to L are pinned (one regime, not a bond fund drifting in and out),
+    # and at least min_after sessions follow L (it left the regime for good; bond / cash funds and a shell still
+    # waiting stay whole). The HAR lag window (21 sessions, MIN_VALID_SHARE) is the burn-in after L.
+    # Live: a ticker pinned in its last `window` sessions gets the flag `pinned_price` and the reading
+    # "not comparable" (a trust, a pending deal or a cash fund: the risk is the regime ending, which the options
+    # price and the forecast cannot).
+    "shell": {"window": 21, "band": 0.03, "vol_line": 0.05, "start_within": 63, "pinned_share": 0.75,
+              "min_after": 126},
 }
 HAR = {
     "horizon": 21,               # target: mean daily variance over the next 21 sessions
