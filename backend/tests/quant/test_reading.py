@@ -48,3 +48,10 @@ def test_horizon_end_and_earnings_window():
     assert earnings_in_window(as_of, end, [(as_of, "BMO")]) is None          # already out at the open
     assert earnings_in_window(as_of, end, [(as_of, "AMC")]) == as_of          # after the close: tomorrow's move
     assert earnings_in_window(as_of, end, [(date(2026, 11, 1), "AMC")]) is None
+
+
+def test_pinned_price_is_not_comparable():
+    own = [1.0 + 0.01 * i for i in range(100)]
+    assert rd.classify(1.3, own_ref=own, xs_ref=[], earnings_in_horizon=False, pinned=True, cfg=CFG) == \
+        (rd.NOT_COMPARABLE, rd.BASIS_PINNED, None)
+    assert rd.classify(None, own_ref=own, xs_ref=[], earnings_in_horizon=False, pinned=True, cfg=CFG)[0] == rd.NO_IV

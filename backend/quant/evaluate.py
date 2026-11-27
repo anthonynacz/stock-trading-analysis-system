@@ -24,7 +24,7 @@ import json
 import logging
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
@@ -32,7 +32,7 @@ import numpy as np
 
 from . import har
 from .config import BREAKDOWN, ESTIMATOR, EVAL, HAR, MODEL_NAME, MODEL_VERSION, TRADING_DAYS, VERDICT_T
-from .estimators import close_to_close_returns, daily_variance, no_trade_bars
+from .cleaning import align_sessions, session_reference, variance_series
 
 logger = logging.getLogger(__name__)
 
@@ -44,20 +44,21 @@ BASELINE = "trailing_21d"
 class Series:
     """One ticker's daily variance series, ascending, with the pieces the models need precomputed."""
     ticker: str
-    dates: np.ndarray        # datetime64[D]
-    v: np.ndarray            # daily variance (NaN where the bar was invalid)
+    dates: np.ndarray        # datetime64[D] (the panel's session calendar inside the ticker's span: ESTIMATOR.gaps)
+    v: np.ndarray            # daily variance (NaN where the bar was invalid or a cleaning rule made it missing)
     X: np.ndarray            # HAR features (log lag means)
     y: np.ndarray            # log forward-mean target (uses the future: training/evaluation only)
     rv: np.ndarray           # forward mean variance (level), the evaluation truth
     trailing: np.ndarray     # mean variance of the last 21 sessions
     long_run: np.ndarray     # expanding mean variance
+    clean: dict = field(default_factory=dict)    # what the cleaning rules did (cleaning.variance_series info)
 
 
 def make_series(ticker: str, dates, o, h, l, c, adj_c=None, cfg: dict = HAR, est: dict = ESTIMATOR,
-                volume=None) -> Series:
+                volume=None, inserted: int = 0) -> Series:
     dates = np.asarray(dates, dtype="datetime64[D]")
-    v = daily_variance(o, h, l, c, adj_c, floor=float(est["floor"]), volume=volume,
-                       no_trade_missing=bool(est.get("no_trade_missing", False)))
+    v, info = variance_series(o, h, l, c, adj_c, volume, est, TRADING_DAYS)
+    info["inserted"] = int(inserted)
     hzn = int(cfg["horizon"])
     X = har.features(v, tuple(cfg["lags"]), float(est["floor"]))
     y = har.target(v, hzn, float(est["floor"]))
@@ -67,18 +68,23 @@ def make_series(ticker: str, dates, o, h, l, c, adj_c=None, cfg: dict = HAR, est
     cnt = np.cumsum(ok)
     with np.errstate(invalid="ignore", divide="ignore"):
         long_run = np.where(cnt >= 21, cs / np.maximum(cnt, 1), np.nan)
-    return Series(ticker, dates, v, X, y, rv, har.rolling_mean(v, 21), long_run)
+    return Series(ticker, dates, v, X, y, rv, har.rolling_mean(v, 21), long_run, info)
 
 
 def panel_from_rows(rows: dict[str, dict[str, Any]], cfg: dict = HAR, est: dict = ESTIMATOR) -> dict[str, Series]:
     """{ticker: {"date": [...], "open": [...], ...}} -> {ticker: Series} (tickers under 2 horizons are dropped).
     The forecast job builds its panel here too, so a cleaning rule in ESTIMATOR applies to both alike."""
     out = {}
+    gaps = est.get("gaps")
+    ref = session_reference(rows, float(gaps.get("ref_share", 0.5))) if gaps else None
     for t, r in rows.items():
         if len(r["date"]) < 2 * int(cfg["horizon"]):
             continue
+        inserted = 0
+        if ref is not None:
+            r, inserted = align_sessions(r, ref)
         out[t] = make_series(t, r["date"], r["open"], r["high"], r["low"], r["close"], r.get("adj_close"), cfg,
-                             est, r.get("volume"))
+                             est, r.get("volume"), inserted)
     return out
 
 
@@ -89,30 +95,74 @@ def _eligible(s: Series, first: np.datetime64) -> int:
     return int(m.sum())
 
 
+RULES = ("no_trade_missing", "gaps", "splits", "shell")
+
+
+def _rule_counts(panel: dict[str, Series]) -> dict[str, dict[str, Any]]:
+    """Per rule: bars it made missing (or repaired) and the tickers it touched, from the panel's clean info."""
+    out: dict[str, dict[str, Any]] = {
+        "no_trade_missing": {"bars_removed": 0, "tickers": 0},
+        "gaps": {"sessions_inserted": 0, "bars_removed": 0, "tickers": 0},
+        "splits": {"repaired": 0, "adj_only": 0, "adj_confirmed": 0, "ambiguous_missing": 0, "left": 0,
+                   "special_dividends": 0, "tickers": 0, "events": {}},
+        "shell": {"bars_removed": 0, "tickers": 0, "first_usable": {}},
+    }
+    for t, s in panel.items():
+        ci = s.clean
+        if ci.get("no_trade"):
+            out["no_trade_missing"]["bars_removed"] += ci["no_trade"]
+            out["no_trade_missing"]["tickers"] += 1
+        if ci.get("inserted") or ci.get("post_gap"):
+            out["gaps"]["sessions_inserted"] += ci.get("inserted", 0)
+            out["gaps"]["bars_removed"] += ci.get("post_gap", 0)
+            out["gaps"]["tickers"] += 1
+        out["splits"]["special_dividends"] += ci.get("special_dividends", 0)
+        ev = list(ci.get("split_events", []))
+        for e in ci.get("split_events", []):
+            key = "ambiguous_missing" if e["kind"] == "ambiguous" else e["kind"]
+            out["splits"][key] += 1
+        if ev:
+            out["splits"]["tickers"] += 1
+            out["splits"]["events"][t] = [{"date": str(s.dates[e["i"]]), "kind": e["kind"], "ratio": e["ratio"]}
+                                          for e in ev]
+        if ci.get("shell_end", -1) >= 0:
+            L = ci["shell_end"]
+            out["shell"]["bars_removed"] += ci.get("shell_bars", 0)
+            out["shell"]["tickers"] += 1
+            out["shell"]["first_usable"][t] = {"shell_last": str(s.dates[L]),
+                                               "first_usable": str(s.dates[L + 1]) if L + 1 < len(s.dates) else None}
+    return out
+
+
 def cleaning_report(rows: dict[str, dict[str, Any]], panel: dict[str, Series], cfg: dict = HAR,
                     est: dict = ESTIMATOR, ev: dict = EVAL) -> dict[str, Any]:
-    """What the ESTIMATOR cleaning rules did: bars treated as missing, tickers affected, and how many
-    out-of-sample ticker-days the evaluation lost or gained against the same bars without the rules."""
-    rules = [k for k in ("no_trade_missing",) if est.get(k)]
-    removed, affected, adj_missing = 0, 0, 0
+    """What the ESTIMATOR cleaning rules did: per rule, the bars made missing or repaired, the tickers affected and
+    how many out-of-sample ticker-days the evaluation lost (or gained) against the same bars with only that rule
+    off; totals against the bars with every rule off."""
+    rules = [k for k in RULES if est.get(k)]
+    adj_missing = 0
     for t in panel:
-        r = rows[t]
-        a = np.asarray([np.nan if x is None else x for x in r.get("adj_close") or []], dtype=np.float64)
+        a = np.asarray([np.nan if x is None else x for x in rows[t].get("adj_close") or []], dtype=np.float64)
         if len(a) and np.isfinite(a).any():
             adj_missing += int((~np.isfinite(a)).sum())
-        if rules:
-            k = int(no_trade_bars(r["open"], r["high"], r["low"], r["close"], r.get("volume")).sum())
-            removed += k
-            affected += int(k > 0)
-    out = {"rules": rules, "bars_removed": removed, "tickers_affected": affected, "adj_missing_rows": adj_missing}
+    per = _rule_counts(panel)
+    nt = per["no_trade_missing"]
+    out: dict[str, Any] = {"rules": rules, "bars_removed": nt["bars_removed"], "tickers_affected": nt["tickers"],
+                           "adj_missing_rows": adj_missing, "by_rule": {k: per[k] for k in rules}}
     if rules and panel:
         master = np.unique(np.concatenate([s.dates for s in panel.values()]))
         if len(master) > int(ev["min_train_days"]):
             first = master[int(ev["min_train_days"])]
-            raw = panel_from_rows({t: rows[t] for t in panel}, cfg, {**est, **{k: False for k in rules}})
+            sub = {t: rows[t] for t in panel}
             with_rules = sum(_eligible(s, first) for s in panel.values())
-            without = sum(_eligible(s, first) for s in raw.values())
-            out["oos_ticker_days_removed"] = int(without - with_rules)
+
+            def eligible_without(off: list[str]) -> int:
+                p = panel_from_rows(sub, cfg, {**est, **{k: False for k in off}})
+                return sum(_eligible(p[t], first) for t in panel if t in p)
+
+            for k in rules:
+                out["by_rule"][k]["oos_ticker_days_removed"] = int(eligible_without([k]) - with_rules)
+            out["oos_ticker_days_removed"] = int(eligible_without(rules) - with_rules)
     return out
 
 
@@ -344,17 +394,17 @@ def estimator_bias(panel: dict[str, Series], adj: dict[str, np.ndarray] | None =
     return round(num / den, 4) if den > 0 else None
 
 
-def run(rows: dict[str, dict[str, Any]], cfg: dict = HAR, ev: dict = EVAL) -> dict[str, Any]:
-    panel = panel_from_rows(rows, cfg)
+def run(rows: dict[str, dict[str, Any]], cfg: dict = HAR, ev: dict = EVAL, est: dict = ESTIMATOR) -> dict[str, Any]:
+    panel = panel_from_rows(rows, cfg, est)
     res = walk_forward(panel, cfg, ev)
     card = scorecard(res, ev)
-    cc = {t: close_to_close_returns(r["close"], r.get("adj_close")) for t, r in rows.items() if t in panel}
+    cc = {t: s.clean["cc"] for t, s in panel.items()}      # close-to-close returns with the same repairs
     card["estimator_to_close_close"] = estimator_bias(panel, cc)
     harm = {m: card["models"].get(m, {}).get("qlike") for m in ("har_pooled", "har_ticker")}
     card["best_har"] = min((m for m in harm if harm[m] is not None), key=lambda m: harm[m], default=None)
     card.update(verdict(card))
     card["breakdown"] = breakdown(res)
-    card["cleaning"] = cleaning_report(rows, panel, cfg, ESTIMATOR, ev)
+    card["cleaning"] = cleaning_report(rows, panel, cfg, est, ev)
     card["refits"] = len(res["refits"])
     first, last = res["refits"][:1], res["refits"][-1:]
     card["refit_coef_first_last"] = [r["coef"] for r in first + last]
@@ -405,10 +455,35 @@ def format_scorecard(card: dict) -> str:
     lines.append("  (lower is better; NW t < -2: the model's QLIKE is lower than trailing's beyond noise)")
     cl = card.get("cleaning") or {}
     if cl:
-        lines.append(f"  cleaning ({', '.join(cl.get('rules', []))}): {cl.get('bars_removed', 0)} bars treated as "
-                     f"missing in {cl.get('tickers_affected', 0)} tickers, {cl.get('oos_ticker_days_removed', 0)} "
-                     f"out-of-sample ticker-days dropped for every model; {cl.get('adj_missing_rows', 0)} rows "
-                     f"without adj_close (no dividend correction on those days)")
+        lines.append(f"  cleaning ({', '.join(cl.get('rules', []))}): {cl.get('oos_ticker_days_removed', 0)} "
+                     f"out-of-sample ticker-days dropped for every model by all rules together; "
+                     f"{cl.get('adj_missing_rows', 0)} rows without adj_close (no dividend correction on those days)")
+        br = cl.get("by_rule") or {}
+        oos = lambda k: br[k].get("oos_ticker_days_removed", 0)      # noqa: E731
+        if "no_trade_missing" in br:
+            lines.append(f"    no-trade bars: {br['no_trade_missing']['bars_removed']} missing in "
+                         f"{br['no_trade_missing']['tickers']} tickers ({oos('no_trade_missing')} OOS ticker-days)")
+        if "gaps" in br:
+            g = br["gaps"]
+            lines.append(f"    missing sessions: {g['sessions_inserted']} inserted as missing, {g['bars_removed']} bars "
+                         f"after one without an overnight return, {g['tickers']} tickers ({oos('gaps')} OOS ticker-days)")
+        if "splits" in br:
+            sp = br["splits"]
+            lines.append(f"    split defects: {sp['repaired']} repaired, {sp['adj_only']} adj-only split jumps "
+                         f"ignored, {sp['ambiguous_missing']} ambiguous days missing, {sp['left']} ratio-sized moves "
+                         f"that did not hold left as genuine, {sp['adj_confirmed']} splits already corrected by adj_close, "
+                         f"{sp['special_dividends']} special dividends left to the correction; {sp['tickers']} tickers "
+                         f"({oos('splits')} OOS ticker-days)")
+            for t, evs in sorted(sp.get("events", {}).items()):
+                lines.append(f"      {t}: " + ", ".join(f"{e['date']} {e['kind']}"
+                                                       + (f" {e['ratio']:g}" if e.get("ratio") else "") for e in evs[:6])
+                             + (f" (+{len(evs) - 6})" if len(evs) > 6 else ""))
+        if "shell" in br:
+            sh = br["shell"]
+            lines.append(f"    shell history: {sh['bars_removed']} bars cut in {sh['tickers']} tickers "
+                         f"({oos('shell')} OOS ticker-days)")
+            for t, d in sorted(sh.get("first_usable", {}).items()):
+                lines.append(f"      {t}: pinned through {d['shell_last']}, usable from {d['first_usable']}")
     bd = card.get("breakdown") or {}
     if bd:
         lines += ["", "  per-ticker QLIKE (each ticker's mean):",

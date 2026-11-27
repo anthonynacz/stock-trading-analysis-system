@@ -7,6 +7,8 @@ of the same ratio:
 2. today's cross-section of comparable names (READING.xs_min_names or more), else
 3. "insufficient history".
 Earnings inside the horizon put the earnings jump into IV: the ratio is not comparable, the reading says so.
+So does a pinned price (config.ESTIMATOR["shell"]: a trust before a merger, a pending cash deal, a cash fund): the
+risk is the regime ending, which the options price and a forecast from the pinned past cannot.
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ NO_IV = "no implied vol"
 BASIS_OWN = "own_history"
 BASIS_XS = "cross_section"
 BASIS_EARNINGS = "earnings_in_horizon"
+BASIS_PINNED = "pinned_price"
 BASIS_NONE = "none"
 
 
@@ -45,11 +48,14 @@ def label(pctl: float, cfg: dict = READING) -> str:
 
 
 def classify(ratio: float | None, *, own_ref: Sequence[float], xs_ref: Sequence[float],
-             earnings_in_horizon: bool, cfg: dict = READING) -> tuple[str, str, float | None]:
+             earnings_in_horizon: bool, pinned: bool = False, cfg: dict = READING) -> tuple[str, str, float | None]:
     """(reading, basis, percentile). `own_ref`: the ticker's earlier earnings-free ratios (not today's);
-    `xs_ref`: today's comparable ratios across names (this one included)."""
+    `xs_ref`: today's comparable ratios across names (this one included); `pinned`: the price sat in a pinned
+    regime within the last shell window (forecast flag `pinned_price`)."""
     if ratio is None or not math.isfinite(ratio):
         return NO_IV, BASIS_NONE, None
+    if pinned:
+        return NOT_COMPARABLE, BASIS_PINNED, None
     if earnings_in_horizon:
         return NOT_COMPARABLE, BASIS_EARNINGS, None
     own = [v for v in own_ref if v is not None and math.isfinite(v)]

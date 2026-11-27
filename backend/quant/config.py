@@ -56,18 +56,87 @@ IV = {
 # ---------------------------------------------------------------- volatility model
 
 MODEL_NAME = "har_logrv"
-MODEL_VERSION = "har-gk-2"       # bump on any change to ESTIMATOR or HAR (gk-2: no-trade bars missing, adj fix)
+# bump on any change to ESTIMATOR or HAR. gk-2: no-trade bars missing, adj fix. gk-3: missing sessions, split
+# defects and shell history (the three rules below, quant/cleaning.py).
+MODEL_VERSION = "har-gk-3"
 TRADING_DAYS = 252
 ESTIMATOR = {
     # Daily variance = squared overnight log return (dividend-corrected) + Garman-Klass open-to-close variance.
     "kind": "gk_overnight",
     "floor": 1e-8,               # daily variance floor before logs (a zero-range day; ~0.16% annualised)
-    # Data-cleaning rule (har-gk-2): a no-trade bar (O = H = L = C with volume 0, or with the same close as the
-    # session before; estimators.no_trade_bars) is a vendor repeating a price, not a session with zero variance.
-    # Its variance is missing (NaN), so lag / target windows with too few real sessions (har.MIN_VALID_SHARE) drop
-    # out for every model alike. Seen in real Yahoo bars of SPAC shells and pre-listing rows (302 of 441
-    # zero-range bars in 180 tickers, 2026-11-27); the scorecard reports how many bars it removed.
+    # Data-cleaning rules. Each acts in quant/cleaning.variance_series, which the evaluation, the forecast job and
+    # the audit all call, so every model sees the same input; the scorecard's `cleaning` block counts each one.
+    # Thresholds were written down from the defect's definition before their effect on the scorecard was seen.
+    #
+    # (har-gk-2) A no-trade bar (O = H = L = C with volume 0, or with the same close as the session before;
+    # estimators.no_trade_bars) is a vendor repeating a price, not a session with zero variance. Its variance is
+    # missing (NaN), so lag / target windows with too few real sessions (har.MIN_VALID_SHARE) drop out for every
+    # model alike. Seen in real Yahoo bars of SPAC shells and pre-listing rows (302 of 441 zero-range bars in 180
+    # tickers, 2026-11-27).
     "no_trade_missing": True,
+    # (har-gk-3) Missing sessions. Defect: a ticker without bars for days or months (BMNR misses 1,059 sessions,
+    # ONDS 440 in the FMP bars) made the next bar's "overnight" return a multi-session move and let a 21-row window
+    # span months. Each ticker is put on the panel's session calendar (dates that at least `ref_share` of the
+    # tickers trading then have; SPY-free, holiday-free); a missing session is a NaN row, so a window needs
+    # har.MIN_VALID_SHARE real sessions, and the bar after a missing or invalid one has no known overnight
+    # return: its variance is missing too (not Garman-Klass alone, which would understate it).
+    "gaps": {"ref_share": 0.5},
+    # (har-gk-3) Split defects: a split the vendor did not adjust shows as one overnight return of -ln k (a k:1
+    # split) or +ln k (1:k reverse). Only that day's overnight return is wrong (Garman-Klass is within one bar),
+    # so the repair is to that number alone. Flagged in the FMP bars of BMNR, QXO, SMMT, LUNR, MARA, APLD, with
+    # adj_close / OHLC disagreeing around QXO, RIOT, WULF, TPL (2026-11-27 audit); most of those are genuine moves
+    # and paid distributions (Yahoo has them too: quant/CLAUDE.md, traps), so the rule demands evidence and works
+    # on the overnight return, where a split acts. Per day t, m = ln(O_t/C_{t-1})
+    # raw, df = the log change of adj_close / close (cleaning.split_days):
+    # - |df| a split ratio (within ratio_tol of ln k) and the open did not move (|m| <= tol): adj_close carries a
+    #   split the prices do not; the raw overnight return is used (`adj_only`, repaired).
+    # - |df| a split ratio and the open carries it (|m + df| <= tol, the day's range under |df| - tol, so the
+    #   bar is in one unit): the dividend correction already takes it out (`adj_confirmed`, unchanged).
+    # - |df| a split ratio otherwise (the bar mixes units, or the two series disagree): `ambiguous`.
+    # - factor_jump < |df| below a split ratio: a special dividend (QXO 2020-01-06 / 2020-12-18 / 2024-06-05,
+    #   RIOT 2017-10-12, WULF 2021-12-14 are paid distributions in Yahoo's events): unchanged, counted.
+    # - |df| <= factor_jump and |m| within ratio_tol of ln k (k in `ratios`): both series moved by a split ratio.
+    #   Repaired (m - sign(m) ln k) only when all of: the level persists (median close of the `window` sessions
+    #   after vs before moved by m within persist_tol: a split is a permanent change of unit), the split day and
+    #   the day before each have a range under calm_range (a split day is an ordinary day in the new unit), and
+    #   share volume moved the other way by at least half of ln k (needs volume on both sides). When the level
+    #   persists but the rest does not, or the move is undone by the next / previous overnight return (a one-day
+    #   print), `ambiguous`. A ratio-sized move whose level did not hold is not a split and is `left` unchanged
+    #   (GME / AMC in January 2021 opened at 2x / 4x the previous close).
+    # Ambiguous days: the day's variance is missing (no invented correction), counted and listed.
+    # Revised twice on 2026-11-27, both times on detections, never on the scorecard: (1) before any scorecard, the
+    # first draft treated every non-split-sized factor jump as ambiguous (that deleted paid special dividends)
+    # and every unexplained ratio move as ambiguous (that deleted the GME / AMC squeeze days); (2) after the
+    # first Yahoo scorecard, when a planted unadjusted 1:4 split on a wild MARA day (2017-10-30) was left as
+    # genuine: "left" now needs the level not to persist, and a one-day print is ambiguous (no detection on the
+    # Yahoo bars changed).
+    "splits": {"ratios": (2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50, 100), "ratio_tol": 0.03,
+               "factor_jump": 0.10, "tol": 0.05, "window": 10, "persist_tol": 0.15, "calm_range": 0.15},
+    # (har-gk-3) Shell history. Defect: before a SPAC merger the ticker's bars are a blank-check trust's (cash in
+    # trust, price pinned near $10, ~2% vol), a different security from the operating company that later trades
+    # under the ticker (NAMS, QBTS: 55% of the trailing baseline's total loss on the server, 2026-11-27). A session
+    # is "pinned" when its trailing `window` sessions have every close within +/- band of their median and a
+    # realised vol (this estimator, annualised) under vol_line (or fewer than a quarter of them trade at all).
+    # The rule cuts a ticker's history through its last pinned session L only when all of: the first pinned
+    # session's window starts within start_within sessions of the first bar (start of life only: a pinned regime
+    # later in life, e.g. a cash takeover, is the same company and its end is genuine volatility), at least
+    # pinned_share of the sessions from there to L are pinned (one regime, not a bond fund drifting in and out),
+    # and at least min_after sessions follow L (it left the regime for good; bond / cash funds and a shell still
+    # waiting stay whole), and at least min_pinned sessions are pinned (a trust lives for months: one quiet month at
+    # listing is not a shell). The HAR lag window (21 sessions, MIN_VALID_SHARE) is the burn-in after L.
+    # Revised once (2026-11-27) after the detection pass on real shell bars (Yahoo NAMS / QBTS / RGTI) and before
+    # any scorecard was run: the trust's price stays within +/- 1% for months, but bid-ask bounce on a ~$10 price
+    # gives this estimator 5-20% vol, not the ~2% of the final months, so vol_line 0.05 -> 0.25 (the band is the
+    # defining property); the 2021 SPAC boom kept shells off trust value for up to ~4 months after listing, so
+    # start_within 63 -> 126; min_pinned added (RGTI was cut on a single pinned session).
+    # Live (display only, cleaning.pinned_now): the flag `pinned_price` and the reading "not comparable" when the
+    # ticker is in a start-of-life pinned regime that has not ended (a shell still waiting) or was pinned in its
+    # last `window` sessions under the strict line live_band / live_vol_line (+/- 1%, under 5%: a trust's last
+    # months, a pending cash deal, a cash fund; the risk is the regime ending, which neither the options nor a
+    # forecast from the pinned past can price). The shell line alone (+/- 3%, < 25%) holds for 25-45% of the
+    # sessions of KO, PG, SPY or utilities, the strict one for none of them (Yahoo bars 2016-11 .. 2026-10).
+    "shell": {"window": 21, "band": 0.03, "vol_line": 0.25, "start_within": 126, "pinned_share": 0.75,
+              "min_after": 126, "min_pinned": 63, "live_band": 0.01, "live_vol_line": 0.05},
 }
 HAR = {
     "horizon": 21,               # target: mean daily variance over the next 21 sessions
