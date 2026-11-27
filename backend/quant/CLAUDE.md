@@ -39,8 +39,9 @@ any verdict, and the API labels every reading "not advice". Writes only the `qua
 | 2026-11-16 | HAR vs trailing 21d RV, walk-forward (Yahoo daily bars, 56 large US stocks + ETFs, 2018-11 .. 2026-10, 111k ticker-days) | QLIKE: trailing 0.373, long-run mean 0.460, HAR pooled 0.286 (NW t -3.6), HAR per-ticker 0.304. RMSE vol: 0.149 / 0.143 / 0.128 / 0.126 | HAR beats trailing; ships |
 | 2026-11-16 | Pooled vs per-ticker by year | per-ticker lower QLIKE in every year but 2020 (1.26 vs pooled 0.95); pooled beats trailing every year (ratio 0.70-0.86) | pooled (`HAR.pooled`): robust to a regime break |
 | 2026-11-16 | Estimator scale vs close-to-close variance | 1.016 on real bars (synthetic 390-step paths: 0.93, the discrete-sampling bias) | no correction; the reading is relative |
+| 2026-11-27 | Same evaluation on the server's `quant_daily_bars` (FMP, 270 tickers, 481k ticker-days, 2018-11 .. 2026-10) | QLIKE: trailing 16.21, long-run mean 0.60, HAR pooled 2.62 (NW t -1.1), per-ticker 2.63. RMSE vol: 0.324 / 0.319 / 0.283 / 0.285. Estimator / close-to-close scale 1.13 (1.016 on the Yahoo sample) | not confirmed: HAR has the lowest RMSE and wins on 97% of tickers, but the QLIKE gap is not significant and the long-run mean has the lowest QLIKE. The QLIKE level and the 1.13 scale point at bad bars in some tickers; find them (per-ticker QLIKE, OHLC vs adjusted close around splits) before trusting either result |
 
-Caveat: the 56 names are today's large caps (survivorship). Re-run on `quant_daily_bars` after the backfill.
+Caveat: both samples are names listed today (survivorship).
 
 ## Traps
 
