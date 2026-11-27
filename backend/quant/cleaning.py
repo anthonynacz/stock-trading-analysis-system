@@ -182,9 +182,10 @@ def _rolling_count(ok: np.ndarray, w: int) -> np.ndarray:
     return out
 
 
-def pinned_sessions(v: np.ndarray, c: np.ndarray, cfg: dict, trading_days: int = 252) -> np.ndarray:
+def pinned_sessions(v: np.ndarray, c: np.ndarray, cfg: dict, trading_days: int = 252, *, band: float | None = None,
+                    vol_line: float | None = None) -> np.ndarray:
     """Sessions whose trailing `window` closes all sit within +/- band of their median with a realised vol under
-    vol_line (or fewer than a quarter of the window's sessions trade at all)."""
+    vol_line (or fewer than a quarter of the window's sessions trade at all). band / vol_line default to cfg's."""
     v, c = np.asarray(v, dtype=np.float64), _a(c)
     n, w = len(c), int(cfg["window"])
     out = np.zeros(n, dtype=bool)
@@ -196,7 +197,8 @@ def pinned_sessions(v: np.ndarray, c: np.ndarray, cfg: dict, trading_days: int =
     mean_v = np.full(n, np.nan)
     with np.errstate(invalid="ignore", divide="ignore"):
         mean_v[w - 1:] = (sv[w:] - sv[:-w]) / nv[w - 1:]
-    low_vol = (nv < w / 4.0) | (np.sqrt(mean_v * trading_days) < float(cfg["vol_line"]))
+    vl = float(cfg["vol_line"] if vol_line is None else vol_line)
+    low_vol = (nv < w / 4.0) | (np.sqrt(mean_v * trading_days) < vl)
     okc = np.isfinite(c) & (c > 0)
     nc = _rolling_count(okc, w)
     win = np.lib.stride_tricks.sliding_window_view(np.where(okc, c, np.nan), w)
@@ -204,28 +206,43 @@ def pinned_sessions(v: np.ndarray, c: np.ndarray, cfg: dict, trading_days: int =
         warnings.simplefilter("ignore", RuntimeWarning)     # all-NaN windows (inserted sessions)
         med = np.nanmedian(win, axis=1)
         mx, mn = np.nanmax(win, axis=1), np.nanmin(win, axis=1)
-    band = float(cfg["band"])
+    band = float(cfg["band"] if band is None else band)
     with np.errstate(invalid="ignore", divide="ignore"):
         in_band = (mx / med - 1.0 <= band) & (1.0 - mn / med <= band)
     out[w - 1:] = (nc[w - 1:] >= w / 2.0) & in_band & low_vol[w - 1:]
     return out
 
 
+def _start_regime(pinned: np.ndarray, cfg: dict) -> tuple[int, int] | None:
+    """(first, last) pinned index when the pinned sessions form one start-of-life regime (start_within,
+    min_pinned, pinned_share), else None."""
+    idx = np.flatnonzero(pinned)
+    if len(idx) < max(1, int(cfg.get("min_pinned", 1))):
+        return None
+    p0, last = int(idx[0]), int(idx[-1])
+    if p0 - int(cfg["window"]) + 1 > int(cfg["start_within"]):
+        return None
+    if float(np.mean(pinned[p0:last + 1])) < float(cfg["pinned_share"]):
+        return None
+    return p0, last
+
+
 def shell_end(pinned: np.ndarray, cfg: dict) -> int:
     """Index of the last session of a start-of-life pinned regime the ticker has left for good, else -1."""
-    idx = np.flatnonzero(pinned)
-    if not len(idx):
+    reg = _start_regime(pinned, cfg)
+    if reg is None or len(pinned) - 1 - reg[1] < int(cfg["min_after"]):
         return -1
-    p0, last = int(idx[0]), int(idx[-1])
-    if len(idx) < int(cfg.get("min_pinned", 1)):
-        return -1
-    if p0 - int(cfg["window"]) + 1 > int(cfg["start_within"]):
-        return -1
-    if len(pinned) - 1 - last < int(cfg["min_after"]):
-        return -1
-    if float(np.mean(pinned[p0:last + 1])) < float(cfg["pinned_share"]):
-        return -1
-    return last
+    return reg[1]
+
+
+def pinned_now(pinned: np.ndarray, pinned_strict: np.ndarray, cfg: dict) -> bool:
+    """The live flag `pinned_price`: pinned within the last `window` sessions under the strict live line
+    (live_band / live_vol_line), or a start-of-life pinned regime still running (a shell not ended yet)."""
+    w = int(cfg["window"])
+    if len(pinned_strict) and pinned_strict[-w:].any():
+        return True
+    reg = _start_regime(pinned, cfg)
+    return reg is not None and len(pinned) - 1 - reg[1] < w
 
 
 # ---------------------------------------------------------------- the series
@@ -233,7 +250,8 @@ def shell_end(pinned: np.ndarray, cfg: dict) -> int:
 def variance_series(o, h, l, c, adj_c=None, volume=None, est: dict | None = None,
                     trading_days: int = 252) -> tuple[np.ndarray, dict[str, Any]]:
     """(daily variance, info): overnight^2 + Garman-Klass floored at est["floor"], NaN where a rule says missing.
-    info: counts per rule, split events, the shell end index (-1: none), `pinned` (bool per row) and `cc` (the
+    info: counts per rule, split events, the shell end index (-1: none), `pinned` (bool per row), `pinned_now`
+    (the live flag, cleaning.pinned_now) and `cc` (the
     dividend-adjusted close-to-close returns with the same repairs, for the scale diagnostic)."""
     est = est or {}
     o, h, l, c = map(_a, (o, h, l, c))
@@ -243,7 +261,7 @@ def variance_series(o, h, l, c, adj_c=None, volume=None, est: dict | None = None
     on = overnight_returns(o, c, adj_c)
     cc = close_to_close_returns(c, adj_c)
     info: dict[str, Any] = {"no_trade": 0, "post_gap": 0, "split_events": [], "split_missing": 0, "shell_end": -1,
-                            "shell_bars": 0, "pinned": np.zeros(n, dtype=bool)}
+                            "shell_bars": 0, "pinned": np.zeros(n, dtype=bool), "pinned_now": False}
     sp = None
     if est.get("splits") and n > 1:
         sp = split_days(o, h, l, c, adj_c, volume, est["splits"])
@@ -270,11 +288,15 @@ def variance_series(o, h, l, c, adj_c=None, volume=None, est: dict | None = None
     if est.get("shell"):
         pin = pinned_sessions(v, c, est["shell"], trading_days)
         info["pinned"] = pin
-        L = shell_end(pin, est["shell"])
+        sh = est["shell"]
+        strict = pinned_sessions(v, c, sh, trading_days, band=sh.get("live_band"), vol_line=sh.get("live_vol_line"))
+        info["pinned_now"] = pinned_now(pin, strict, sh)
+        L = shell_end(pin, sh)
         if L >= 0:
             info["shell_end"] = L
             info["shell_bars"] = int(np.isfinite(v[:L + 1]).sum())
             v = v.copy()
             v[:L + 1] = np.nan
     info["cc"] = cc
+    info["on"] = on
     return v, info

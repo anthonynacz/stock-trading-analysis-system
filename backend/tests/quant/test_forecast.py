@@ -108,3 +108,31 @@ def test_own_history_becomes_the_reference(store):
 
 def test_no_bars_is_an_error(store):
     assert forecast.run(store, now=NOW)["status"] == "error"
+
+
+def test_pinned_price_gets_a_flag_and_no_reading(store):
+    tickers = _seed(store)
+    rng = np.random.default_rng(3)
+    days = [d for d in weekdays(date(2025, 1, 1), 2000) if d <= AS_OF][-400:]
+    ohlc = synth_ohlc(np.full(400, 0.02 / np.sqrt(252)), rng, steps=30, s0=10.0)   # a trust / pending deal
+    drift = ohlc["close"] / 10.0
+    for k in ohlc:
+        ohlc[k] = ohlc[k] / np.concatenate([[1.0], drift[:-1]])
+    store.upsert_bars(bars_rows("SHELL", days, ohlc))
+    store.upsert_chain_rows([{"ticker": "SHELL", "snapshot_date": AS_OF, "expiry": exp, "snapshot_at": SNAP,
+                              "underlying_price": 10.0, "dte": (exp - AS_OF).days, "n_contracts": 2, "atm_iv": 0.6,
+                              "forward": 10.0, "iv_method": "parity_b76", "earnings_date": None,
+                              "contracts": {"strike": [10.0, 10.0], "side": ["C", "P"]}}
+                             for exp in (date(2026, 12, 11), date(2026, 12, 24))])
+    forecast.run(store, now=NOW)
+    _, _, rows = store.latest_forecasts()
+    by = {r["ticker"]: r for r in rows}
+    s = by["SHELL"]
+    assert "pinned_price" in s["flags"] and s["reading"] == "not comparable" and s["reading_basis"] == "pinned_price"
+    assert s["forecast_vol"] < 0.1 and s["ratio_pctl"] is None
+    assert not any("pinned_price" in (by[t]["flags"] or []) for t in tickers)
+    # an earlier pinned reading is not part of the ticker's own reference
+    store.upsert_forecasts([{"ticker": "SHELL", "as_of_date": AS_OF - timedelta(days=i + 1),
+                             "model_version": MODEL_VERSION, "horizon": 21, "forecast_vol": 0.02, "iv_to_forecast": 30.0, "reading": "not comparable",
+                             "reading_basis": "pinned_price", "earnings_in_horizon": False} for i in range(5)])
+    assert store.own_ratio_history(["SHELL"], AS_OF - timedelta(days=30), AS_OF, MODEL_VERSION) == {}

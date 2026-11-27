@@ -469,9 +469,9 @@ def format_scorecard(card: dict) -> str:
                          f"after one without an overnight return, {g['tickers']} tickers ({oos('gaps')} OOS ticker-days)")
         if "splits" in br:
             sp = br["splits"]
-            lines.append(f"    split defects: {sp['repaired']} repaired, {sp['adj_only']} adj-only split jumps ignored, "
-                         f"{sp['ambiguous_missing']} ambiguous days missing, {sp['left']} ratio-sized news-day moves "
-                         f"left, {sp['adj_confirmed']} splits already corrected by adj_close, "
+            lines.append(f"    split defects: {sp['repaired']} repaired, {sp['adj_only']} adj-only split jumps "
+                         f"ignored, {sp['ambiguous_missing']} ambiguous days missing, {sp['left']} ratio-sized moves "
+                         f"that did not hold left as genuine, {sp['adj_confirmed']} splits already corrected by adj_close, "
                          f"{sp['special_dividends']} special dividends left to the correction; {sp['tickers']} tickers "
                          f"({oos('splits')} OOS ticker-days)")
             for t, evs in sorted(sp.get("events", {}).items()):

@@ -126,11 +126,14 @@ ESTIMATOR = {
     # gives this estimator 5-20% vol, not the ~2% of the final months, so vol_line 0.05 -> 0.25 (the band is the
     # defining property); the 2021 SPAC boom kept shells off trust value for up to ~4 months after listing, so
     # start_within 63 -> 126; min_pinned added (RGTI was cut on a single pinned session).
-    # Live: a ticker pinned in its last `window` sessions gets the flag `pinned_price` and the reading
-    # "not comparable" (a trust, a pending deal or a cash fund: the risk is the regime ending, which the options
-    # price and the forecast cannot).
+    # Live (display only, cleaning.pinned_now): the flag `pinned_price` and the reading "not comparable" when the
+    # ticker is in a start-of-life pinned regime that has not ended (a shell still waiting) or was pinned in its
+    # last `window` sessions under the strict line live_band / live_vol_line (+/- 1%, under 5%: a trust's last
+    # months, a pending cash deal, a cash fund; the risk is the regime ending, which neither the options nor a
+    # forecast from the pinned past can price). The shell line alone (+/- 3%, < 25%) holds for 25-45% of the
+    # sessions of KO, PG, SPY or utilities, the strict one for none of them (Yahoo bars 2016-11 .. 2026-10).
     "shell": {"window": 21, "band": 0.03, "vol_line": 0.25, "start_within": 126, "pinned_share": 0.75,
-              "min_after": 126, "min_pinned": 63},
+              "min_after": 126, "min_pinned": 63, "live_band": 0.01, "live_vol_line": 0.05},
 }
 HAR = {
     "horizon": 21,               # target: mean daily variance over the next 21 sessions
