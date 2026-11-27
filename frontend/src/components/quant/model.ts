@@ -111,6 +111,8 @@ export function readingWhy(row: QuantVolFields): string {
 export function ivSourceNote(src: string | null | undefined): string | null {
   if (!src || src === 'chain_cm30') return null;
   if (src === 'radar_iv30') return 'From the radar’s option data (about 30 days), not our own chain snapshot: a weaker comparison.';
+  if (src === 'snapshot_iv30')
+    return 'From the daily 30-day IV reading behind the IV cost score (a different method from our chain value): a weaker comparison.';
   if (src === 'options_snapshot_atm')
     return 'From the nearest expiry only, not 30 days: short-dated options swing more, so this is a weak comparison.';
   return `Source: ${src} (a weaker comparison).`;
@@ -119,6 +121,7 @@ export function ivSourceNote(src: string | null | undefined): string | null {
 export const IV_SOURCE_SHORT: Record<string, string> = {
   chain_cm30: '30-day, from option chain',
   radar_iv30: 'radar ~30-day',
+  snapshot_iv30: 'daily 30-day reading',
   options_snapshot_atm: 'nearest expiry',
 };
 

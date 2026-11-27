@@ -51,6 +51,10 @@ def _seed(store, n_tickers: int = 36, n_days: int = 400):
             ticker=tickers[N_CHAIN], as_of=NOW - timedelta(hours=2), metrics={"iv_30d_pct": 41.5}))
         conn.execute(insert(OptionsSnapshot.__table__).values(
             ticker=tickers[N_CHAIN + 1], snapshot_time=NOW - timedelta(hours=1), atm_iv=0.5))
+        # Since the IV cost score, snapshots carry the clean IV30 of the day's iv_daily reading.
+        conn.execute(insert(OptionsSnapshot.__table__).values(
+            ticker=tickers[N_CHAIN + 2], snapshot_time=NOW - timedelta(hours=1), atm_iv=0.36,
+            iv_score={"score": 50, "iv30_pct": 36.0, "as_of": AS_OF.isoformat()}))
     return tickers
 
 
@@ -59,7 +63,8 @@ def test_forecast_rows_sources_earnings_and_readings(store):
     res = forecast.run(store, now=NOW)
     assert res["status"] == "ok" and res["as_of"] == AS_OF.isoformat()
     assert res["stale_tickers"] == ["OLD"]
-    assert res["iv_sources"] == {"chain_cm30": N_CHAIN, "radar_iv30": 1, "options_snapshot_atm": 1, "none": 2}
+    assert res["iv_sources"] == {"chain_cm30": N_CHAIN, "radar_iv30": 1, "options_snapshot_atm": 1, "snapshot_iv30": 1,
+                                 "none": 1}
     as_of, version, rows = store.latest_forecasts()
     assert as_of == AS_OF and version == MODEL_VERSION and len(rows) == len(tickers)
     by = {r["ticker"]: r for r in rows}
@@ -77,6 +82,9 @@ def test_forecast_rows_sources_earnings_and_readings(store):
     assert radar["iv_source"] == "radar_iv30" and radar["implied_vol_30d"] == 0.415 and "iv_fallback" in radar["flags"]
     snap = by[tickers[N_CHAIN + 1]]
     assert snap["iv_source"] == "options_snapshot_atm" and "iv_not_30d" in snap["flags"]
+    clean = by[tickers[N_CHAIN + 2]]
+    assert clean["iv_source"] == "snapshot_iv30" and clean["implied_vol_30d"] == 0.36
+    assert "iv_not_30d" not in clean["flags"] and "iv_fallback" in clean["flags"]
     assert by[tickers[-1]]["reading"] == "no implied vol"
     assert "earnings_unknown" in by[tickers[-1]]["flags"]
     readings = [by[t]["reading"] for t in tickers[:N_CHAIN] if t not in ("T01", "T03")]
@@ -108,3 +116,12 @@ def test_own_history_becomes_the_reference(store):
 
 def test_no_bars_is_an_error(store):
     assert forecast.run(store, now=NOW)["status"] == "error"
+
+
+def test_snapshot_iv30_from_an_older_reading_is_not_used(store):
+    """A snapshot taken today can carry an iv_daily reading up to a week old: not today's 30-day IV."""
+    with store.engine.begin() as conn:
+        conn.execute(insert(OptionsSnapshot.__table__).values(
+            ticker="OLDIV", snapshot_time=NOW - timedelta(hours=1), atm_iv=0.4,
+            iv_score={"score": 50, "iv30_pct": 40.0, "as_of": (AS_OF - timedelta(days=3)).isoformat()}))
+    assert store.options_snapshot_iv(["OLDIV"], NOW - timedelta(hours=30)) == {}

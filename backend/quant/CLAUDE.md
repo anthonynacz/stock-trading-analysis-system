@@ -42,8 +42,11 @@ any verdict, and the API labels every reading "not advice". Writes only the `qua
 - **The reading is relative.** IV normally exceeds later realised vol (variance risk premium); compare
   IV / forecast with the ticker's own earlier ratios (60+), else today's cross-section of 30-day-IV names
   (30+), else "insufficient history". Earnings inside the horizon: "not comparable".
-- **IV source is always recorded** (`iv_source`): `chain_cm30` > `radar_iv30` > `options_snapshot_atm`
-  (the call nearest the money across expiries, not a 30-day value; flagged `iv_not_30d`). The cross-section reference uses only the first two.
+- **IV source is always recorded** (`iv_source`): `chain_cm30` > `radar_iv30` > `options_snapshots.atm_iv`. Since
+  the IV cost score that column holds the clean IV30 of the day's `iv_daily` reading (`snapshot_iv30`, used only
+  when the reading's day is inside the fallback window); older rows hold the call nearest the money across
+  expiries (`options_snapshot_atm`, not a 30-day value; flagged `iv_not_30d`). The cross-section reference uses
+  only the first two.
 
 ## What was measured
 
