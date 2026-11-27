@@ -56,7 +56,8 @@ export const READING_META: Record<ReadingKey, ReadingMeta> = {
     label: 'Not comparable',
     badge: NEUTRAL_BADGE,
     neutral: true,
-    short: 'Earnings fall inside the next 21 sessions; the expected earnings jump is priced into the options.',
+    short:
+      'Earnings fall inside the next 21 sessions, or the price is pinned (a cash shell, a pending deal, a cash fund): the options price something the forecast cannot.',
   },
   'insufficient history': {
     label: 'Not enough history',
@@ -85,6 +86,9 @@ const ordinal = (n: number) => {
 export function readingWhy(row: QuantVolFields): string {
   const key = readingKey(row.reading);
   const ratio = fmtRatio(row.iv_to_forecast);
+  if (key === 'not comparable' && row.reading_basis === 'pinned_price') {
+    return 'The price has been pinned in a narrow band with almost no volatility, the way a cash shell before its merger, a stock under a cash takeover offer or a cash fund trades. The risk is that state ending, which option prices include and a forecast from the quiet past cannot, so comparing them says nothing. No reading.';
+  }
   if (key === 'not comparable') {
     const when = row.earnings_date ? ` (earnings ${fmtDate(row.earnings_date)})` : '';
     return `Earnings fall inside the next ${HORIZON_SESSIONS} sessions${when}. Option prices then include the expected earnings jump, so comparing them with a normal-day forecast says nothing. No reading.`;
@@ -132,6 +136,8 @@ const FLAG_TEXT: Record<string, string> = {
   iv_not_30d: 'Implied vol is from the nearest expiry, not 30 days.',
   iv_extrapolated: 'No expiries on both sides of 30 days: the 30-day implied vol is taken flat from the nearest one.',
   pooled_fit: 'Too little history for its own model: uses the model fitted across all tickers.',
+  pinned_price:
+    'Price pinned in a narrow band (a cash shell, a pending cash deal or a cash fund): the forecast assumes it stays that way.',
 };
 
 export const flagText = (f: string) => FLAG_TEXT[f] ?? f.replace(/_/g, ' ');

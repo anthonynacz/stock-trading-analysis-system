@@ -38,6 +38,11 @@ YAHOO_OPTIONS = "https://query2.finance.yahoo.com/v7/finance/options/{}"
 RETRY_STATUSES = (429, 500, 502, 503, 504)
 
 Fetch = Callable[[str, dict, float], tuple[int, Any]]
+# The chain seam: (symbol, expiry epoch or None) -> Yahoo-shaped optionChain.result[0]. A None expiry asks
+# for the expiry list plus a default chain. None back means the read failed (the ticker is skipped and its
+# previous row kept); {} is a symbol without options. Yahoo's field names are the canonical shape, so
+# another provider translates into them and every metric function below is left alone.
+Chains = Callable[[str, int | None], dict | None]
 # Yahoo reports near-zero IVs (0.00001, 0.016 ...) for unquoted contracts: below 5% an equity option IV is noise.
 MIN_IV = 0.05
 
@@ -352,11 +357,21 @@ def _get(fetch: Fetch, symbol: str, params: dict, timeout: float) -> dict | None
     return None
 
 
-def ticker_metrics(fetch: Fetch, symbol: str, now: float, baseline: dict | None,
+def yahoo_chains(fetch: Fetch, timeout: float | None = None) -> Chains:
+    """Yahoo's v7 optionChain as a Chains provider: quotes about 15 minutes delayed, no bid/ask before
+    ~09:46 ET and nothing after hours. Owns the retry in `_get`."""
+    t = float(OPTIONS["fetch_timeout_s"]) if timeout is None else float(timeout)
+
+    def get_chain(symbol: str, expiry: int | None = None) -> dict | None:
+        return _get(fetch, symbol, {} if expiry is None else {"date": expiry}, t)
+
+    return get_chain
+
+
+def ticker_metrics(get_chain: Chains, symbol: str, now: float, baseline: dict | None,
                    params: dict = OPTIONS) -> dict | None:
-    """The metrics document of `symbol`, or None when Yahoo could not be read."""
-    timeout = float(params["fetch_timeout_s"])
-    result = _get(fetch, symbol, {}, timeout)
+    """The metrics document of `symbol`, or None when the chains could not be read."""
+    result = get_chain(symbol, None)
     if result is None:
         return None
     exps = result.get("expirationDates") or []
@@ -364,7 +379,7 @@ def ticker_metrics(fetch: Fetch, symbol: str, now: float, baseline: dict | None,
     chains = result.get("options") or []
     chain = chains[0] if chains else None
     if chosen is not None and (chain is None or int(chain.get("expirationDate") or 0) != chosen):
-        second = _get(fetch, symbol, {"date": chosen}, timeout)
+        second = get_chain(symbol, chosen)
         if second is None:
             return None
         chains = second.get("options") or []
@@ -376,7 +391,7 @@ def ticker_metrics(fetch: Fetch, symbol: str, now: float, baseline: dict | None,
     term = pick_expiry(exps, et_date(now), int(IV["term_dte"]))
     term_chain = None
     if term is not None and term != chosen and doc.get("price"):
-        third = _get(fetch, symbol, {"date": term}, timeout)
+        third = get_chain(symbol, term)
         chains3 = (third or {}).get("options") or []
         term_chain = chains3[0] if chains3 else None
         by_expiry[term] = term_chain
@@ -391,7 +406,7 @@ def ticker_metrics(fetch: Fetch, symbol: str, now: float, baseline: dict | None,
     swing = pick_swing_expiry(exps, et_date(now), *params.get("swing_dte", (14, 31)))
     if swing is not None and doc.get("price"):
         if swing not in by_expiry:
-            fourth = _get(fetch, symbol, {"date": swing}, timeout)
+            fourth = get_chain(symbol, swing)
             chains4 = (fourth or {}).get("options") or []
             by_expiry[swing] = chains4[0] if chains4 else None
         doc["swing"] = swing_quote(by_expiry[swing], doc["price"], swing, et_date(now), params)
@@ -638,9 +653,10 @@ def refresh(store: Any, tickers: list[str] | None = None, *, fetch: Fetch | None
     session_date = ((state.get("session") or {}).get("date"))
     base = baselines_for(store, session_date)
     fetch = fetch or _yahoo_fetch()
+    get_chain = yahoo_chains(fetch, float(params["fetch_timeout_s"]))
     now = clock()
     with ThreadPoolExecutor(max_workers=int(params["workers"])) as pool:
-        docs = list(pool.map(lambda s: ticker_metrics(fetch, s, now, base.get(s), params), syms))
+        docs = list(pool.map(lambda s: ticker_metrics(get_chain, s, now, base.get(s), params), syms))
     got = {s: d for s, d in zip(syms, docs) if d is not None and not empty_quotes(d)}
     stale = [s for s, d in zip(syms, docs) if d is not None and empty_quotes(d)]
     failed = [s for s, d in zip(syms, docs) if d is None]

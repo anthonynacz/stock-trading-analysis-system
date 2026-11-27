@@ -1418,7 +1418,7 @@ export type RadarResponse = RadarSnapshot | RadarNoData;
 // ── Quant layer (/api/quant, backend/api/quant_routes.py). Volatilities are annualised fractions (0.28 = 28%).
 
 export type QuantReading = 'rich' | 'fair' | 'cheap' | 'insufficient history' | 'not comparable' | 'no implied vol';
-export type QuantReadingBasis = 'own_history' | 'cross_section' | 'earnings_in_horizon' | 'none';
+export type QuantReadingBasis = 'own_history' | 'cross_section' | 'earnings_in_horizon' | 'pinned_price' | 'none';
 export type QuantIvSource = 'chain_cm30' | 'radar_iv30' | 'options_snapshot_atm';
 export type QuantJob = 'bars' | 'chains' | 'forecast';
 
@@ -1510,10 +1510,34 @@ export type QuantVerdict = 'better_significant' | 'lower_not_significant' | 'not
 
 export interface QuantCleaning {
   rules: string[];
+  /** No-trade bars made missing (the har-gk-2 rule) and the tickers they were in. */
   bars_removed: number;
   tickers_affected: number;
   adj_missing_rows: number;
+  /** Out-of-sample ticker-days dropped by all rules together (every model alike). */
   oos_ticker_days_removed?: number;
+  /** Per rule since har-gk-3 (backend/quant/evaluate.py cleaning_report). */
+  by_rule?: {
+    no_trade_missing?: { bars_removed: number; tickers: number; oos_ticker_days_removed?: number };
+    gaps?: { sessions_inserted: number; bars_removed: number; tickers: number; oos_ticker_days_removed?: number };
+    splits?: {
+      repaired: number;
+      adj_only: number;
+      adj_confirmed: number;
+      ambiguous_missing: number;
+      left: number;
+      special_dividends: number;
+      tickers: number;
+      events: Record<string, { date: string; kind: string; ratio: number | null }[]>;
+      oos_ticker_days_removed?: number;
+    };
+    shell?: {
+      bars_removed: number;
+      tickers: number;
+      first_usable: Record<string, { shell_last: string; first_usable: string | null }>;
+      oos_ticker_days_removed?: number;
+    };
+  };
 }
 
 export interface QuantStatus {

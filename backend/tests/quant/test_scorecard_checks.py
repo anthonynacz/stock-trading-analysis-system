@@ -68,8 +68,9 @@ def _plant_stale(r: dict, start: int, length: int) -> None:
 def test_no_trade_rule_applies_to_every_model_and_is_reported():
     rows = _rows()
     _plant_stale(rows["T0"], 500, 30)
-    on = {**ESTIMATOR, "no_trade_missing": True}
-    off = {**ESTIMATOR, "no_trade_missing": False}
+    only = {**ESTIMATOR, "gaps": None, "splits": None, "shell": None}     # this rule alone
+    on = {**only, "no_trade_missing": True}
+    off = {**only, "no_trade_missing": False}
     p_on = evaluate.panel_from_rows(rows, CFG, on)
     p_off = evaluate.panel_from_rows(rows, CFG, off)
     res_on = evaluate.walk_forward(p_on, CFG, EV)
@@ -90,8 +91,9 @@ def test_no_trade_rule_applies_to_every_model_and_is_reported():
     assert forecast.panel_from_rows is evaluate.panel_from_rows
 
 
-def test_cleaning_rule_is_on_in_the_shipped_config():
+def test_cleaning_rules_are_on_in_the_shipped_config():
     assert ESTIMATOR["no_trade_missing"] is True
+    assert ESTIMATOR["gaps"] and ESTIMATOR["splits"] and ESTIMATOR["shell"]
 
 
 # ---------------------------------------------------------------- per-ticker breakdown
@@ -139,7 +141,7 @@ def test_scorecard_carries_breakdown_verdict_and_cleaning():
     assert {"breakdown", "cleaning", "har_verdict", "har_lower_qlike", "long_run_beats_har"} <= set(card)
     assert card["cleaning"]["bars_removed"] == 0
     text = evaluate.format_scorecard(card)
-    assert "worst tickers" in text and "worst ticker-days" in text and "cleaning (no_trade_missing)" in text
+    assert "worst tickers" in text and "worst ticker-days" in text and "cleaning (no_trade_missing, gaps, splits, shell)" in text
 
 
 # ---------------------------------------------------------------- verdict

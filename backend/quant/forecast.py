@@ -9,7 +9,8 @@
    reading, utils/iv_measure.py), else options_snapshot_atm (older snapshots: the call nearest the money across the
    stored expiries, not a 30-day value: flagged iv_not_30d).
 3. Earnings inside the horizon (earnings_calendar, else the Yahoo quote's date stored with the chain snapshot)
-   are flagged and make the reading "not comparable".
+   are flagged and make the reading "not comparable"; so does a price pinned within the last shell window
+   (flag `pinned_price`, config.ESTIMATOR["shell"]: a trust, a pending cash deal or a cash fund).
 4. The reading (quant/reading.py) compares IV / forecast with the ticker's own earlier ratios, else today's
    cross-section of 30-day-IV names.
 Display only: nothing here feeds conviction scores, the radar engine or any verdict.
@@ -151,6 +152,9 @@ def run(store: Any, tickers: list[str] | None = None, *, now: datetime | None = 
             flags.append("iv_extrapolated")
         if t not in own and not cfg["pooled"]:
             flags.append("pooled_fit")
+        pinned = bool(s.clean.get("pinned_now"))
+        if pinned:
+            flags.append("pinned_price")
         ratio = (iv / fvol) if iv and fvol > 0 else None
         price = rows[t]["close"][-1]
         pending.append({"ticker": t, "as_of_date": as_of, "model_version": MODEL_VERSION, "horizon": hzn,
@@ -158,14 +162,16 @@ def run(store: Any, tickers: list[str] | None = None, *, now: datetime | None = 
                         "implied_vol_30d": _r(iv), "iv_source": src,
                         "iv_detail": {**(detail or {}), "earnings_source": earn_src} if (detail or earn_src) else None,
                         "iv_to_forecast": _r(ratio, 4), "earnings_in_horizon": ed is not None, "earnings_date": ed,
-                        "flags": flags, "model_run_id": run_id})
+                        "flags": flags, "model_run_id": run_id, "_pinned": pinned})
 
     xs_ref = [p["iv_to_forecast"] for p in pending
-              if p["iv_to_forecast"] is not None and not p["earnings_in_horizon"] and p["iv_source"] in CM_SOURCES]
+              if p["iv_to_forecast"] is not None and not p["earnings_in_horizon"] and not p["_pinned"]
+              and p["iv_source"] in CM_SOURCES]
     counts: dict[str, int] = {}
     for p in pending:
         rd, basis, pctl = reading.classify(p["iv_to_forecast"], own_ref=own_hist.get(p["ticker"], []),
-                                           xs_ref=xs_ref, earnings_in_horizon=p["earnings_in_horizon"])
+                                           xs_ref=xs_ref, earnings_in_horizon=p["earnings_in_horizon"],
+                                           pinned=p.pop("_pinned"))
         p.update(reading=rd, reading_basis=basis, ratio_pctl=_r(pctl, 4))
         counts[rd] = counts.get(rd, 0) + 1
     written = store.upsert_forecasts(pending)

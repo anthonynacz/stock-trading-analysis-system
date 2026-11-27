@@ -267,11 +267,11 @@ def test_unquoted_iv_and_ask_are_left_out():
     assert doc["put_call_volume"] is None and doc["liquidity"] == "thin"
 
 
-# ---------------------------------------------------------------- ticker_metrics and the fetch seam
+# ------------------------------------------------- ticker_metrics and the chain seam (via yahoo_chains)
 
 def test_ticker_metrics_requests_the_chosen_expiry_second():
     y = Yahoo(NOW)
-    doc = options.ticker_metrics(y, "XYZ", NOW, {"sigma_d": SIGMA_D})
+    doc = options.ticker_metrics(options.yahoo_chains(y), "XYZ", NOW, {"sigma_d": SIGMA_D})
     # 2 DTE skipped; the third request is the ~30-day expiry for the IV term structure, the fourth the first
     # expiry 2 weeks to a month out (the swing premium of the Movers view)
     assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 9)}, {"date": exp_epoch(NOW, 30)},
@@ -285,7 +285,7 @@ def test_ticker_metrics_requests_the_chosen_expiry_second():
 
 def test_ticker_metrics_uses_the_first_chain_when_it_is_the_chosen_expiry():
     y = Yahoo(NOW, by_symbol={"XYZ": result(NOW, days=(9, 16, 23))})
-    doc = options.ticker_metrics(y, "XYZ", NOW, None)
+    doc = options.ticker_metrics(options.yahoo_chains(y), "XYZ", NOW, None)
     # no expiry 30+ days out: the farthest one (23 days) stands in for the term structure
     assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 23)}, {"date": exp_epoch(NOW, 16)}]
     assert doc["expiry"] == "2026-10-16" and doc["swing"]["dte"] == 16
@@ -294,7 +294,7 @@ def test_ticker_metrics_uses_the_first_chain_when_it_is_the_chosen_expiry():
 def test_swing_premium_reuses_a_chain_already_read_and_falls_back_past_the_window():
     # Monthlies only: the first expiry at least 7 days out is 20 days away, inside the 2-week-to-a-month window.
     y = Yahoo(NOW, by_symbol={"XYZ": result(NOW, days=(20, 48))})
-    doc = options.ticker_metrics(y, "XYZ", NOW, None)
+    doc = options.ticker_metrics(options.yahoo_chains(y), "XYZ", NOW, None)
     assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 48)}] and doc["swing"]["dte"] == 20
     # Nothing in the window: the first expiry beyond it; nothing 2 weeks out at all: no swing premium.
     today = today_of(NOW)
@@ -348,13 +348,13 @@ def test_implausible_swing_sides_limits():
 
 def test_ticker_metrics_without_expiries():
     y = Yahoo(NOW, by_symbol={"XYZ": {"expirationDates": [], "quote": quote(), "options": []}})
-    doc = options.ticker_metrics(y, "XYZ", NOW, None)
+    doc = options.ticker_metrics(options.yahoo_chains(y), "XYZ", NOW, None)
     assert len(y.calls) == 1 and doc["has_options"] is False and doc["liquidity"] == "none"
 
 
 def test_an_empty_result_is_a_ticker_without_options():
     y = lambda url, params, timeout: (200, {"optionChain": {"result": []}})   # noqa: E731
-    doc = options.ticker_metrics(y, "NONE", NOW, None)
+    doc = options.ticker_metrics(options.yahoo_chains(y), "NONE", NOW, None)
     assert doc is not None and doc["has_options"] is False and doc["price"] is None
 
 
@@ -363,7 +363,7 @@ def test_a_rate_limit_or_server_error_is_retried_once(status, monkeypatch):
     naps = []
     monkeypatch.setattr(options.time, "sleep", naps.append)
     y = Yahoo(NOW, statuses={"XYZ": [status]})
-    doc = options.ticker_metrics(y, "XYZ", NOW, None)
+    doc = options.ticker_metrics(options.yahoo_chains(y), "XYZ", NOW, None)
     assert doc is not None and doc["expiry"] == "2026-10-16"
     assert [c[1] for c in y.calls] == [{}, {}, {"date": exp_epoch(NOW, 9)}, {"date": exp_epoch(NOW, 30)},
                                        {"date": exp_epoch(NOW, 16)}]
@@ -372,25 +372,25 @@ def test_a_rate_limit_or_server_error_is_retried_once(status, monkeypatch):
 
 def test_a_second_rate_limit_gives_up():
     y = Yahoo(NOW, statuses={"XYZ": [429, 429]})
-    assert options.ticker_metrics(y, "XYZ", NOW, None) is None
+    assert options.ticker_metrics(options.yahoo_chains(y), "XYZ", NOW, None) is None
     assert len(y.calls) == 2
 
 
 def test_a_client_error_is_not_retried():
     y = Yahoo(NOW, statuses={"XYZ": [404]})
-    assert options.ticker_metrics(y, "XYZ", NOW, None) is None and len(y.calls) == 1
+    assert options.ticker_metrics(options.yahoo_chains(y), "XYZ", NOW, None) is None and len(y.calls) == 1
 
 
 def test_a_network_error_is_retried_once():
     y = Yahoo(NOW, raise_first=1)
-    assert options.ticker_metrics(y, "XYZ", NOW, None)["expiry"] == "2026-10-16"
+    assert options.ticker_metrics(options.yahoo_chains(y), "XYZ", NOW, None)["expiry"] == "2026-10-16"
     y = Yahoo(NOW, raise_first=2)
-    assert options.ticker_metrics(y, "XYZ", NOW, None) is None and len(y.calls) == 2
+    assert options.ticker_metrics(options.yahoo_chains(y), "XYZ", NOW, None) is None and len(y.calls) == 2
 
 
 def test_a_failed_second_request_fails_the_ticker():
     y = Yahoo(NOW, statuses={"XYZ": [200, 429, 429]})
-    assert options.ticker_metrics(y, "XYZ", NOW, None) is None
+    assert options.ticker_metrics(options.yahoo_chains(y), "XYZ", NOW, None) is None
     assert [c[1] for c in y.calls] == [{}, {"date": exp_epoch(NOW, 9)}, {"date": exp_epoch(NOW, 9)}]
 
 

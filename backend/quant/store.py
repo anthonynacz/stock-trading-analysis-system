@@ -14,7 +14,7 @@ from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Any, Callable, Iterable
 
-from sqlalchemy import create_engine, delete, func, select
+from sqlalchemy import create_engine, delete, func, or_, select
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.sql.schema import Table
@@ -215,11 +215,12 @@ class QuantStore:
 
     def own_ratio_history(self, tickers: Iterable[str], since: date, before: date,
                           model_version: str) -> dict[str, list[float]]:
-        """Earlier earnings-free IV / forecast ratios per ticker (the own-history reference)."""
+        """Earlier earnings-free, not-pinned IV / forecast ratios per ticker (the own-history reference)."""
         f = _FORECASTS.c
         q = select(f.ticker, f.iv_to_forecast).where(
             f.ticker.in_(list(tickers)), f.as_of_date >= since, f.as_of_date < before,
-            f.model_version == model_version, f.earnings_in_horizon.is_(False), f.iv_to_forecast.is_not(None))
+            f.model_version == model_version, f.earnings_in_horizon.is_(False), f.iv_to_forecast.is_not(None),
+            or_(f.reading_basis.is_(None), f.reading_basis != "pinned_price"))
         out: dict[str, list[float]] = defaultdict(list)
         with self.engine.connect() as conn:
             for t, r in conn.execute(q):

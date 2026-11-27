@@ -192,6 +192,12 @@ function Scorecard({ ev, inUse }: { ev: QuantEvaluation | null; inUse: string })
             <dd className="text-text-primary">
               {fmtInt(ev.cleaning.bars_removed)} no-trade price bars (a repeated price, no trading) in{' '}
               {fmtInt(ev.cleaning.tickers_affected)} tickers counted as missing, not as zero volatility
+              {ev.cleaning.by_rule?.shell &&
+                `; history before a cash-shell merger cut in ${fmtInt(ev.cleaning.by_rule.shell.tickers)} tickers`}
+              {ev.cleaning.by_rule?.splits &&
+                `; ${fmtInt(ev.cleaning.by_rule.splits.repaired + ev.cleaning.by_rule.splits.adj_only)} unadjusted splits repaired, ${fmtInt(ev.cleaning.by_rule.splits.ambiguous_missing)} unclear days left out`}
+              {ev.cleaning.by_rule?.gaps &&
+                `; ${fmtInt(ev.cleaning.by_rule.gaps.sessions_inserted)} missing sessions kept as gaps`}
               {ev.cleaning.oos_ticker_days_removed !== undefined &&
                 `; ${fmtInt(ev.cleaning.oos_ticker_days_removed)} ticker-days left out of the test for every forecast alike`}
             </dd>
