@@ -410,7 +410,8 @@ _SIGNAL_NAME_TO_GROUP: dict[str, str] = {
     "Unusual Put Volume": "options_flow",
     "Bullish OI Skew": "options_flow",
     "Bearish OI Skew": "options_flow",
-    "High IV Rank": "options_flow",
+    "Rich IV": "options_flow",
+    "High IV Rank": "options_flow",  # the Rich IV signal's name before 2026-10-23 (stored recs)
     "Smart Money Positioning": "options_flow",
     "Term Backwardation": "options_flow",
     "Elevated Put Skew": "options_flow",

@@ -29,7 +29,7 @@ const FEATURE_ROWS = [
   { feature: 'Day-by-Day View', use: 'Entry timing. Rising conviction = enter. Stable = hold. Declining = exit or skip.' },
   { feature: 'Strike Recommender', use: 'Contract selection. Use the budget filter to find affordable contracts. Conservative for weeklies, Moderate for 2–7 week swings.' },
   { feature: 'Strike Scanner', use: 'Batch scanning. Run "Scan Watchlist" to see strike recommendations for all tickers at once. Saves time vs clicking each one.' },
-  { feature: 'Options Flow (Ticker Detail)', use: 'IV assessment. Check IV Rank before entering. High IV → use spreads. Also check Put/Call ratio for sentiment confirmation.' },
+  { feature: 'Options Flow (Ticker Detail)', use: 'IV assessment. Check the IV cost badge before entering (Cheap / Fair / Pricey / Expensive). Pricey or Expensive (60+) → use spreads. Also check Put/Call ratio for sentiment confirmation.' },
   { feature: 'Trends', use: 'Visual confirmation. Price/conviction chart shows the relationship between price action and signal quality. Divergences are informative.' },
   { feature: 'News', use: 'Catalyst verification. When a stock jumps to STRONG_BUY, check the news for the driver. Event-driven signals are the highest-quality for weeklies.' },
   { feature: 'Upcoming Catalysts', use: 'Earnings avoidance/targeting. Know when earnings are. Either play the run-up and exit before, or use straddles if you want to play the event.' },
@@ -212,7 +212,7 @@ const PLAYBOOKS: Playbook[] = [
     title: 'Oversold Bounce Play',
     fields: [
       ['Trigger', '"Strong Reversal Setup" or "Oversold Bounce Setup" signal active. RSI < 30, price near 200d SMA or 52-week low, selling exhaustion.'],
-      ['Strategy', "Buy slightly OTM calls (delta 0.30-0.40) for 10-14 DTE. The bounce usually happens within 2-3 days but needs time to develop. IV is usually elevated after a crash, so use a call debit spread if IV rank ≥ 70 (the engine's HIGH bucket)."],
+      ['Strategy', "Buy slightly OTM calls (delta 0.30-0.40) for 10-14 DTE. The bounce usually happens within 2-3 days but needs time to develop. IV is usually elevated after a crash, so use a call debit spread if the IV cost is Pricey or Expensive (60+, the engine's HIGH bucket)."],
       ['Size', '1-2% of portfolio. Reversal plays are high-reward but binary — the stock either bounces or keeps falling.'],
       ['Confirmation', "Wait for a green day with volume. Don't front-run the bounce — let the stock prove it's turning."],
       ['Exit', 'Take profit at 80-150% gain (bounces are fast). Hard stop at 50% loss.'],
@@ -225,7 +225,7 @@ const PLAYBOOKS: Playbook[] = [
     fields: [
       ['Trigger', '"Active Catalyst Window" signal firing, earnings date in 1-5 days. Check Upcoming Catalysts for exact date and time (BMO/AMC).'],
       ['Run-up play', "If conviction is BUY or higher AND the stock hasn't run up yet, buy calls 5-7 DTE. Sell BEFORE earnings — don't hold through the event. You're playing the anticipation, not the result."],
-      ['Straddle play', 'If you want to play the earnings event itself, buy a straddle (ATM call + ATM put) for the weekly expiry right after earnings. You need a big move in either direction to overcome the IV crush. Only do this if historical earnings moves for the ticker are > the implied move (check options flow section for current IV rank).'],
+      ['Straddle play', 'If you want to play the earnings event itself, buy a straddle (ATM call + ATM put) for the weekly expiry right after earnings. You need a big move in either direction to overcome the IV crush. Only do this if historical earnings moves for the ticker are > the implied move (check the IV cost badge: an "Event priced" tag means the earnings move is already in the option price).'],
       ['Caution', 'IV peaks right before earnings. Buying options pre-earnings means paying maximum premium. The stock must move more than the "expected move" priced into options for you to profit.'],
     ],
   },
@@ -422,6 +422,7 @@ export default function TradingGuideTab() {
                   { key: 'open', header: 'Max Open', align: 'center', className: 'text-text-primary' },
                 ]}
               />
+              <p>The risk level is on each recommendation. LOW needs conviction of ±60 or more AND an IV cost score below 60 (no score never counts as LOW). MEDIUM is conviction of ±30 or more; anything weaker is HIGH.</p>
               <p>"Max Open" = total portfolio allocation in that risk category at once. Never have more than 25% of portfolio in weekly options total.</p>
             </div>
           </GuideCard>
@@ -431,7 +432,7 @@ export default function TradingGuideTab() {
               <p><span className="font-semibold text-text-primary">Theta (time decay):</span> Accelerates dramatically in the last 5 days. Monday calls lose ~20% of remaining extrinsic value per day. Enter early in the week, exit by Wednesday/Thursday unless momentum is strong.</p>
               <p><span className="font-semibold text-text-primary">Delta (directional exposure):</span> Stay 0.35-0.60 for weeklies. Below 0.30, you need a huge move. The Strike Recommender's Conservative profile (7–30 DTE) returns the 0.50-0.60 end; for 0.35-0.49 you need Moderate, whose 14-DTE floor means next-week expiry at the earliest.</p>
               <p><span className="font-semibold text-text-primary">Gamma (delta acceleration):</span> Extremely high for ATM weeklies. Works for you when the stock moves in your direction, violently against you when it reverses. This is why stop losses matter.</p>
-              <p><span className="font-semibold text-text-primary">Vega (IV sensitivity):</span> Check IV rank in the ticker detail panel. Rule of thumb using the engine's buckets: IV rank &ge; 70 — use spreads; &lt; 30 — naked calls/puts are fine; 30–69 — judgment call, check the Options Lab verdict.</p>
+              <p><span className="font-semibold text-text-primary">Vega (IV sensitivity):</span> Check the IV cost badge in the ticker detail panel. Rule of thumb using the score bands: Pricey or Expensive (60+) — use spreads; Cheap (&lt; 35) — naked calls/puts are fine; Fair (35–59) — judgment call, check the Options Lab verdict.</p>
             </div>
           </GuideCard>
 
@@ -450,7 +451,7 @@ export default function TradingGuideTab() {
               <p><span className="font-semibold text-text-primary">Declining conviction trend:</span> Even if today is BUY, a 3-day downtrend in conviction means the setup is deteriorating.</p>
               <p><span className="font-semibold text-text-primary">Friday entries:</span> Never buy weekly options on Friday. You pay for 2 days of theta (weekend) with zero trading time. Enter Monday or Tuesday.</p>
               <p><span className="font-semibold text-text-primary">Major macro events:</span> FOMC days, CPI releases, jobs reports. These override individual stock signals. Sit out or hedge with index puts.</p>
-              <p><span className="font-semibold text-text-primary">IV rank &ge; 80 (single-name):</span> Even HIGH-bucket credit strategies get thin; sit out. Correct directional bets can still lose money from IV crush.</p>
+              <p><span className="font-semibold text-text-primary">IV cost Expensive (80+, single-name):</span> Even HIGH-bucket credit strategies get thin; sit out. Correct directional bets can still lose money from IV crush.</p>
             </div>
           </GuideCard>
         </div>
@@ -485,8 +486,8 @@ export default function TradingGuideTab() {
         />
         <p className="text-[10px] text-text-secondary mt-2">
           CSP = Cash-Secured Put. "Skip" means the risk/reward doesn't justify a weekly options position.
-          All strategies assume delta-neutral IV management — use spreads when IV is elevated to avoid paying inflated premium.
-          The IV columns are the same engine buckets the Options Lab uses (LOW {IV_BUCKETS.low}, MID {IV_BUCKETS.mid}, HIGH {IV_BUCKETS.high}); the plays in each cell are a rule of thumb, not an engine verdict.
+          All strategies assume delta-neutral IV management — use spreads when the IV cost is Pricey or Expensive to avoid paying inflated premium.
+          The IV columns are the IV cost score bands the Options Lab verdict uses (LOW = {IV_BUCKETS.low}, MID = {IV_BUCKETS.mid}, HIGH = {IV_BUCKETS.high}); the plays in each cell are a rule of thumb, not an engine verdict.
         </p>
       </div>
     </div>

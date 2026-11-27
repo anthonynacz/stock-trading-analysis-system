@@ -754,6 +754,7 @@ RADAR_REVISION, PRIOR_REVISION = "d6e2a4c8b1f9", "a1f7d4e92c60"
 OPTIONS_REVISION = "f3a9c2d7e510"
 SETTINGS_REVISION = "a8d4e6f2c913"
 HISTORY_REVISION = "b2c7e9f4a816"
+IV_REVISION = "c9e4b2a7d315"          # iv_daily + iv_score (services/iv_collector.py)
 
 
 def _migration_sql(*, raw: bool = False, migrations: tuple[Path, ...] = MIGRATIONS) -> list[str]:
@@ -1006,7 +1007,8 @@ def test_migration_is_the_single_head_after_recommendation_outcomes() -> None:
     assert scripts.get_revision("c9e4b7a2d5f1").down_revision == HISTORY_REVISION
     assert scripts.get_revision("d1f6a3c8e502").down_revision == "c9e4b7a2d5f1"      # radar_runtime.extended
     assert scripts.get_revision("e4a7c1d9b235").down_revision == "d1f6a3c8e502"      # quant tables
-    assert scripts.get_heads() == ["e4a7c1d9b235"]
+    assert scripts.get_revision(IV_REVISION).down_revision == "e4a7c1d9b235"         # iv_daily + iv_score
+    assert scripts.get_heads() == [IV_REVISION]
 
 
 def test_session_tickers_lists_every_name_with_rows_or_events_in_the_session(radar_store):

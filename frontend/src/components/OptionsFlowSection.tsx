@@ -1,4 +1,5 @@
 import type { OptionsSnapshot } from '../types';
+import { IvScoreBadge } from './ui/IvScore';
 
 export type Sentiment = 'bullish' | 'bearish' | 'neutral' | 'elevated';
 
@@ -16,13 +17,6 @@ export function SentimentTag({ sentiment }: { sentiment: Sentiment }) {
       {s.label}
     </span>
   );
-}
-
-export function rateIvRank(v: number): Sentiment {
-  if (v < 25) return 'bullish';   // cheap options — good for buyers
-  if (v < 50) return 'neutral';
-  if (v < 75) return 'elevated';  // expensive
-  return 'bearish';               // very expensive — sellers' market
 }
 
 export function ratePutCallRatio(v: number): Sentiment {
@@ -61,7 +55,7 @@ export function StatRow({ label, value, mono, sentiment }: {
 
 export type OptionsFlowData = Pick<
   OptionsSnapshot,
-  'iv_rank' | 'put_call_ratio' | 'total_call_volume' | 'total_put_volume' | 'unusual_activity' | 'unusual_activity_detail'
+  'iv_score' | 'put_call_ratio' | 'total_call_volume' | 'total_put_volume' | 'unusual_activity' | 'unusual_activity_detail'
 >;
 
 /** Options Flow block shared by TickerDetail (OptionsSnapshot) and ResearchDetail (options_data). */
@@ -70,9 +64,14 @@ export function OptionsFlowSection({ data }: { data: OptionsFlowData }) {
   return (
     <div className="space-y-1.5">
       <h4 className="text-[10px] font-semibold text-text-secondary uppercase tracking-wider">Options Flow</h4>
-      {data.iv_rank != null && (
-        <StatRow label="IV Rank" value={`${data.iv_rank.toFixed(1)}%`} mono sentiment={rateIvRank(data.iv_rank)} />
-      )}
+      <div className="flex justify-between items-start text-xs gap-2">
+        <span className="text-text-secondary pt-px" title="What options cost to buy now: IV against its own history and the stock's realised moves">
+          IV cost
+        </span>
+        <div className="text-right">
+          <IvScoreBadge score={data.iv_score} />
+        </div>
+      </div>
       {data.put_call_ratio != null && (
         <StatRow
           label="Put/Call Ratio"

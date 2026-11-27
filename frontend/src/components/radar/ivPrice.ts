@@ -5,16 +5,11 @@
 // earlier at the higher IV; for a new entry it means the option is cheaper than this morning. Direction only
 // changes how to read the change: rallies usually come with IV drifting down, selloffs with IV rising.
 
-import type { RadarDirection, RadarOptionMetrics } from '../../types';
-import { fmtShortDate } from './optionFilters';
+import type { IvCostLabel, RadarDirection, RadarOptionMetrics } from '../../types';
+import { UNKNOWN_HINT, ivScoreSummary } from '../../utils/ivScore';
 
-export type IvPriceLevel = 'cheap' | 'fair' | 'rich' | 'expensive' | 'unknown';
-
-// IV / the stock's realised volatility (20 days). Rich and term thresholds match backend/radar/options.py IV.
-export const IV_CHEAP_MAX = 1.2;
-export const IV_RICH = 1.5;
-export const IV_EXPENSIVE = 2.0;
-export const TERM_INVERTED = 1.2;
+/** The IV cost score's label (backend/utils/iv_score.py), or unknown without a clean IV reading. */
+export type IvPriceLevel = IvCostLabel | 'unknown';
 
 export interface IvPrice {
   level: IvPriceLevel;
@@ -27,40 +22,17 @@ export interface IvPrice {
 export const IV_PRICE_LABEL: Record<IvPriceLevel, string> = {
   cheap: 'Options cheap',
   fair: 'Options fairly priced',
-  rich: 'Options pricey',
+  pricey: 'Options pricey',
   expensive: 'Options expensive',
   unknown: 'IV unknown',
 };
 
+/** What the option costs to buy now, from the IV cost score (IV against its own history and realised vol). */
 export function ivPrice(o: RadarOptionMetrics | undefined): IvPrice {
-  if (!o || !o.iv_pct) return { level: 'unknown', label: IV_PRICE_LABEL.unknown, why: 'No implied volatility quoted yet.' };
-  const ratio = o.iv_hv;
-  const vs =
-    ratio && o.hv_pct
-      ? `IV ${o.iv_pct.toFixed(0)}% against the stock's normal ${o.hv_pct.toFixed(0)}% (${ratio.toFixed(1)}×)`
-      : `IV ${o.iv_pct.toFixed(0)}%`;
-  let level: IvPriceLevel;
-  let why: string;
-  if (o.earnings_before_expiry) {
-    level = 'expensive';
-    why = `${vs}; earnings ${fmtShortDate(o.earnings_date)} are priced into this expiry and the premium usually collapses after the report.`;
-  } else if (ratio !== null && ratio !== undefined && ratio >= IV_EXPENSIVE) {
-    level = 'expensive';
-    why = `${vs}: a large news or rumour premium that deflates if the story fades.`;
-  } else if ((ratio ?? 0) >= IV_RICH || (o.term_ratio ?? 0) >= TERM_INVERTED) {
-    level = 'rich';
-    why =
-      (ratio ?? 0) >= IV_RICH
-        ? `${vs}: some news premium in the price.`
-        : `${vs}; this week's IV is above the ~30-day IV, so an event is priced into this expiry.`;
-  } else if (ratio === null || ratio === undefined || ratio > IV_CHEAP_MAX) {
-    level = 'fair';
-    why = `${vs}: about what the stock's own swings justify.`;
-  } else {
-    level = 'cheap';
-    why = `${vs}: options cost little more than the stock's normal swings.`;
-  }
-  return { level, label: IV_PRICE_LABEL[level], why };
+  const s = o?.iv_score;
+  if (!s) return { level: 'unknown', label: IV_PRICE_LABEL.unknown, why: UNKNOWN_HINT };
+  const why = `IV cost ${s.score}/100: ${ivScoreSummary(s)}${s.event ? ` ${s.event.note}` : ''}`;
+  return { level: s.label, label: IV_PRICE_LABEL[s.label], why };
 }
 
 /** IV moved at least this much (% of its level) since the day's first reading: worth a note. */
