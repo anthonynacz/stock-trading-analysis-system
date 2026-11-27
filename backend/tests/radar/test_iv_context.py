@@ -254,7 +254,7 @@ def test_empty_off_hours_quotes_never_replace_a_good_row():
     st = Store()
     orig = o.ticker_metrics
     try:
-        o.ticker_metrics = lambda fetch, s, now, base, params=o.OPTIONS: {"has_options": True, "atm": {"bid": 0, "ask": 0},
+        o.ticker_metrics = lambda get_chain, s, now, base, params=o.OPTIONS:{"has_options": True, "atm": {"bid": 0, "ask": 0},
                                                                           "ntm_call_oi": 0, "as_of": "x"}
         res = o.refresh(st, fetch=lambda *a: (200, {}), clock=lambda: NOW)
     finally:
